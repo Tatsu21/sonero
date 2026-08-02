@@ -1,0 +1,412 @@
+#include "ui/MixerPage.h"
+
+#include <algorithm>
+#include <cstdlib>
+
+#include <QCheckBox>
+#include <QFont>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLayout>
+#include <QJsonObject>
+#include <QScrollArea>
+#include <QTimer>
+#include <QVBoxLayout>
+
+#include "audio/IAppRouter.h"
+#include "audio/IAudioDevices.h"
+#include "audio/IChannelController.h"
+#include "audio/IMixer.h"
+#include "config/SettingsStore.h"
+#include "core/Log.h"
+#include "ui/widgets/AppChip.h"
+#include "ui/widgets/ChannelStrip.h"
+#include "ui/widgets/FlowLayout.h"
+
+namespace sonar::ui {
+
+using audio::ChannelId;
+using audio::ChannelLevel;
+
+namespace {
+constexpr int kRefreshIntervalMs = 40;  // ~25 fps meter updates
+
+QString toQString(std::string_view sv) {
+    return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size()));
+}
+
+QString channelKey(ChannelId id) { return toQString(audio::channelName(id)); }
+
+void clearLayout(QLayout* layout) {
+    while (QLayoutItem* item = layout->takeAt(0)) {
+        if (QWidget* w = item->widget()) {
+            w->deleteLater();
+        }
+        delete item;
+    }
+}
+}  // namespace
+
+MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
+                     audio::IChannelController* controller, audio::IAudioDevices* devices,
+                     config::SettingsStore* settings, QWidget* parent)
+    : QWidget(parent),
+      mixer_(mixer),
+      router_(router),
+      controller_(controller),
+      devices_(devices),
+      settings_(settings) {
+    // Real metering is available only through the controller; otherwise fall
+    // back to the placeholder simulator so the meters are not simply dead.
+    simulate_ = (controller_ == nullptr);
+
+    // Load any persisted channel state before the strips read the model.
+    restoreMixerState();
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(40, 34, 40, 28);
+    root->setSpacing(18);
+
+    auto* title = new QLabel(QStringLiteral("Mixer"), this);
+    title->setObjectName(QStringLiteral("PageTitle"));
+    auto* subtitle = new QLabel(
+        QStringLiteral("Route apps to channels and shape each one"), this);
+    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
+    auto* titleCol = new QVBoxLayout;
+    titleCol->setSpacing(4);
+    titleCol->addWidget(title);
+    titleCol->addWidget(subtitle);
+
+    auto* simCheck = new QCheckBox(QStringLiteral("Simulate signal"), this);
+    simCheck->setChecked(simulate_);
+    simCheck->setToolTip(QStringLiteral(
+        "When off, VU meters show the real audio flowing on each channel. "
+        "Turn on only to preview meter behaviour without audio."));
+
+    auto* header = new QHBoxLayout;
+    header->addLayout(titleCol);
+    header->addStretch(1);
+    header->addWidget(simCheck, 0, Qt::AlignTop);
+    root->addLayout(header);
+
+    auto* stripRow = new QHBoxLayout;
+    stripRow->setSpacing(10);
+    stripRow->setAlignment(Qt::AlignLeft);
+
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) {
+            continue;  // the mic is a source, controlled on the Microphone page
+        }
+        auto* strip = new ChannelStrip(id, toQString(audio::channelName(id)), this);
+        strip->setState(mixer_.state(id));
+
+        connect(strip, &ChannelStrip::volumeChanged, this, [this](ChannelId ch, float v) {
+            mixer_.setVolume(ch, v);
+            if (controller_ != nullptr) {
+                controller_->setChannelVolume(ch, v);
+            }
+            saveMixerState();
+        });
+        connect(strip, &ChannelStrip::balanceChanged, this, [this](ChannelId ch, float b) {
+            mixer_.setBalance(ch, b);
+            if (controller_ != nullptr) {
+                controller_->setChannelBalance(ch, b);
+            }
+            saveMixerState();
+        });
+        connect(strip, &ChannelStrip::muteToggled, this, [this](ChannelId ch, bool m) {
+            mixer_.setMuted(ch, m);
+            pushMuteStates();
+            saveMixerState();
+        });
+        connect(strip, &ChannelStrip::soloToggled, this, [this](ChannelId ch, bool s) {
+            mixer_.setSolo(ch, s);
+            pushMuteStates();
+            saveMixerState();
+        });
+        connect(strip, &ChannelStrip::outputChanged, this,
+                [this](ChannelId ch, const QString& deviceNodeName) {
+                    if (controller_ != nullptr) {
+                        controller_->setChannelOutput(ch, deviceNodeName.toStdString());
+                    }
+                    saveMixerState();
+                });
+        connect(strip, &ChannelStrip::appDropped, this,
+                [this](ChannelId ch, std::uint32_t appId) {
+                    if (router_ == nullptr) {
+                        return;
+                    }
+                    // Defer past the drag's nested event loop so the app-chip
+                    // rebuild (triggered by the routing change) never deletes the
+                    // chip that is still inside QDrag::exec().
+                    QTimer::singleShot(0, this, [this, ch, appId] {
+                        router_->assign(appId, ch);
+                    });
+                });
+
+        strips_.push_back(strip);
+        stripByChannel_[static_cast<int>(id)] = strip;
+        stripRow->addWidget(strip);
+    }
+    stripRow->addStretch(1);
+    root->addLayout(stripRow);
+
+    // Push the model's initial state onto the real channel sinks. Some sinks may
+    // not be bound yet, and the session manager applies its own default volume
+    // shortly after each sink appears, so re-assert once things have settled.
+    if (controller_ != nullptr) {
+        pushChannelVolumes();
+        pushMuteStates();
+        pushChannelBalances();
+        QTimer::singleShot(400, this, [this] { pushChannelVolumes(); pushMuteStates(); });
+        QTimer::singleShot(1500, this, [this] { pushChannelVolumes(); pushMuteStates(); });
+    }
+
+    // --- Applications panel --------------------------------------------------
+    auto* separator = new QFrame(this);
+    separator->setObjectName(QStringLiteral("Sep"));
+    separator->setFrameShape(QFrame::NoFrame);
+    separator->setFixedHeight(1);
+    root->addWidget(separator);
+
+    auto* appsTitle = new QLabel(QStringLiteral("Applications"), this);
+    appsTitle->setObjectName(QStringLiteral("SectionTitle"));
+    root->addWidget(appsTitle);
+
+    if (router_ != nullptr) {
+        auto* dragHint = new QLabel(
+            QStringLiteral("Drag an app onto a channel above to route it."), this);
+        dragHint->setObjectName(QStringLiteral("Hint"));
+        root->addWidget(dragHint);
+
+        auto* scroll = new QScrollArea(this);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setMinimumHeight(96);
+
+        auto* host = new QWidget;
+        appsLayout_ = new FlowLayout(host, 0, 10, 10);
+        scroll->setWidget(host);
+        root->addWidget(scroll, 1);
+    } else {
+        auto* hint = new QLabel(
+            QStringLiteral("Routing requires a running PipeWire server (unavailable)."),
+            this);
+        hint->setObjectName(QStringLiteral("Hint"));
+        root->addWidget(hint);
+        root->addStretch(1);
+    }
+
+    connect(simCheck, &QCheckBox::toggled, this, [this](bool on) { simulate_ = on; });
+
+    timer_ = new QTimer(this);
+    timer_->setInterval(kRefreshIntervalMs);
+    connect(timer_, &QTimer::timeout, this, &MixerPage::refresh);
+    timer_->start();
+
+    log::debug("MixerPage: initialized ({} channels, routing {}, metering {})",
+               strips_.size(), router_ != nullptr ? "on" : "off",
+               controller_ != nullptr ? "real" : "simulated");
+}
+void MixerPage::syncOutputDevices() {
+    if (devices_ == nullptr) {
+        return;
+    }
+    QList<QPair<QString, QString>> options;
+    options.append({QStringLiteral("Default"), QString()});
+    for (const audio::AudioDevice& d : devices_->outputDevices()) {
+        options.append(
+            {QString::fromStdString(d.description), QString::fromStdString(d.name)});
+    }
+    for (auto* strip : strips_) {
+        const QString current =
+            controller_ != nullptr
+                ? QString::fromStdString(controller_->channelOutput(strip->channelId()))
+                : QString();
+        strip->setOutputDevices(options, current);
+    }
+}
+
+void MixerPage::pushChannelBalances() {
+    if (controller_ == nullptr) {
+        return;
+    }
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) continue;
+        controller_->setChannelBalance(id, mixer_.state(id).balance);
+    }
+}
+
+void MixerPage::pushChannelVolumes() {
+    if (controller_ == nullptr) {
+        return;
+    }
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) continue;
+        controller_->setChannelVolume(id, mixer_.state(id).volume);
+    }
+}
+
+void MixerPage::pushMuteStates() {
+    if (controller_ == nullptr) {
+        return;
+    }
+    // Mute + solo together decide audibility; push the effective mute per channel.
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) continue;
+        controller_->setChannelMute(id, !mixer_.isAudible(id));
+    }
+}
+
+void MixerPage::restoreMixerState() {
+    if (settings_ == nullptr) {
+        return;
+    }
+    const QJsonObject m = settings_->section(QStringLiteral("mixer"));
+    if (m.isEmpty()) {
+        return;  // first run — keep the model's built-in defaults
+    }
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) {
+            continue;  // the mic is owned by the Microphone page's own section
+        }
+        const QJsonObject c = m.value(channelKey(id)).toObject();
+        if (c.isEmpty()) {
+            continue;
+        }
+        const audio::ChannelState cur = mixer_.state(id);
+        mixer_.setVolume(
+            id, static_cast<float>(c.value(QStringLiteral("volume")).toDouble(cur.volume)));
+        mixer_.setBalance(
+            id, static_cast<float>(c.value(QStringLiteral("balance")).toDouble(cur.balance)));
+        mixer_.setMuted(id, c.value(QStringLiteral("muted")).toBool(cur.muted));
+        mixer_.setSolo(id, c.value(QStringLiteral("solo")).toBool(cur.solo));
+        if (controller_ != nullptr && c.contains(QStringLiteral("output"))) {
+            controller_->setChannelOutput(
+                id, c.value(QStringLiteral("output")).toString().toStdString());
+        }
+    }
+    // Mirror the restored model onto the real audio path.
+    pushChannelVolumes();
+    pushChannelBalances();
+    pushMuteStates();
+}
+
+void MixerPage::saveMixerState() {
+    if (settings_ == nullptr) {
+        return;
+    }
+    QJsonObject m;
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) {
+            continue;  // persisted by the Microphone page, not here
+        }
+        const audio::ChannelState st = mixer_.state(id);
+        QJsonObject c;
+        c[QStringLiteral("volume")] = st.volume;
+        c[QStringLiteral("balance")] = st.balance;
+        c[QStringLiteral("muted")] = st.muted;
+        c[QStringLiteral("solo")] = st.solo;
+        if (controller_ != nullptr) {
+            c[QStringLiteral("output")] =
+                QString::fromStdString(controller_->channelOutput(id));
+        }
+        m[channelKey(id)] = c;
+    }
+    settings_->putSection(QStringLiteral("mixer"), m);
+}
+
+void MixerPage::refresh() {
+    if (simulate_ || controller_ == nullptr) {
+       // injectSimulatedLevels();
+        for (auto* strip : strips_) {
+            const ChannelLevel lvl = mixer_.level(strip->channelId());
+            strip->setLevel(lvl.peakLeft, lvl.peakRight);
+        }
+    } else {
+        static const bool debugLevels = std::getenv("SONAR_DEBUG_LEVELS") != nullptr;
+        static int debugTick = 0;
+        float maxPeak = 0.0f;
+        for (auto* strip : strips_) {
+            const ChannelLevel lvl = controller_->channelLevel(strip->channelId());
+            strip->setLevel(lvl.peakLeft, lvl.peakRight);
+            maxPeak = std::max({maxPeak, lvl.peakLeft, lvl.peakRight});
+        }
+        if (debugLevels && (++debugTick % 25 == 0)) {
+            log::debug("MixerPage: max channel peak = {:.5f}", maxPeak);
+        }
+    }
+
+    // Refresh the per-channel output selectors when devices come or go.
+    if (devices_ != nullptr) {
+        const std::uint64_t drev = devices_->devicesRevision();
+        if (drev != devicesRevision_) {
+            devicesRevision_ = drev;
+            syncOutputDevices();
+        }
+    }
+
+    // Never rebuild the chips while a drag is in flight — deleting the dragged
+    // chip inside QDrag::exec() would crash.
+    if (router_ != nullptr && AppChip::draggedAppId() == 0) {
+        const std::uint64_t rev = router_->revision();
+        if (rev != appsRevision_) {
+            appsRevision_ = rev;
+            rebuildApplications();
+        }
+    }
+}
+
+void MixerPage::rebuildApplications() {
+    if (appsLayout_ == nullptr) {
+        return;
+    }
+    clearLayout(appsLayout_);
+
+    const std::vector<audio::AppStream> apps = router_->applications();
+    std::unordered_map<int, QStringList> perChannel;
+
+    if (apps.empty()) {
+        auto* empty = new QLabel(QStringLiteral("No applications are playing audio."));
+        empty->setObjectName(QStringLiteral("Hint"));
+        appsLayout_->addWidget(empty);
+    }
+
+    for (const audio::AppStream& app : apps) {
+        appsLayout_->addWidget(
+            new AppChip(app.id, QString::fromStdString(app.name), app.channel));
+
+        if (app.channel) {
+            perChannel[static_cast<int>(*app.channel)]
+                << QString::fromStdString(app.name);
+        }
+    }
+
+    for (auto* strip : strips_) {
+        const int key = static_cast<int>(strip->channelId());
+        const auto it = perChannel.find(key);
+        strip->setAssignedApps(it != perChannel.end() ? it->second : QStringList{});
+    }
+}
+
+void MixerPage::injectSimulatedLevels() {
+    for (const ChannelId id : mixer_.channels()) {
+        if (id == ChannelId::Microphone) {
+            continue;  // mic lives on its own page, not in the output mixer
+        }
+        if (!mixer_.isAudible(id)) {
+            mixer_.setLevel(id, ChannelLevel{0.0f, 0.0f});
+            continue;
+        }
+        const auto state = mixer_.state(id);
+        const float n = noise_(rng_);
+        const float peak = state.volume * (0.35f + 0.6f * n * n);
+
+        const float leftGain = 1.0f - std::max(state.balance, 0.0f) * 0.7f;
+        const float rightGain = 1.0f - std::max(-state.balance, 0.0f) * 0.7f;
+        mixer_.setLevel(id, ChannelLevel{peak * leftGain, peak * rightGain});
+    }
+}
+
+}  // namespace sonar::ui

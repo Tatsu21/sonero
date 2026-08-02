@@ -1,0 +1,25 @@
+# Build directories
+/build/
+/build-*/
+/out/
+cmake-build-*/
+
+# Packaging output and downloaded packaging tools
+/dist/
+packaging/appimage/.tools/
+
+# Tooling
+compile_commands.json
+.cache/
+.clangd/
+
+# Qt
+*.user
+*.autosave
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
