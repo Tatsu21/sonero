@@ -13,7 +13,6 @@
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/format.h>
 #include <spa/param/param.h>
-#include <spa/param/profile.h>
 #include <spa/param/props.h>
 #include <spa/pod/builder.h>
 #include <spa/pod/iter.h>
