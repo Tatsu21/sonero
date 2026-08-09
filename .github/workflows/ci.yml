@@ -39,7 +39,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config dpkg-dev \
             qt6-base-dev qt6-base-dev-tools qt6-wayland qt6-wayland-dev \
-            libpipewire-0.3-dev desktop-file-utils file
+            libpipewire-0.3-dev desktop-file-utils file \
+            libgl-dev libegl-dev
 
       - name: Build and test
         run: |

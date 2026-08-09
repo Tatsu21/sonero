@@ -49,6 +49,7 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     build-essential cmake ninja-build pkg-config dpkg-dev \
     qt6-base-dev qt6-base-dev-tools libpipewire-0.3-dev file ca-certificates \
+    libgl-dev libegl-dev \
     >/dev/null
 mkdir -p /work
 tar -x -C /work
