@@ -64,6 +64,17 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
 
     // Load any persisted channel state before the strips read the model.
     restoreMixerState();
+    if (settings_ != nullptr) {
+        const QJsonObject apps = settings_->section(QStringLiteral("appRouting"));
+        for (auto it = apps.begin(); it != apps.end(); ++it) {
+            for (const ChannelId id : audio::kAllChannels) {
+                if (channelKey(id) == it.value().toString()) {
+                    savedAppChannel_[it.key()] = static_cast<int>(id);
+                    break;
+                }
+            }
+        }
+    }
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(40, 34, 40, 28);
@@ -162,6 +173,15 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
                     // chip that is still inside QDrag::exec().
                     QTimer::singleShot(0, this, [this, ch, appId] {
                         router_->assign(appId, ch);
+                        routedAppIds_.insert(appId);
+                        // Remember by name: the id is gone the next time the
+                        // application starts.
+                        for (const audio::AppStream& app : router_->applications()) {
+                            if (app.id == appId) {
+                                saveAppRouting(QString::fromStdString(app.name), ch);
+                                break;
+                            }
+                        }
                     });
                 });
 
@@ -276,6 +296,48 @@ void MixerPage::pushMuteStates() {
     for (const ChannelId id : mixer_.channels()) {
         if (id == ChannelId::Microphone) continue;
         controller_->setChannelMute(id, !mixer_.isAudible(id));
+    }
+}
+
+void MixerPage::saveAppRouting(const QString& appName, audio::ChannelId channel) {
+    if (settings_ == nullptr || appName.isEmpty()) {
+        return;
+    }
+    savedAppChannel_[appName] = static_cast<int>(channel);
+    QJsonObject apps = settings_->section(QStringLiteral("appRouting"));
+    apps[appName] = channelKey(channel);
+    settings_->putSection(QStringLiteral("appRouting"), apps);
+}
+
+void MixerPage::restoreAppRouting() {
+    if (router_ == nullptr || savedAppChannel_.empty()) {
+        return;
+    }
+    for (const audio::AppStream& app : router_->applications()) {
+        // Only place a stream once: after that the user is free to move it, and
+        // re-asserting on every refresh would drag it back.
+        if (routedAppIds_.count(app.id) != 0) {
+            continue;
+        }
+        const auto it = savedAppChannel_.find(QString::fromStdString(app.name));
+        if (it == savedAppChannel_.end()) {
+            continue;
+        }
+        const auto channel = static_cast<ChannelId>(it->second);
+        routedAppIds_.insert(app.id);
+        if (app.channel != channel) {
+            router_->assign(app.id, channel);
+            log::debug("Mixer: restored '{}' to {}", app.name,
+                       std::string(audio::channelName(channel)));
+        }
+    }
+    // Forget ids that have gone away, so a restarted application is placed again.
+    for (auto it = routedAppIds_.begin(); it != routedAppIds_.end();) {
+        bool alive = false;
+        for (const audio::AppStream& app : router_->applications()) {
+            if (app.id == *it) { alive = true; break; }
+        }
+        it = alive ? std::next(it) : routedAppIds_.erase(it);
     }
 }
 
@@ -413,6 +475,7 @@ void MixerPage::refresh() {
         const std::uint64_t rev = router_->revision();
         if (rev != appsRevision_) {
             appsRevision_ = rev;
+            restoreAppRouting();  // place newly-appeared apps before drawing them
             rebuildApplications();
         }
     }

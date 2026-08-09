@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <random>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -53,6 +54,8 @@ private:
     void pushMuteStates();      // apply mute+solo to the real channel sinks
     void syncOutputDevices();   // refresh each strip's output selector
     void updateAutoGain(ChannelStrip* strip, float peak);  // one AGC step
+    void restoreAppRouting();   // re-apply saved app->channel assignments
+    void saveAppRouting(const QString& appName, audio::ChannelId channel);
     void restoreMixerState();   // load persisted channel state into the model
     void saveMixerState();      // snapshot the model into the settings store
 
@@ -69,6 +72,13 @@ private:
     // Auto-gain: one control loop per channel, fed by the meters in refresh().
     std::unordered_map<int, bool> autoGainOn_;
     std::unordered_map<int, dsp::AutoGain> autoGain_;
+
+    // Remembered app routing, keyed by application name — PipeWire hands out a
+    // fresh node id every time an application starts, so the id is useless across
+    // runs. Ids we have already placed are tracked so a later manual move is not
+    // undone on the next refresh.
+    std::unordered_map<QString, int> savedAppChannel_;
+    std::set<std::uint32_t> routedAppIds_;
     FlowLayout* appsLayout_ = nullptr;
     QTimer* timer_ = nullptr;
     bool simulate_ = true;
