@@ -27,8 +27,8 @@ private slots:
 
 void SettingsStoreTest::initTestCase() {
     QStandardPaths::setTestModeEnabled(true);  // never touch the real user config
-    QCoreApplication::setOrganizationName(QStringLiteral("LinuxSonarTest"));
-    QCoreApplication::setApplicationName(QStringLiteral("LinuxSonarTest"));
+    QCoreApplication::setOrganizationName(QStringLiteral("SoneroTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("SoneroTest"));
 }
 
 void SettingsStoreTest::init() { QFile::remove(SettingsStore::filePath()); }

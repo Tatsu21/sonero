@@ -52,7 +52,7 @@ void Notifier::notify(const QString& title, const QString& body, Urgency urgency
 
     QVariantMap hints;
     hints[QStringLiteral("urgency")] = QVariant::fromValue(static_cast<uchar>(urgency));
-    hints[QStringLiteral("desktop-entry")] = QStringLiteral("LinuxSonar");
+    hints[QStringLiteral("desktop-entry")] = QStringLiteral("Sonero");
 
     // A "default" action is the one most servers (GNOME Shell, KDE) invoke when the
     // notification body itself is clicked.
@@ -61,7 +61,7 @@ void Notifier::notify(const QString& title, const QString& body, Urgency urgency
         actions << QStringLiteral("default") << QStringLiteral("Open");
     }
 
-    msg << QStringLiteral("LinuxSonar")                                          // app_name
+    msg << QStringLiteral("Sonero")                                          // app_name
         << 0U                                                                    // replaces_id
         << (icon.isEmpty() ? QStringLiteral("audio-headphones") : icon)          // app_icon
         << title                                                                 // summary

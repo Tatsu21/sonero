@@ -23,15 +23,15 @@ private slots:
 
 void AutoStartTest::initTestCase() {
     QStandardPaths::setTestModeEnabled(true);  // never touch the real autostart dir
-    QCoreApplication::setOrganizationName(QStringLiteral("LinuxSonarTest"));
-    QCoreApplication::setApplicationName(QStringLiteral("LinuxSonarTest"));
+    QCoreApplication::setOrganizationName(QStringLiteral("SoneroTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("SoneroTest"));
 }
 
 void AutoStartTest::init() { QFile::remove(autostart::desktopFilePath()); }
 
 void AutoStartTest::disabledWhenNoFile() {
     QVERIFY(!autostart::isEnabled());
-    QVERIFY(autostart::desktopFilePath().endsWith(QStringLiteral("/autostart/LinuxSonar.desktop")));
+    QVERIFY(autostart::desktopFilePath().endsWith(QStringLiteral("/autostart/Sonero.desktop")));
 }
 
 void AutoStartTest::enableCreatesValidEntry() {
@@ -44,7 +44,7 @@ void AutoStartTest::enableCreatesValidEntry() {
 
     QVERIFY(text.startsWith(QStringLiteral("[Desktop Entry]")));
     QVERIFY(text.contains(QStringLiteral("Type=Application")));
-    QVERIFY(text.contains(QStringLiteral("Name=LinuxSonar")));
+    QVERIFY(text.contains(QStringLiteral("Name=Sonero")));
     // Must launch hidden, otherwise every login pops a window.
     QVERIFY(text.contains(QStringLiteral("--background")));
     // The Exec line must point at a real, absolute program path.

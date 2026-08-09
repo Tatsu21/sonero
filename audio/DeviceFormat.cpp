@@ -22,7 +22,7 @@ std::string fileNameFor(const std::string& pattern) {
     if (key.size() > 80) {
         key.resize(80);
     }
-    return "51-linuxsonar-format-" + key + ".conf";
+    return "51-sonero-format-" + key + ".conf";
 }
 
 // The SPA audio format name for a bit depth. The ALSA layer maps e.g. S24LE
@@ -66,7 +66,7 @@ std::string OutputFormatManager::configPath() const {
 
 std::string OutputFormatManager::renderConfig(const OutputFormat& fmt) const {
     return std::format(
-        "# Managed by LinuxSonar — output format for the SteelSeries base station.\n"
+        "# Managed by Sonero — output format for the SteelSeries base station.\n"
         "# Pins the ALSA open format so the device emits at the chosen rate/bit depth.\n"
         "# Edits here are overwritten when you change the format in the app.\n"
         "monitor.alsa.rules = [\n"

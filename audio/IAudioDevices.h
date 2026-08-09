@@ -10,7 +10,7 @@ namespace sonar::audio {
 enum class DeviceType { Usb, Bluetooth, Hdmi, Spdif, Analog, System, Other };
 
 // A connected audio output (a real Audio/Sink, never one of our virtual
-// sonar_* channel sinks).
+// sonero_* channel sinks).
 struct AudioDevice {
     std::uint32_t nodeId = 0;      // registry id of the Audio/Sink node
     std::uint32_t deviceId = 0;    // registry id of the owning PW Device (0 if

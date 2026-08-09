@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=LinuxSonar
+Name=Sonero
 GenericName=Audio Mixer
 Comment=Per-application audio mixer, router and equalizer for PipeWire
-Exec=LinuxSonar
-Icon=LinuxSonar
+Exec=Sonero
+Icon=Sonero
 Terminal=false
 Categories=AudioVideo;Audio;Mixer;
 Keywords=audio;mixer;equalizer;pipewire;sonar;volume;
 StartupNotify=true
-StartupWMClass=LinuxSonar
+StartupWMClass=Sonero

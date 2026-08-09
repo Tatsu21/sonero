@@ -8,6 +8,10 @@ cmake-build-*/
 /dist/
 packaging/appimage/.tools/
 
+# Never commit private key material.
+*.key
+*.pem
+
 # Tooling
 compile_commands.json
 .cache/

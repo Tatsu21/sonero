@@ -1,0 +1,23 @@
+#!/bin/sh
+# Post-installation: activate the pieces that only work once files are in place.
+set -e
+
+if [ "$1" = "configure" ]; then
+    # The udev rule shipped in /lib/udev/rules.d grants the logged-in user access
+    # to SteelSeries HID devices. Reload so it applies without a reboot, and
+    # re-trigger hidraw so an already-plugged headset picks up the new permissions.
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger --subsystem-match=hidraw || true
+    fi
+
+    # Refresh the desktop caches so the launcher and its icon appear immediately.
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -qtf /usr/share/icons/hicolor || true
+    fi
+fi
+
+exit 0

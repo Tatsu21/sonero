@@ -15,6 +15,7 @@ class QDragLeaveEvent;
 class QDropEvent;
 class QLabel;
 class QPushButton;
+class QCheckBox;
 class QSlider;
 
 namespace sonar::ui {
@@ -35,6 +36,9 @@ public:
     [[nodiscard]] sonar::audio::ChannelId channelId() const noexcept { return id_; }
 
     void setState(const sonar::audio::ChannelState& state);
+    // Show a gain the app computed (auto mode) without emitting gainChanged.
+    void showGainDb(float gainDb);
+    void setAutoGain(bool on);
     void setLevel(float left, float right);
     void setAssignedApps(const QStringList& appNames);
 
@@ -49,6 +53,9 @@ signals:
     void muteToggled(sonar::audio::ChannelId id, bool muted);
     void soloToggled(sonar::audio::ChannelId id, bool solo);
     void balanceChanged(sonar::audio::ChannelId id, float balance);  // -1..1
+    // Per-channel trim in dB (-20..+6); 0 dB is unity.
+    void gainChanged(sonar::audio::ChannelId id, float gainDb);
+    void autoGainToggled(sonar::audio::ChannelId id, bool on);
     void appDropped(sonar::audio::ChannelId id, std::uint32_t appId);
     void outputChanged(sonar::audio::ChannelId id, const QString& deviceNodeName);
 
@@ -65,6 +72,9 @@ private:
     VuMeter* meter_ = nullptr;
     QSlider* volume_ = nullptr;
     QSlider* balance_ = nullptr;
+    QSlider* gain_ = nullptr;
+    QCheckBox* autoGain_ = nullptr;
+    QLabel* gainValue_ = nullptr;
     QPushButton* mute_ = nullptr;
     QPushButton* solo_ = nullptr;
     QLabel* volumeLabel_ = nullptr;

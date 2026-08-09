@@ -1,10 +1,13 @@
 #include "ui/widgets/ChannelStrip.h"
 
+#include <cmath>
+
 #include <QComboBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFont>
 #include <QHBoxLayout>
+#include <QCheckBox>
 #include <QLabel>
 #include <QMimeData>
 #include <QPushButton>
@@ -63,6 +66,28 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     balance_->setValue(0);
     balance_->setToolTip(QStringLiteral("Balance (L / R)"));
 
+    auto* gainCaption = new QLabel(QStringLiteral("GAIN"), this);
+    gainCaption->setObjectName(QStringLiteral("BalanceCaption"));
+    gainCaption->setAlignment(Qt::AlignHCenter);
+
+    // Trim in dB, separate from the fader: it tames a source that is far louder
+    // than the others without giving up fader travel. Cuts go deeper than boosts
+    // because boosting a full-scale source is what clips in the first place.
+    gain_ = new QSlider(Qt::Horizontal, this);
+    gain_->setRange(-20, 6);
+    gain_->setValue(0);
+    gain_->setToolTip(QStringLiteral("Input trim in dB (0 dB = unchanged)"));
+
+    autoGain_ = new QCheckBox(QStringLiteral("Auto"), this);
+    autoGain_->setToolTip(QStringLiteral(
+        "Track the level of what is playing and trim it automatically.\n"
+        "Pulls loud passages down quickly, lifts quiet ones slowly, and holds\n"
+        "still during silence."));
+
+    gainValue_ = new QLabel(QStringLiteral("0 dB"), this);
+    gainValue_->setObjectName(QStringLiteral("BalanceCaption"));
+    gainValue_->setAlignment(Qt::AlignHCenter);
+
     mute_ = new QPushButton(QStringLiteral("Mute"), this);
     mute_->setCheckable(true);
     mute_->setProperty("toggleRole", QStringLiteral("mute"));
@@ -99,6 +124,13 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     layout->addWidget(volumeLabel_);
     layout->addWidget(balanceCaption);
     layout->addWidget(balance_);
+    auto* gainHead = new QHBoxLayout;
+    gainHead->setContentsMargins(0, 0, 0, 0);
+    gainHead->addWidget(gainCaption, 1);
+    gainHead->addWidget(autoGain_);
+    layout->addLayout(gainHead);
+    layout->addWidget(gain_);
+    layout->addWidget(gainValue_);
     layout->addLayout(buttonRow);
     layout->addWidget(outputCaption);
     layout->addWidget(output_);
@@ -111,6 +143,15 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     });
     connect(balance_, &QSlider::valueChanged, this, [this](int value) {
         emit balanceChanged(id_, static_cast<float>(value) / 100.0f);
+    });
+    connect(gain_, &QSlider::valueChanged, this, [this](int db) {
+        gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
+                                   : QStringLiteral("%1 dB").arg(db));
+        emit gainChanged(id_, static_cast<float>(db));
+    });
+    connect(autoGain_, &QCheckBox::toggled, this, [this](bool on) {
+        gain_->setEnabled(!on);  // the loop owns the value while it is running
+        emit autoGainToggled(id_, on);
     });
     connect(mute_, &QPushButton::toggled, this, [this](bool checked) {
         emit muteToggled(id_, checked);
@@ -138,6 +179,20 @@ void ChannelStrip::setOutputDevices(const QList<QPair<QString, QString>>& device
         idx = output_->count() - 1;
     }
     output_->setCurrentIndex(idx >= 0 ? idx : 0);
+}
+
+void ChannelStrip::showGainDb(float gainDb) {
+    const int db = static_cast<int>(std::lround(gainDb));
+    const QSignalBlocker block(gain_);
+    gain_->setValue(db);
+    gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
+                               : QStringLiteral("%1 dB").arg(db));
+}
+
+void ChannelStrip::setAutoGain(bool on) {
+    const QSignalBlocker block(autoGain_);
+    autoGain_->setChecked(on);
+    gain_->setEnabled(!on);
 }
 
 void ChannelStrip::setState(const ChannelState& state) {

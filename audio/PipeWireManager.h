@@ -78,6 +78,8 @@ public:
     [[nodiscard]] std::uint64_t revision() const override { return revision_.load(); }
 
     void setChannelBalance(ChannelId id, float balance) override;
+    void setChannelGain(ChannelId id, float gain) override;
+    [[nodiscard]] float channelHeadroom(ChannelId id) const override;
     // --- IChannelController ---
     void setChannelVolume(ChannelId id, float volume) override;
     void setChannelMute(ChannelId id, bool muted) override;
@@ -209,6 +211,10 @@ private:
     // atomics are written by the RT process callback and read by the UI thread.
     struct ChannelIO {
         pw_node* node = nullptr;
+        // Attenuation (0..1] compensating the EQ's peak boost — see applyEqualizer.
+        float eqHeadroom = 1.0f;
+        // Per-channel trim (0..2, linear) set by the user, independent of volume.
+        float desiredGain = 1.0f;
         spa_hook nodeListener{};
         pw_stream* meter = nullptr;
         spa_hook meterListener{};

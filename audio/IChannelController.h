@@ -17,6 +17,17 @@ public:
     virtual void setChannelVolume(ChannelId id, float volume) = 0;
 
     virtual void setChannelBalance(ChannelId id, float balance) = 0;
+
+    // Linear attenuation this channel currently applies on top of the fader:
+    // equalizer-boost compensation times the fixed filter reserve. Metering taps
+    // the output, i.e. after this, so anything judging the *source* level has to
+    // divide it back out.
+    [[nodiscard]] virtual float channelHeadroom(ChannelId id) const = 0;
+
+    // Per-channel trim (linear, 1.0 = unity), independent of the volume fader.
+    // Use it to tame a source that is far louder or quieter than the others; it
+    // multiplies with the fader rather than replacing it.
+    virtual void setChannelGain(ChannelId id, float gain) = 0;
     // Mute/unmute a channel's virtual sink.
     virtual void setChannelMute(ChannelId id, bool muted) = 0;
 

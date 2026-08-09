@@ -1,4 +1,4 @@
-# LinuxSonar — grant the logged-in user access to SteelSeries HID control
+# Sonero — grant the logged-in user access to SteelSeries HID control
 # interfaces (Arctis Nova Pro Wireless base station: battery, onboard EQ, ...).
 # uaccess = only the active local user; plugdev/0660 as a fallback.
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1038", TAG+="uaccess", MODE="0660", GROUP="plugdev"

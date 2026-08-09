@@ -25,7 +25,7 @@ bool SingleInstance::pingPrimary() {
     sock.flush();
     sock.waitForBytesWritten(kTimeoutMs);
     sock.disconnectFromServer();
-    log::info("Another LinuxSonar instance is running — asked it to come forward");
+    log::info("Another Sonero instance is running — asked it to come forward");
     return true;
 }
 

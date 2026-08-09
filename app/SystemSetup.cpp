@@ -15,9 +15,10 @@ namespace sonar::setup {
 
 namespace {
 
-constexpr char kUdevRuleName[] = "70-linuxsonar-steelseries.rules";
-constexpr char kDesktopName[] = "LinuxSonar.desktop";
+constexpr char kUdevRuleName[] = "70-sonero-steelseries.rules";
+constexpr char kDesktopName[] = "Sonero.desktop";
 const int kIconSizes[] = {32, 48, 64, 128, 256};
+const int kTrayIconSizes[] = {16, 22, 24, 32, 48};
 
 QString localShare() {
     return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
@@ -107,10 +108,10 @@ QString resourcePath(const QString& relative) {
     QStringList roots;
     const QString appDir = qEnvironmentVariable("APPDIR");
     if (!appDir.isEmpty()) {
-        roots << appDir + QStringLiteral("/usr/share/linuxsonar");
+        roots << appDir + QStringLiteral("/usr/share/sonero");
         roots << appDir + QStringLiteral("/usr/share");
     }
-    roots << QStringLiteral("/usr/share/linuxsonar") << QStringLiteral("/usr/local/share/linuxsonar");
+    roots << QStringLiteral("/usr/share/sonero") << QStringLiteral("/usr/local/share/sonero");
     // Development: run straight from the build tree.
     roots << QCoreApplication::applicationDirPath() + QStringLiteral("/../packaging");
     roots << QStringLiteral(SONAR_SOURCE_DIR "/packaging");
@@ -132,8 +133,8 @@ std::vector<Check> runChecks() {
     pw.title = QStringLiteral("PipeWire audio server");
     pw.status = pipeWireRunning() ? Status::Ok : Status::Missing;
     pw.detail = pw.status == Status::Ok
-                    ? QStringLiteral("Running — LinuxSonar's mixing and routing are active.")
-                    : QStringLiteral("Not detected. LinuxSonar needs PipeWire; install it with "
+                    ? QStringLiteral("Running — Sonero's mixing and routing are active.")
+                    : QStringLiteral("Not detected. Sonero needs PipeWire; install it with "
                                      "your distribution's package manager.");
     pw.fixable = false;  // installing an audio server is the distro's job
     checks.push_back(pw);
@@ -146,10 +147,10 @@ std::vector<Check> runChecks() {
         desktop.detail = QStringLiteral("Handled by your package manager for installed builds.");
     } else if (QFileInfo::exists(desktopEntryPath())) {
         desktop.status = Status::Ok;
-        desktop.detail = QStringLiteral("LinuxSonar appears in your app menu with its icon.");
+        desktop.detail = QStringLiteral("Sonero appears in your app menu with its icon.");
     } else {
         desktop.status = Status::Missing;
-        desktop.detail = QStringLiteral("Adds LinuxSonar to your app menu and gives it an icon.");
+        desktop.detail = QStringLiteral("Adds Sonero to your app menu and gives it an icon.");
         desktop.fixable = true;
     }
     checks.push_back(desktop);
@@ -199,16 +200,16 @@ bool installDesktopIntegration() {
         QStringLiteral(
             "[Desktop Entry]\n"
             "Type=Application\n"
-            "Name=LinuxSonar\n"
+            "Name=Sonero\n"
             "GenericName=Audio Mixer\n"
             "Comment=Per-application audio mixer, router and equalizer for PipeWire\n"
             "Exec=\"%1\" %U\n"
-            "Icon=LinuxSonar\n"
+            "Icon=Sonero\n"
             "Terminal=false\n"
             "Categories=AudioVideo;Audio;Mixer;\n"
             "Keywords=audio;mixer;equalizer;pipewire;sonar;volume;\n"
             "StartupNotify=true\n"
-            "StartupWMClass=LinuxSonar\n")
+            "StartupWMClass=Sonero\n")
             .arg(exec);
 
     QSaveFile file(desktopEntryPath());
@@ -220,20 +221,27 @@ bool installDesktopIntegration() {
         return false;
     }
 
-    // Icons, so the menu entry, window and notifications all show the app icon.
-    for (const int size : kIconSizes) {
-        const QString src =
-            resourcePath(QStringLiteral("icons/linuxsonar-%1.png").arg(size));
+    // Icons, so the menu entry, window and notifications all show the app icon —
+    // plus the separate panel icon the system tray looks up by name.
+    const auto installIcon = [](const QString& src, int size, const QString& name) {
         if (src.isEmpty()) {
-            continue;
+            return;
         }
         const QString dstDir = QStringLiteral("%1/icons/hicolor/%2x%2/apps")
                                    .arg(localShare())
                                    .arg(size);
         QDir().mkpath(dstDir);
-        const QString dst = dstDir + QStringLiteral("/LinuxSonar.png");
+        const QString dst = dstDir + QLatin1Char('/') + name;
         QFile::remove(dst);  // QFile::copy refuses to overwrite
         QFile::copy(src, dst);
+    };
+    for (const int size : kIconSizes) {
+        installIcon(resourcePath(QStringLiteral("icons/sonero-%1.png").arg(size)), size,
+                    QStringLiteral("Sonero.png"));
+    }
+    for (const int size : kTrayIconSizes) {
+        installIcon(resourcePath(QStringLiteral("icons/sonero-tray-%1.png").arg(size)), size,
+                    QStringLiteral("Sonero-tray.png"));
     }
 
     // Best-effort cache refresh; desktops that watch the directory don't need it.
@@ -266,7 +274,7 @@ QString privilegedFixScript(CheckId id) {
                        "#!/bin/sh\n"
                        "set -e\n"
                        "mkdir -p /etc/systemd/system/bluetooth.service.d\n"
-                       "cat > /etc/systemd/system/bluetooth.service.d/10-linuxsonar.conf <<'EOF'\n"
+                       "cat > /etc/systemd/system/bluetooth.service.d/10-sonero.conf <<'EOF'\n"
                        "[Service]\n"
                        "ExecStart=\n"
                        "ExecStart=%1 --experimental\n"
@@ -293,7 +301,7 @@ bool runPrivilegedFix(CheckId id, QString* error) {
     if (QStandardPaths::findExecutable(QStringLiteral("pkexec")).isEmpty()) {
         if (error != nullptr) {
             *error = QStringLiteral(
-                "pkexec (PolicyKit) is not installed, so LinuxSonar cannot ask for "
+                "pkexec (PolicyKit) is not installed, so Sonero cannot ask for "
                 "administrator rights. Run the shown commands manually with sudo.");
         }
         return false;
@@ -302,7 +310,7 @@ bool runPrivilegedFix(CheckId id, QString* error) {
     // Write the script somewhere root can read, then run it through pkexec so the
     // desktop shows its standard authentication dialog.
     const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-                             .filePath(QStringLiteral("linuxsonar-setup.sh"));
+                             .filePath(QStringLiteral("sonero-setup.sh"));
     {
         QSaveFile f(path);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {

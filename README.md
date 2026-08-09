@@ -1,4 +1,4 @@
-# LinuxSonar
+# Sonero
 
 A native, open-source Linux alternative to SteelSeries Sonar — a per-application
 audio mixer, router and DSP suite built directly on **PipeWire**.
@@ -36,7 +36,7 @@ cmake --build build -j
 Run the application:
 
 ```bash
-./build/LinuxSonar
+./build/Sonero
 ```
 
 Run the tests:
@@ -48,7 +48,7 @@ ctest --test-dir build --output-on-failure
 ## Project layout
 
 ```
-LinuxSonar/
+Sonero/
 ├── app/      Composition root (main, Application)
 ├── ui/       Qt6 widgets (MainWindow, pages, reusable widgets)
 ├── audio/    Audio backend (IAudioBackend, PipeWireManager) + engine (later)

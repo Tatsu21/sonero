@@ -1,6 +1,7 @@
 #include "ui/MixerPage.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 #include <QCheckBox>
@@ -100,6 +101,9 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         }
         auto* strip = new ChannelStrip(id, toQString(audio::channelName(id)), this);
         strip->setState(mixer_.state(id));
+        // Reflect the persisted trim / auto state that restoreMixerState() loaded.
+        strip->showGainDb(channelGainDb_[static_cast<int>(id)]);
+        strip->setAutoGain(autoGainOn_[static_cast<int>(id)]);
 
         connect(strip, &ChannelStrip::volumeChanged, this, [this](ChannelId ch, float v) {
             mixer_.setVolume(ch, v);
@@ -112,6 +116,22 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
             mixer_.setBalance(ch, b);
             if (controller_ != nullptr) {
                 controller_->setChannelBalance(ch, b);
+            }
+            saveMixerState();
+        });
+        connect(strip, &ChannelStrip::gainChanged, this, [this](ChannelId ch, float gainDb) {
+            channelGainDb_[static_cast<int>(ch)] = gainDb;
+            if (controller_ != nullptr) {
+                controller_->setChannelGain(ch, std::pow(10.0f, gainDb / 20.0f));
+            }
+            saveMixerState();
+        });
+        connect(strip, &ChannelStrip::autoGainToggled, this, [this](ChannelId ch, bool on) {
+            autoGainOn_[static_cast<int>(ch)] = on;
+            if (on) {
+                // Start from whatever the user had dialled in, so enabling Auto
+                // does not jump the level.
+                autoGain_[static_cast<int>(ch)].reset(channelGainDb_[static_cast<int>(ch)]);
             }
             saveMixerState();
         });
@@ -259,6 +279,29 @@ void MixerPage::pushMuteStates() {
     }
 }
 
+void MixerPage::updateAutoGain(ChannelStrip* strip, float peak) {
+    const int key = static_cast<int>(strip->channelId());
+    if (!autoGainOn_[key] || controller_ == nullptr) {
+        return;
+    }
+    // The meter reads the channel output, which already carries the EQ and filter
+    // headroom. Divide that back out so the loop judges how hot the *source* is —
+    // otherwise its target sits below anything the chain can produce and it never
+    // has a reason to act.
+    const float headroom = std::max(controller_->channelHeadroom(strip->channelId()), 0.01f);
+    const float dt = static_cast<float>(kRefreshIntervalMs) / 1000.0f;
+    const float gainDb = autoGain_[key].update(peak / headroom, dt);
+
+    // Only touch the audio path when the value actually moved: the loop runs 25
+    // times a second and most ticks change nothing.
+    if (std::abs(gainDb - channelGainDb_[key]) < 0.05f) {
+        return;
+    }
+    channelGainDb_[key] = gainDb;
+    controller_->setChannelGain(strip->channelId(), std::pow(10.0f, gainDb / 20.0f));
+    strip->showGainDb(gainDb);
+}
+
 void MixerPage::restoreMixerState() {
     if (settings_ == nullptr) {
         return;
@@ -282,6 +325,15 @@ void MixerPage::restoreMixerState() {
             id, static_cast<float>(c.value(QStringLiteral("balance")).toDouble(cur.balance)));
         mixer_.setMuted(id, c.value(QStringLiteral("muted")).toBool(cur.muted));
         mixer_.setSolo(id, c.value(QStringLiteral("solo")).toBool(cur.solo));
+        const float gainDb =
+            static_cast<float>(c.value(QStringLiteral("gainDb")).toDouble(0.0));
+        channelGainDb_[static_cast<int>(id)] = gainDb;
+        autoGainOn_[static_cast<int>(id)] =
+            c.value(QStringLiteral("autoGain")).toBool(false);
+        autoGain_[static_cast<int>(id)].reset(gainDb);
+        if (controller_ != nullptr && gainDb != 0.0f) {
+            controller_->setChannelGain(id, std::pow(10.0f, gainDb / 20.0f));
+        }
         if (controller_ != nullptr && c.contains(QStringLiteral("output"))) {
             controller_->setChannelOutput(
                 id, c.value(QStringLiteral("output")).toString().toStdString());
@@ -307,6 +359,13 @@ void MixerPage::saveMixerState() {
         c[QStringLiteral("volume")] = st.volume;
         c[QStringLiteral("balance")] = st.balance;
         c[QStringLiteral("muted")] = st.muted;
+        if (const auto it = channelGainDb_.find(static_cast<int>(id));
+            it != channelGainDb_.end()) {
+            c[QStringLiteral("gainDb")] = it->second;
+        }
+        if (const auto it = autoGainOn_.find(static_cast<int>(id)); it != autoGainOn_.end()) {
+            c[QStringLiteral("autoGain")] = it->second;
+        }
         c[QStringLiteral("solo")] = st.solo;
         if (controller_ != nullptr) {
             c[QStringLiteral("output")] =
@@ -332,6 +391,7 @@ void MixerPage::refresh() {
             const ChannelLevel lvl = controller_->channelLevel(strip->channelId());
             strip->setLevel(lvl.peakLeft, lvl.peakRight);
             maxPeak = std::max({maxPeak, lvl.peakLeft, lvl.peakRight});
+            updateAutoGain(strip, std::max(lvl.peakLeft, lvl.peakRight));
         }
         if (debugLevels && (++debugTick % 25 == 0)) {
             log::debug("MixerPage: max channel peak = {:.5f}", maxPeak);

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(LinuxSonar
-    VERSION 0.1.0
+project(Sonero
+    VERSION 0.1.1
     DESCRIPTION "Native Linux audio mixer & router inspired by SteelSeries Sonar"
     HOMEPAGE_URL "https://github.com/"
     LANGUAGES CXX)
@@ -27,17 +27,25 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # --- Dependencies ------------------------------------------------------------
+# Network provides QLocalServer/QLocalSocket, used for the single-instance guard.
 find_package(Qt6 REQUIRED COMPONENTS Widgets DBus Network)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
-# spdlog is optional: when present we use it, otherwise the logging facade
-# falls back to a small stderr/stdout writer (see core/Log.cpp).
-find_package(spdlog QUIET)
+# spdlog is optional: when present we use it, otherwise the logging facade falls
+# back to a small stderr/stdout writer (see core/Log.cpp).
+#
+# Packaged builds turn it OFF: libspdlog's package name embeds both its own and
+# libfmt's ABI version (libspdlog1.15-fmt10), which differs on every distribution
+# and makes a .deb refuse to install elsewhere. The built-in logger costs nothing.
+option(SONAR_USE_SPDLOG "Use spdlog for logging when it is available" ON)
+if(SONAR_USE_SPDLOG)
+    find_package(spdlog QUIET)
+endif()
 
 # --- Core library (Qt-free): audio backend + cross-cutting utilities ---------
-add_library(linuxsonar_core STATIC
+add_library(sonero_core STATIC
     core/Log.h
     core/Log.cpp
     audio/IAudioBackend.h
@@ -54,24 +62,26 @@ add_library(linuxsonar_core STATIC
     audio/Mixer.cpp
     dsp/Equalizer.h
     dsp/Equalizer.cpp
+    dsp/AutoGain.h
+    dsp/AutoGain.cpp
     hid/SteelSeriesDevice.h
     hid/SteelSeriesDevice.cpp)
 
-target_include_directories(linuxsonar_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(linuxsonar_core PUBLIC PkgConfig::PIPEWIRE)
-target_compile_definitions(linuxsonar_core PUBLIC SONAR_VERSION="${PROJECT_VERSION}")
-target_compile_features(linuxsonar_core PUBLIC cxx_std_20)
+target_include_directories(sonero_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(sonero_core PUBLIC PkgConfig::PIPEWIRE)
+target_compile_definitions(sonero_core PUBLIC SONAR_VERSION="${PROJECT_VERSION}")
+target_compile_features(sonero_core PUBLIC cxx_std_20)
 
-if(spdlog_FOUND)
-    target_link_libraries(linuxsonar_core PRIVATE spdlog::spdlog)
-    target_compile_definitions(linuxsonar_core PRIVATE SONAR_HAVE_SPDLOG=1)
-    message(STATUS "LinuxSonar: logging via spdlog")
+if(SONAR_USE_SPDLOG AND spdlog_FOUND)
+    target_link_libraries(sonero_core PRIVATE spdlog::spdlog)
+    target_compile_definitions(sonero_core PRIVATE SONAR_HAVE_SPDLOG=1)
+    message(STATUS "Sonero: logging via spdlog")
 else()
-    message(STATUS "LinuxSonar: spdlog not found, using built-in fallback logger")
+    message(STATUS "Sonero: using the built-in logger (no spdlog dependency)")
 endif()
 
 # --- Application executable (Qt UI) ------------------------------------------
-qt_add_executable(LinuxSonar
+qt_add_executable(Sonero
     app/main.cpp
     app/Application.h
     app/Application.cpp
@@ -112,39 +122,92 @@ qt_add_executable(LinuxSonar
     ui/widgets/FlowLayout.h
     ui/widgets/FlowLayout.cpp)
 
-target_link_libraries(LinuxSonar PRIVATE linuxsonar_core Qt6::Widgets Qt6::DBus Qt6::Network)
+target_link_libraries(Sonero PRIVATE sonero_core Qt6::Widgets Qt6::DBus Qt6::Network)
 
 # Lets a build-tree run find packaged resources (icons, udev rule) without being
 # installed; packaged builds locate them under the install prefix instead.
-target_compile_definitions(LinuxSonar PRIVATE
+target_compile_definitions(Sonero PRIVATE
     SONAR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # --- HID probe (dev tool for the SteelSeries base station) -------------------
 add_executable(hidprobe hid/probe_main.cpp)
-target_link_libraries(hidprobe PRIVATE linuxsonar_core)
+target_link_libraries(hidprobe PRIVATE sonero_core)
 
 # --- Installation (also what the AppImage AppDir is built from) ---------------
 include(GNUInstallDirs)
 
-install(TARGETS LinuxSonar RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS Sonero RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-install(FILES packaging/LinuxSonar.desktop
+install(FILES packaging/Sonero.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 
 foreach(icon_size 32 48 64 128 256)
-    install(FILES packaging/icons/linuxsonar-${icon_size}.png
+    install(FILES packaging/icons/sonero-${icon_size}.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${icon_size}x${icon_size}/apps
-        RENAME LinuxSonar.png)
+        RENAME Sonero.png)
     # Second copy kept under a stable name so the running app can install icons
     # into the user's home for desktop integration (portable AppImage builds).
-    install(FILES packaging/icons/linuxsonar-${icon_size}.png
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/linuxsonar/icons)
+    install(FILES packaging/icons/sonero-${icon_size}.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
 endforeach()
 
-# Shipped for reference; writing HID to the SteelSeries dock needs this rule
-# installed into /etc/udev/rules.d as root (see docs) — an AppImage cannot do it.
-install(FILES packaging/udev/70-linuxsonar-steelseries.rules
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/linuxsonar/udev)
+# Panel icon for system trays (Cinnamon, KDE, XFCE). Separate from the app icon:
+# it is drawn at 16-24px over an unknown panel colour, so it drops the background
+# tile and uses heavier strokes.
+foreach(icon_size 16 22 24 32 48)
+    install(FILES packaging/icons/sonero-tray-${icon_size}.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${icon_size}x${icon_size}/apps
+        RENAME Sonero-tray.png)
+    install(FILES packaging/icons/sonero-tray-${icon_size}.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
+endforeach()
+
+# Two copies of the udev rule, for the two ways Sonero is delivered:
+#  - /lib/udev/rules.d is where a package's rules live, so installing the .deb
+#    grants SteelSeries HID access immediately (postinst reloads udev).
+#  - the share/ copy is a payload the portable AppImage can offer to install
+#    itself, since it cannot write outside the user's home.
+install(FILES packaging/udev/70-sonero-steelseries.rules
+    DESTINATION lib/udev/rules.d)
+install(FILES packaging/udev/70-sonero-steelseries.rules
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/udev)
+
+# --- Debian package (cpack -G DEB) -------------------------------------------
+set(CPACK_PACKAGE_NAME "sonero")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Per-application audio mixer, router and equalizer for PipeWire")
+set(CPACK_PACKAGE_HOMEPAGE_URL "${PROJECT_HOMEPAGE_URL}")
+set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+set(CPACK_STRIP_FILES ON)
+
+set(SONAR_DEB_MAINTAINER "Sonero <noreply@localhost>"
+    CACHE STRING "Maintainer field of the .deb package")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "${SONAR_DEB_MAINTAINER}")
+set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+
+# Derive the exact library dependencies from the linked binary rather than
+# guessing version ranges by hand.
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+# Not linked against, so shlibdeps cannot see them: the Qt platform plugins are
+# dlopen()ed, and PipeWire is a running service rather than a library call.
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins")
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "pipewire (>= 0.3), wireplumber, qt6-wayland")
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "pipewire-audio")
+
+# The project used to be called LinuxSonar. Conflicts+Replaces makes apt remove
+# that package as part of installing this one, instead of leaving two copies with
+# duplicate menu entries, udev rules and autostart files fighting each other.
+set(CPACK_DEBIAN_PACKAGE_CONFLICTS "linuxsonar")
+set(CPACK_DEBIAN_PACKAGE_REPLACES "linuxsonar")
+set(CPACK_DEBIAN_PACKAGE_PROVIDES "linuxsonar")
+
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/deb/postrm")
+
+include(CPack)
 
 # --- Tests -------------------------------------------------------------------
 include(CTest)

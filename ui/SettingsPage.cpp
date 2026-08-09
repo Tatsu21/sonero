@@ -89,7 +89,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
     test->setCursor(Qt::PointingHandCursor);
     connect(test, &QPushButton::clicked, this, [this] {
         if (notifier_ != nullptr) {
-            notifier_->notify(QStringLiteral("LinuxSonar"),
+            notifier_->notify(QStringLiteral("Sonero"),
                               QStringLiteral("Notifications are working \xF0\x9F\x8E\xA7"),
                               Notifier::Normal);
         }
@@ -101,7 +101,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
     // --- Background ---
     QVBoxLayout* bg = makeCard(
         root, QStringLiteral("Background"),
-        QStringLiteral("Keep LinuxSonar running when the window is closed so its audio "
+        QStringLiteral("Keep Sonero running when the window is closed so its audio "
                        "routing and controls stay active. Quit from the tray icon menu."));
 
     // Read/modify/write a single key of the "general" settings section.
@@ -126,8 +126,8 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
     // Start at login. The source of truth is the autostart entry on disk, not a
     // setting — the user may delete it with their desktop's own tweak tool.
     // Note: only the autostart entry starts hidden (it passes --background).
-    // Launching LinuxSonar yourself always shows the window.
-    auto* atLogin = new QCheckBox(QStringLiteral("Start LinuxSonar when I log in"));
+    // Launching Sonero yourself always shows the window.
+    auto* atLogin = new QCheckBox(QStringLiteral("Start Sonero when I log in"));
     atLogin->setChecked(autostart::isEnabled());
     auto* atLoginHint = new QLabel;
     atLoginHint->setObjectName(QStringLiteral("Hint"));
@@ -137,7 +137,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
             autostart::isEnabled()
                 ? QStringLiteral("Starts hidden in the background · %1")
                       .arg(autostart::desktopFilePath())
-                : QStringLiteral("Not enabled — LinuxSonar only runs when you start it."));
+                : QStringLiteral("Not enabled — Sonero only runs when you start it."));
     };
     describeAutostart();
     connect(atLogin, &QCheckBox::toggled, this, [atLogin, describeAutostart](bool on) {
@@ -153,7 +153,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
     // A guaranteed full-exit path — the tray Quit action is unavailable on desktops
     // without a system tray (e.g. stock GNOME), so keep one here too.
     auto* quitRow = new QHBoxLayout;
-    auto* quit = new QPushButton(QStringLiteral("Quit LinuxSonar"));
+    auto* quit = new QPushButton(QStringLiteral("Quit Sonero"));
     quit->setCursor(Qt::PointingHandCursor);
     connect(quit, &QPushButton::clicked, this, [] { QApplication::quit(); });
     quitRow->addStretch(1);
@@ -168,7 +168,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
 void SettingsPage::buildSystemCard(QVBoxLayout* root) {
     systemBody_ = makeCard(
         root, QStringLiteral("System integration"),
-        QStringLiteral("What LinuxSonar needs from your system. Items marked with a lock "
+        QStringLiteral("What Sonero needs from your system. Items marked with a lock "
                        "change system files and ask for your password first — you always "
                        "see the exact commands before anything runs."));
     refreshSystemChecks();
@@ -247,7 +247,7 @@ void SettingsPage::refreshSystemChecks() {
                 // Show exactly what will run as root, then let the user decide.
                 const QString script = setup::privilegedFixScript(id);
                 if (script.isEmpty()) {
-                    QMessageBox::warning(this, QStringLiteral("LinuxSonar"),
+                    QMessageBox::warning(this, QStringLiteral("Sonero"),
                                          QStringLiteral("The required files could not be found "
                                                         "in this build."));
                     return;
@@ -267,7 +267,7 @@ void SettingsPage::refreshSystemChecks() {
                 }
                 QString error;
                 if (!setup::runPrivilegedFix(id, &error)) {
-                    QMessageBox::warning(this, QStringLiteral("LinuxSonar"), error);
+                    QMessageBox::warning(this, QStringLiteral("Sonero"), error);
                 }
                 refreshSystemChecks();
             });

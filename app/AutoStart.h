@@ -4,7 +4,7 @@
 
 namespace sonar::autostart {
 
-// "Start LinuxSonar when you log in", implemented with the XDG Desktop Application
+// "Start Sonero when you log in", implemented with the XDG Desktop Application
 // Autostart spec: a .desktop entry in ~/.config/autostart that every major desktop
 // (GNOME, KDE, XFCE, …) launches at session start.
 //

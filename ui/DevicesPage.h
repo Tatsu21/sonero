@@ -79,7 +79,6 @@ private:
     bool devicesInitialized_ = false;                            // skip the first sync
     std::unordered_set<std::string> btLowWarned_;                // BT names warned low
     bool headsetLowWarned_ = false;
-    bool dockLowWarned_ = false;
 
     QVBoxLayout* deviceListBody_ = nullptr;   // rows, one per connected output
     QWidget* steelSeriesCard_ = nullptr;      // battery + EQ (hidden when absent)
@@ -98,8 +97,6 @@ private:
     QLabel* statusLabel_ = nullptr;
     QProgressBar* headsetBar_ = nullptr;
     QLabel* headsetPct_ = nullptr;
-    QProgressBar* spareBar_ = nullptr;
-    QLabel* sparePct_ = nullptr;
     QLabel* rawLabel_ = nullptr;
 
     EqCurve* eqCurve_ = nullptr;

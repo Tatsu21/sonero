@@ -66,9 +66,9 @@ void PipeWireManagerTest::doubleInitializeIsIdempotent() {
 void PipeWireManagerTest::virtualSinkNamesAreDerivedFromChannel() {
     using sonar::audio::ChannelId;
     QCOMPARE(QString::fromStdString(PipeWireManager::nodeNameFor(ChannelId::Game)),
-             QStringLiteral("sonar_game"));
+             QStringLiteral("sonero_game"));
     QCOMPARE(QString::fromStdString(PipeWireManager::nodeNameFor(ChannelId::Microphone)),
-             QStringLiteral("sonar_microphone"));
+             QStringLiteral("sonero_microphone"));
 }
 
 QTEST_GUILESS_MAIN(PipeWireManagerTest)

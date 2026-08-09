@@ -11,7 +11,7 @@ class QTimer;
 namespace sonar::config {
 
 // Persists the app's user settings to a single JSON file under the user's config
-// directory (~/.config/LinuxSonar/settings.json). Writes are debounced: a caller
+// directory (~/.config/Sonero/settings.json). Writes are debounced: a caller
 // replaces a named section and the store flushes to disk shortly after, so
 // dragging a slider does not hammer the filesystem. A missing or damaged file is
 // treated as a first run — callers then keep their built-in defaults.
@@ -37,6 +37,9 @@ public:
     [[nodiscard]] static QString filePath();
 
 private:
+    // Bring settings over from the pre-rename location, once.
+    static void migrateFromLegacyLocation();
+
     QJsonObject root_;
     QTimer* saveTimer_ = nullptr;
     bool firstRun_ = true;

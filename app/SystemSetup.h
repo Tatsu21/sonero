@@ -7,7 +7,7 @@ namespace sonar::setup {
 
 // What a check is about. Kept explicit so the UI can order and label them.
 enum class CheckId {
-    PipeWire,            // the audio server LinuxSonar builds on
+    PipeWire,            // the audio server Sonero builds on
     DesktopIntegration,  // menu entry + icon (AppImage only)
     UdevRule,            // /dev/hidraw access for SteelSeries headsets
     BluezBattery,        // BlueZ "Experimental" — Bluetooth battery reporting
@@ -34,7 +34,7 @@ struct Check {
 // True when the process is running from an AppImage bundle.
 [[nodiscard]] bool runningFromAppImage();
 
-// Locate a packaged resource ("udev/70-...rules", "icons/linuxsonar-256.png"),
+// Locate a packaged resource ("udev/70-...rules", "icons/sonero-256.png"),
 // searching the AppImage mount, the system prefix, then the source tree.
 // Returns an empty string when not found.
 [[nodiscard]] QString resourcePath(const QString& relative);

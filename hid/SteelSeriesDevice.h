@@ -16,12 +16,24 @@ struct ProbeResult {
     std::string error;        // why it is not accessible (e.g. permission)
 };
 
-// Dual-battery status of the Nova Pro Wireless (one battery in the headset, one
-// charging in the dock). Percent is -1 when unknown.
+// What the base station reports about the headset it is paired with.
+enum class HeadsetState {
+    Unknown,
+    Offline,   // powered off or out of range — no meaningful battery reading
+    Charging,  // sitting on the dock / charging over cable
+    Online,
+};
+
+// Battery status of the Nova Pro Wireless headset. `headsetPercent` is -1 when
+// unknown (including while the headset is offline).
+//
+// The base station reports one battery only — the headset's. The spare battery
+// charging in the dock is shown on the dock's own screen but is not part of this
+// report, so Sonero does not display a figure for it.
 struct BatteryStatus {
     bool valid = false;
     int headsetPercent = -1;
-    int sparePercent = -1;  // spare battery charging in the base station
+    HeadsetState state = HeadsetState::Unknown;
     std::array<std::uint8_t, 64> raw{};  // raw status report, for calibration
 };
 

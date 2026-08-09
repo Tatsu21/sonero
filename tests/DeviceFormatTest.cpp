@@ -27,7 +27,7 @@ private:
 
 void DeviceFormatTest::initTestCase() {
     tmp_ = std::filesystem::temp_directory_path() /
-           ("linuxsonar-devfmt-" + std::to_string(::getpid()));
+           ("sonero-devfmt-" + std::to_string(::getpid()));
     std::filesystem::create_directories(tmp_);
     qputenv("XDG_CONFIG_HOME", QByteArray::fromStdString(tmp_.string()));
 }

@@ -27,7 +27,7 @@ Application::Application(std::unique_ptr<audio::IAudioBackend> backend,
 Application::~Application() = default;
 
 void Application::start(bool background) {
-    log::info("LinuxSonar {} starting{}", SONAR_VERSION, background ? " (background)" : "");
+    log::info("Sonero {} starting{}", SONAR_VERSION, background ? " (background)" : "");
 
     // Portable (AppImage) runs register themselves with the desktop on first
     // start: menu entry + icons under ~/.local/share. Purely user-level and

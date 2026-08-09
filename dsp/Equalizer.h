@@ -69,6 +69,21 @@ void applyPreset(EqSettings& settings, EqPreset preset);
 
 // Combined magnitude response (dB) at a frequency, approximated as a sum of
 // per-band bell curves — good enough for the on-screen curve and stable to draw.
+// Combined response of the whole curve at a frequency: the sum of every band's
+// contribution. This is what the curve widget draws — it is NOT the gain to give
+// an individual filter, because feeding a summed curve into each filter of a
+// cascade applies the overlap between bands a second time.
 [[nodiscard]] float responseDbAt(const EqSettings& settings, float freqHz);
+
+// Gain a single filter centred at `freqHz` should apply, interpolated between the
+// user's band gains in log-frequency space. Use this — not responseDbAt — when
+// driving a cascade of filters, so bands are not counted twice.
+[[nodiscard]] float bandGainAt(const EqSettings& settings, float freqHz);
+
+// Peak boost (dB, never negative) the settings produce anywhere in the audible
+// range. Used to attenuate the signal by the same amount so that boosting an EQ
+// band cannot push the output past full scale, where it would clip on conversion
+// to the device's sample format.
+[[nodiscard]] float peakBoostDb(const EqSettings& settings);
 
 }  // namespace sonar::dsp

@@ -120,15 +120,26 @@ BatteryStatus SteelSeriesDevice::readBattery() {
     }
     std::memcpy(status.raw.data(), buffer, kReportSize);
 
-    // Decode (0..10 scale ×10), calibrated against real readings on the Nova Pro
-    // Wireless dock: with headset 100% / dock 20%, buffer[11]=0x0a (headset) and
-    // buffer[10]=0x02 (spare battery charging in the dock).
-    const auto toPercent = [](std::uint8_t v) {
-        const int p = static_cast<int>(v) * 10;
-        return p > 100 ? 100 : p;
-    };
-    status.headsetPercent = toPercent(buffer[11]);
-    status.sparePercent = toPercent(buffer[10]);
+    // Byte 15 carries the link state, byte 6 the charge on a 0..8 scale. (Matches
+    // the protocol as implemented by HeadsetControl for this model; an earlier
+    // guess here read bytes 10/11, which only appeared correct by coincidence.)
+    constexpr std::uint8_t kHeadsetOffline = 0x01;
+    constexpr std::uint8_t kHeadsetCharging = 0x02;
+    constexpr std::uint8_t kHeadsetOnline = 0x08;
+    constexpr int kChargeMax = 8;
+
+    switch (buffer[15]) {
+        case kHeadsetOffline: status.state = HeadsetState::Offline; break;
+        case kHeadsetCharging: status.state = HeadsetState::Charging; break;
+        case kHeadsetOnline: status.state = HeadsetState::Online; break;
+        default: status.state = HeadsetState::Unknown; break;
+    }
+
+    if (status.state != HeadsetState::Offline) {
+        const int raw = std::min<int>(buffer[6], kChargeMax);
+        // Eight steps of 12.5%, rounded — the hardware has no finer resolution.
+        status.headsetPercent = (raw * 100 + kChargeMax / 2) / kChargeMax;
+    }
     status.valid = true;
     return status;
 }

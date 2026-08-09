@@ -23,11 +23,11 @@ private slots:
 void SystemSetupTest::findsPackagedResources() {
     // The udev rule must be locatable, otherwise the fix silently does nothing.
     const QString rule =
-        setup::resourcePath(QStringLiteral("udev/70-linuxsonar-steelseries.rules"));
+        setup::resourcePath(QStringLiteral("udev/70-sonero-steelseries.rules"));
     QVERIFY2(!rule.isEmpty(), "packaged udev rule not found");
     QVERIFY(QFileInfo::exists(rule));
 
-    QVERIFY(!setup::resourcePath(QStringLiteral("icons/linuxsonar-256.png")).isEmpty());
+    QVERIFY(!setup::resourcePath(QStringLiteral("icons/sonero-256.png")).isEmpty());
     QVERIFY(setup::resourcePath(QStringLiteral("nope/does-not-exist")).isEmpty());
 }
 
@@ -37,7 +37,7 @@ void SystemSetupTest::udevScriptIsExactAndScoped() {
 
     // Installs the rule read-only and reloads udev — nothing else.
     QVERIFY(s.contains(QStringLiteral("install -m 0644")));
-    QVERIFY(s.contains(QStringLiteral("/etc/udev/rules.d/70-linuxsonar-steelseries.rules")));
+    QVERIFY(s.contains(QStringLiteral("/etc/udev/rules.d/70-sonero-steelseries.rules")));
     QVERIFY(s.contains(QStringLiteral("udevadm control --reload-rules")));
     QVERIFY(s.contains(QStringLiteral("udevadm trigger --subsystem-match=hidraw")));
 
@@ -55,7 +55,7 @@ void SystemSetupTest::bluezScriptIsReversible() {
     const QString s = setup::privilegedFixScript(setup::CheckId::BluezBattery);
     QVERIFY(!s.isEmpty());
     // A drop-in leaves the distribution's own unit file untouched.
-    QVERIFY(s.contains(QStringLiteral("/etc/systemd/system/bluetooth.service.d/10-linuxsonar.conf")));
+    QVERIFY(s.contains(QStringLiteral("/etc/systemd/system/bluetooth.service.d/10-sonero.conf")));
     QVERIFY(s.contains(QStringLiteral("--experimental")));
     QVERIFY(s.contains(QStringLiteral("systemctl daemon-reload")));
     // It must never rewrite the main BlueZ configuration in place.

@@ -21,6 +21,7 @@
 #include <QWidget>
 
 #include "audio/IAudioBackend.h"
+#include "app/SystemSetup.h"
 #include "config/SettingsStore.h"
 #include "ui/DevicesPage.h"
 #include "ui/EqualizerPage.h"
@@ -57,13 +58,35 @@ QString toQString(std::string_view sv) {
 // guaranteed style icon so a tray/window icon is never blank.
 QIcon appIcon() {
     for (const char* name :
-         {"LinuxSonar", "audio-headphones", "audio-card", "multimedia-volume-control"}) {
+         {"Sonero", "audio-headphones", "audio-card", "multimedia-volume-control"}) {
         QIcon icon = QIcon::fromTheme(QString::fromLatin1(name));
         if (!icon.isNull()) {
             return icon;
         }
     }
     return QApplication::style()->standardIcon(QStyle::SP_MediaVolume);
+}
+
+// Icon for the system tray. Trays render at 16-24px over a panel background whose
+// colour we cannot know, so we ship a separate flat, high-contrast icon rather
+// than shrinking the dark app tile into an unreadable smudge.
+//
+// Preferred by theme name (KDE and Cinnamon pass the name over D-Bus and let the
+// theme pick the size); falls back to the packaged files, then to the app icon.
+QIcon trayIcon() {
+    QIcon themed = QIcon::fromTheme(QStringLiteral("Sonero-tray"));
+    if (!themed.isNull()) {
+        return themed;
+    }
+    QIcon fromFiles;
+    for (const int size : {16, 22, 24, 32, 48}) {
+        const QString path =
+            setup::resourcePath(QStringLiteral("icons/sonero-tray-%1.png").arg(size));
+        if (!path.isEmpty()) {
+            fromFiles.addFile(path, QSize(size, size));
+        }
+    }
+    return fromFiles.isNull() ? appIcon() : fromFiles;
 }
 
 QFrame* makeCard() {
@@ -132,7 +155,7 @@ MainWindow::MainWindow(const audio::IAudioBackend& backend, audio::IMixer& mixer
 MainWindow::~MainWindow() = default;
 
 void MainWindow::buildUi() {
-    setWindowTitle(QStringLiteral("LinuxSonar"));
+    setWindowTitle(QStringLiteral("Sonero"));
     setWindowIcon(appIcon());
     resize(1120, 700);
     setMinimumSize(880, 560);
@@ -183,7 +206,7 @@ void MainWindow::buildUi() {
     logo->setObjectName(QStringLiteral("AppLogo"));
     logo->setTextFormat(Qt::RichText);
     logo->setText(QStringLiteral(
-        "<span style='color:#7aa2f7'>&#9670;</span> Linux<span style='color:#7aa2f7'>Sonar</span>"));
+        "<span style='color:#7aa2f7'>&#9670;</span> Son<span style='color:#7aa2f7'>ero</span>"));
     sideLayout->addWidget(logo);
 
     auto* section = new QLabel(QStringLiteral("MENU"), sidebar);
@@ -233,11 +256,11 @@ void MainWindow::buildTrayIcon() {
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
         return;  // no tray: fall back to a plain app that quits when closed
     }
-    trayIcon_ = new QSystemTrayIcon(windowIcon(), this);
-    trayIcon_->setToolTip(QStringLiteral("LinuxSonar"));
+    trayIcon_ = new QSystemTrayIcon(trayIcon(), this);
+    trayIcon_->setToolTip(QStringLiteral("Sonero"));
 
     auto* menu = new QMenu(this);
-    QAction* showAction = menu->addAction(QStringLiteral("Show LinuxSonar"));
+    QAction* showAction = menu->addAction(QStringLiteral("Show Sonero"));
     connect(showAction, &QAction::triggered, this, [this] {
         showNormal();
         raise();
@@ -282,7 +305,7 @@ bool MainWindow::runInBackgroundEnabled() const {
 void MainWindow::closeEvent(QCloseEvent* event) {
     // Hide instead of exiting, keeping the PipeWire graph alive. This does not
     // depend on a system tray (GNOME/Wayland has none by default) — the window is
-    // brought back either from the tray, or by simply launching LinuxSonar again
+    // brought back either from the tray, or by simply launching Sonero again
     // (the single-instance guard forwards that to us as an activation request).
     if (!forceQuit_ && runInBackgroundEnabled()) {
         hide();
@@ -305,13 +328,13 @@ void MainWindow::showBackgroundHintOnce() {
         trayIcon_ != nullptr
             ? QStringLiteral("Still running in the background — right-click the tray icon to quit.")
             : QStringLiteral(
-                  "Still running in the background. Launch LinuxSonar again to reopen, or use "
+                  "Still running in the background. Launch Sonero again to reopen, or use "
                   "Quit in Settings to exit.");
     if (trayIcon_ != nullptr) {
-        trayIcon_->showMessage(QStringLiteral("LinuxSonar"), body, QSystemTrayIcon::Information,
+        trayIcon_->showMessage(QStringLiteral("Sonero"), body, QSystemTrayIcon::Information,
                                5000);
     } else if (notifier_ != nullptr) {
-        notifier_->notify(QStringLiteral("LinuxSonar"), body, Notifier::Low, QString(),
+        notifier_->notify(QStringLiteral("Sonero"), body, Notifier::Low, QString(),
                           /*clickable=*/true);
     }
     g[QStringLiteral("backgroundHintShown")] = true;

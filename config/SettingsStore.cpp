@@ -19,6 +19,7 @@ constexpr int kSaveDebounceMs = 400;
 }  // namespace
 
 SettingsStore::SettingsStore(QObject* parent) : QObject(parent) {
+    migrateFromLegacyLocation();
     QFile file(filePath());
     if (file.open(QIODevice::ReadOnly)) {
         const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
@@ -34,6 +35,29 @@ SettingsStore::SettingsStore(QObject* parent) : QObject(parent) {
 }
 
 SettingsStore::~SettingsStore() { flush(); }
+
+// The project was called LinuxSonar before, which put the settings under a
+// different application directory. Carry them over once, so renaming the app does
+// not silently reset everybody's mixer, EQ and routing.
+void SettingsStore::migrateFromLegacyLocation() {
+    const QString current = filePath();
+    if (QFileInfo::exists(current)) {
+        return;  // already migrated, or a genuine fresh start
+    }
+    const QString legacy =
+        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
+        QStringLiteral("/LinuxSonar/LinuxSonar/settings.json");
+    if (!QFileInfo::exists(legacy)) {
+        return;
+    }
+    QDir().mkpath(QFileInfo(current).absolutePath());
+    if (QFile::copy(legacy, current)) {
+        // Copy, not move: if anything about the new location is wrong the old
+        // settings are still there to fall back on.
+        QFile::copy(QFileInfo(legacy).absolutePath() + QStringLiteral("/presets"),
+                    QFileInfo(current).absolutePath() + QStringLiteral("/presets"));
+    }
+}
 
 QString SettingsStore::filePath() {
     return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
@@ -56,7 +80,7 @@ void SettingsStore::flush() {
     }
     const QString path = filePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
-    root_[QStringLiteral("app")] = QStringLiteral("LinuxSonar");
+    root_[QStringLiteral("app")] = QStringLiteral("Sonero");
     root_[QStringLiteral("kind")] = QStringLiteral("settings");
     root_[QStringLiteral("version")] = 1;
     QSaveFile file(path);

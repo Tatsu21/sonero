@@ -168,6 +168,51 @@ std::string_view bandCountName(BandCount count) {
     return "10 Bands";
 }
 
+float bandGainAt(const EqSettings& settings, float freqHz) {
+    if (settings.bands.empty()) {
+        return 0.0f;
+    }
+    // The filter cascade has its own fixed centre frequencies, which need not
+    // match the user's band count (10 / 15 / 31). Interpolate between the two
+    // neighbouring band gains rather than summing every band's bell: summing is
+    // for drawing the curve, and would double-count the overlap here.
+    if (freqHz <= settings.bands.front().frequency) {
+        return settings.bands.front().gainDb;
+    }
+    if (freqHz >= settings.bands.back().frequency) {
+        return settings.bands.back().gainDb;
+    }
+    const float lf = std::log10(freqHz);
+    for (std::size_t i = 0; i + 1 < settings.bands.size(); ++i) {
+        const EqBand& lo = settings.bands[i];
+        const EqBand& hi = settings.bands[i + 1];
+        if (freqHz <= hi.frequency) {
+            const float l0 = std::log10(lo.frequency);
+            const float l1 = std::log10(hi.frequency);
+            const float t = l1 > l0 ? (lf - l0) / (l1 - l0) : 0.0f;
+            return lo.gainDb + t * (hi.gainDb - lo.gainDb);
+        }
+    }
+    return settings.bands.back().gainDb;
+}
+
+float peakBoostDb(const EqSettings& settings) {
+    if (!settings.enabled || settings.bands.empty()) {
+        return 0.0f;
+    }
+    // Sweep the audible range: neighbouring boosted bands overlap, so the peak of
+    // the combined curve sits above the highest single band gain.
+    float peak = 0.0f;
+    constexpr int kSteps = 240;
+    const float lo = std::log10(kMinFreq);
+    const float hi = std::log10(kMaxFreq);
+    for (int i = 0; i <= kSteps; ++i) {
+        const float f = std::pow(10.0f, lo + (hi - lo) * static_cast<float>(i) / kSteps);
+        peak = std::max(peak, responseDbAt(settings, f));
+    }
+    return peak;
+}
+
 float responseDbAt(const EqSettings& settings, float freqHz) {
     if (settings.bands.empty()) {
         return 0.0f;

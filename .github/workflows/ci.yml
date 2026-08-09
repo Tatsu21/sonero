@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # A .deb links against the distribution's own Qt, so it can only be installed
+    # on the distribution it was built on. Build one per target base:
+    #
+    #   ubuntu-22.04  ->  Ubuntu 22.04, Linux Mint 21.x   (Qt 6.2)
+    #   ubuntu-24.04  ->  Ubuntu 24.04, Linux Mint 22.x   (Qt 6.4)
+    #
+    # Debian users build locally with packaging/deb/build-deb.sh. Anyone else uses
+    # the AppImage, which carries its own Qt.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: mint21-ubuntu2204
+            appimage: true   # oldest glibc -> the AppImage runs on the most systems
+          - runner: ubuntu-24.04
+            target: mint22-ubuntu2404
+            appimage: false
+
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config dpkg-dev \
+            qt6-base-dev qt6-base-dev-tools qt6-wayland qt6-wayland-dev \
+            libpipewire-0.3-dev desktop-file-utils file
+
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+      - name: Build Debian package
+        run: ./packaging/deb/build-deb.sh dist
+
+      - name: Show what the package requires
+        run: dpkg-deb -f dist/*.deb Package Version Depends Recommends
+
+      - name: Build AppImage
+        if: matrix.appimage
+        run: ./packaging/appimage/build-appimage.sh dist
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonero-${{ matrix.target }}
+          path: |
+            dist/*.deb
+            dist/*.AppImage

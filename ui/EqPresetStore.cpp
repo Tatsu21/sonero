@@ -42,7 +42,7 @@ QJsonObject toJson(const QString& name, const dsp::EqSettings& s) {
         bands.append(bo);
     }
     QJsonObject o;
-    o[QStringLiteral("app")] = QStringLiteral("LinuxSonar");
+    o[QStringLiteral("app")] = QStringLiteral("Sonero");
     o[QStringLiteral("kind")] = QStringLiteral("equalizer-preset");
     o[QStringLiteral("version")] = 1;
     o[QStringLiteral("name")] = name;

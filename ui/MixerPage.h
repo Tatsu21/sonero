@@ -8,6 +8,7 @@
 #include <QWidget>
 
 #include "audio/Channel.h"
+#include "dsp/AutoGain.h"
 
 class QTimer;
 
@@ -51,6 +52,7 @@ private:
     void pushChannelVolumes();  // apply every channel's volume to the real sinks
     void pushMuteStates();      // apply mute+solo to the real channel sinks
     void syncOutputDevices();   // refresh each strip's output selector
+    void updateAutoGain(ChannelStrip* strip, float peak);  // one AGC step
     void restoreMixerState();   // load persisted channel state into the model
     void saveMixerState();      // snapshot the model into the settings store
 
@@ -62,6 +64,11 @@ private:
 
     std::vector<ChannelStrip*> strips_;
     std::unordered_map<int, ChannelStrip*> stripByChannel_;
+    // Per-channel trim in dB, persisted alongside the rest of the channel state.
+    std::unordered_map<int, float> channelGainDb_;
+    // Auto-gain: one control loop per channel, fed by the meters in refresh().
+    std::unordered_map<int, bool> autoGainOn_;
+    std::unordered_map<int, dsp::AutoGain> autoGain_;
     FlowLayout* appsLayout_ = nullptr;
     QTimer* timer_ = nullptr;
     bool simulate_ = true;

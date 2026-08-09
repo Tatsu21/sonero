@@ -1,6 +1,6 @@
-# Înregistrarea unei Aplicații Noi în LinuxSonar — De la Detectare la Alocarea unui Canal
+# Înregistrarea unei Aplicații Noi în Sonero — De la Detectare la Alocarea unui Canal
 
-Acest document descrie **procesul complet** prin care o aplicație nouă este detectată de LinuxSonar, înregistrată în sistem și alocată unui canal audio, până la momentul în care primește un canal funcțional.
+Acest document descrie **procesul complet** prin care o aplicație nouă este detectată de Sonero, înregistrată în sistem și alocată unui canal audio, până la momentul în care primește un canal funcțional.
 
 ---
 
@@ -23,7 +23,7 @@ Pentru ca procesul de detectare și alocare să funcționeze, trebuie îndeplini
 | Condiție | Descriere | Verificare |
 |----------|-----------|------------|
 | **PipeWire rulează** | Daemon-ul PipeWire trebuie să fie activ | `systemctl --user status pipewire pipewire-pulse` |
-| **LinuxSonar pornit** | Aplicația LinuxSonar trebuie să fie lansată | `pgrep -x LinuxSonar` |
+| **Sonero pornit** | Aplicația Sonero trebuie să fie lansată | `pgrep -x Sonero` |
 | **Backend inițializat** | `PipeWireManager` trebuie să fie în stare `Available` | Verificare în logs: `PipeWire: connected to` |
 | **Virtual sinks create** | Modulele de filter-chain pentru canale trebuie create | Verificare în logs: `PipeWire: created X virtual channel sinks` |
 
@@ -36,7 +36,7 @@ Pentru ca procesul de detectare și alocare să funcționeze, trebuie îndeplini
 ### Componentele cheie
 
 ```
-LinuxSonar
+Sonero
 ├── app/              # Application (entry point)
 │   └── Application.cpp/h  # Main application class
 ├── audio/            # Audio backend
@@ -49,7 +49,7 @@ LinuxSonar
 
 ### Canalele disponibile
 
-LinuxSonar definește **7 canale predefinite** în `audio/Channel.h`:
+Sonero definește **7 canale predefinite** în `audio/Channel.h`:
 
 | Canal | ID | Nume intern PipeWire | Descriere |
 |-------|----|---------------------|------------|
@@ -69,7 +69,7 @@ Fiecare canal corespunde unui **virtual sink** în PipeWire, creat prin module d
 
 ### Pasul 1: Inițializarea PipeWireManager
 
-Când LinuxSonar pornește, `PipeWireManager` execută următoarea secvență:
+Când Sonero pornește, `PipeWireManager` execută următoarea secvență:
 
 ```cpp
 // În Application.cpp
@@ -81,7 +81,7 @@ manager.initialize();
 
 1. **Crearea thread loop-ului PipeWire**
    ```cpp
-   loop_ = pw_thread_loop_new("linuxsonar", nullptr);
+   loop_ = pw_thread_loop_new("sonero", nullptr);
    pw_thread_loop_start(loop_);
    ```
 
@@ -110,7 +110,7 @@ Pentru fiecare canal din `kAllChannels`, se creează un **modul filter-chain**:
 void PipeWireManager::createVirtualSinks() {
     for (const ChannelId id : kAllChannels) {
         const std::string node = nodeNameFor(id); // e.g., "sonar_game"
-        const std::string desc = "LinuxSonar " + std::string(channelName(id));
+        const std::string desc = "Sonero " + std::string(channelName(id));
         
         const std::string args = filterChainArgs(node, desc, dspFreqs(), gains, kEqQ);
         
@@ -160,7 +160,7 @@ object.serial = 12345
 // audio/PipeWireManager.cpp:476-498
 } else if (std::strcmp(mediaClass, "Stream/Output/Audio") == 0) {
     if (startsWith(nodeName, "sonar_")) {
-        // Ignoră propriile stream-uri LinuxSonar
+        // Ignoră propriile stream-uri Sonero
         return;
     }
     
@@ -181,7 +181,7 @@ object.serial = 12345
 3. Aplicația este **adăugată în mapa `apps_`** cu cheia = `nodeId` (ID-ul PipeWire)
 4. Se incrementă `revision_` pentru a notifica UI-ul că lista de aplicații s-a schimbat
 
-> ✅ **Rezultat**: Aplicația este **înregistrată** în sistemul LinuxSonar și apare în lista de aplicații disponibile.
+> ✅ **Rezultat**: Aplicația este **înregistrată** în sistemul Sonero și apare în lista de aplicații disponibile.
 
 ### Pasul 5: Notificarea UI-ului
 
@@ -341,11 +341,11 @@ id 43, type Node/Audio/Sink, node.name = "sonar_game"
 pw-cli dump | grep -A5 -B5 "sonar_media"
 ```
 
-#### 5. Log-uri LinuxSonar
+#### 5. Log-uri Sonero
 
 ```bash
-# Rulează LinuxSonar cu log-uri detaliate
-./build/LinuxSonar --verbose
+# Rulează Sonero cu log-uri detaliate
+./build/Sonero --verbose
 ```
 
 Caută mesajele:
@@ -489,7 +489,7 @@ journalctl --user -u pipewire -f
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  REZULTAT FINAL:                                                       │   │
-│  │    ✓ Aplicația este înregistrată în LinuxSonar                        │   │
+│  │    ✓ Aplicația este înregistrată în Sonero                        │   │
 │  │    ✓ Audio-ul aplicației merge către virtual sink-ul canalului        │   │
 │  │    ✓ UI-ul afișează aplicația cu canalul alocat                      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -500,7 +500,7 @@ journalctl --user -u pipewire -f
 ### Flux secvențial detaliat
 
 ```
-1. Utilizatorul lansează LinuxSonar
+1. Utilizatorul lansează Sonero
    ↓
 2. Application.cpp: PipeWireManager::initialize()
    ↓
@@ -580,4 +580,4 @@ journalctl --user -u pipewire -f
 
 ---
 
-*Document generat pentru LinuxSonar — o alternativă open-source la SteelSeries Sonar pentru Linux.*
+*Document generat pentru Sonero — o alternativă open-source la SteelSeries Sonar pentru Linux.*

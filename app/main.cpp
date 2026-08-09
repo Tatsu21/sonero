@@ -24,16 +24,16 @@ int main(int argc, char* argv[]) {
             background = true;
         }
     }
-    QApplication::setApplicationName(QStringLiteral("LinuxSonar"));
-    QApplication::setOrganizationName(QStringLiteral("LinuxSonar"));
+    QApplication::setApplicationName(QStringLiteral("Sonero"));
+    QApplication::setOrganizationName(QStringLiteral("Sonero"));
     QApplication::setApplicationVersion(QStringLiteral(SONAR_VERSION));
-    // Ties the process to LinuxSonar.desktop so Wayland/GNOME uses its icon for the
+    // Ties the process to Sonero.desktop so Wayland/GNOME uses its icon for the
     // window, notifications and (with the AppIndicator extension) the tray item.
-    QApplication::setDesktopFileName(QStringLiteral("LinuxSonar"));
+    QApplication::setDesktopFileName(QStringLiteral("Sonero"));
 
     // Single instance: if one is already running, wake it and bail out *before*
     // touching PipeWire, so a second launch never spins up a duplicate audio graph.
-    sonar::SingleInstance instance(QStringLiteral("LinuxSonar.instance"));
+    sonar::SingleInstance instance(QStringLiteral("Sonero.instance"));
     if (instance.pingPrimary()) {
         return 0;
     }

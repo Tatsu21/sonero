@@ -348,7 +348,7 @@ void EqualizerPage::onImportPreset() {
     const auto name = presets::importFile(path);
     if (!name) {
         QMessageBox::warning(this, QStringLiteral("Import preset"),
-                             QStringLiteral("That file is not a valid LinuxSonar preset."));
+                             QStringLiteral("That file is not a valid Sonero preset."));
         return;
     }
     rebuildPresetCombo();
@@ -366,7 +366,7 @@ void EqualizerPage::onExportPreset() {
     if (path.isEmpty()) {
         return;
     }
-    if (!presets::exportFile(path, QStringLiteral("LinuxSonar EQ"), current())) {
+    if (!presets::exportFile(path, QStringLiteral("Sonero EQ"), current())) {
         QMessageBox::warning(this, QStringLiteral("Export preset"),
                              QStringLiteral("Could not write the file."));
     }

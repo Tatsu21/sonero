@@ -161,7 +161,7 @@ std::string PipeWireManager::nodeNameFor(ChannelId id) {
     std::string suffix(channelName(id));
     std::transform(suffix.begin(), suffix.end(), suffix.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return "sonar_" + suffix;
+    return "sonero_" + suffix;
 }
 
 PipeWireManager::PipeWireManager() { pw_init(nullptr, nullptr); }
@@ -176,7 +176,7 @@ bool PipeWireManager::initialize() {
         return isAvailable();
     }
 
-    loop_ = pw_thread_loop_new("linuxsonar", nullptr);
+    loop_ = pw_thread_loop_new("sonero", nullptr);
     if (loop_ == nullptr) {
         log::error("PipeWire: could not create the thread loop");
         state_ = BackendState::Unavailable;
@@ -267,7 +267,7 @@ void PipeWireManager::createVirtualSinks() {
 
     for (const ChannelId id : kAllChannels) {
         const std::string node = nodeNameFor(id);
-        const std::string desc = "LinuxSonar " + std::string(channelName(id));
+        const std::string desc = "Sonero " + std::string(channelName(id));
         // The Microphone channel is a virtual SOURCE (capture the real mic → EQ →
         // Audio/Source); every other channel is an Audio/Sink.
         // Never bind the mic capture to a Bluetooth input: doing so forces the
@@ -446,7 +446,7 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
 
         if ((std::strcmp(mediaClass, "Audio/Sink") == 0 ||
              std::strcmp(mediaClass, "Audio/Source") == 0) &&
-            startsWith(nodeName, "sonar_")) {  // one of our virtual channel nodes
+            startsWith(nodeName, "sonero_")) {  // one of our virtual channel nodes
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 sinkSerials_[nodeName] = serialOf(props);
@@ -475,8 +475,8 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             devicesRevision_.fetch_add(1, std::memory_order_relaxed);
             applyAllRoutesLocked();  // a (re)connected device may reclaim its channels
         } else if (std::strcmp(mediaClass, "Stream/Output/Audio") == 0) {
-            if (startsWith(nodeName, "sonar_")) {
-                // Our channel output streams (sonar_<channel>.out): track them so
+            if (startsWith(nodeName, "sonero_")) {
+                // Our channel output streams (sonero_<channel>.out): track them so
                 // each channel can be retargeted to a chosen device.
                 if (endsWith(nodeName, ".out")) {
                     const std::string base = nodeName.substr(0, nodeName.size() - 4);
@@ -552,7 +552,7 @@ void PipeWireManager::onMetaProperty(std::uint32_t subject, const char* key,
     // Remember the real hardware mic so the virtual mic captures from it.
     if (std::strcmp(key, "default.audio.source") == 0) {
         const std::string src = parseSinkName(value);
-        if (!src.empty() && !startsWith(src, "sonar_")) {
+        if (!src.empty() && !startsWith(src, "sonero_")) {
             realDefaultSource_ = src;
         }
         return;
@@ -567,7 +567,7 @@ void PipeWireManager::onMetaProperty(std::uint32_t subject, const char* key,
         return;
     }
 
-    if (startsWith(name, "sonar_")) {
+    if (startsWith(name, "sonero_")) {
         // A virtual sink was made default; put it back to the real one.
         if (!realDefaultSink_.empty() && metadata_ != nullptr) {
             const std::string json = "{\"name\":\"" + realDefaultSink_ + "\"}";
@@ -632,18 +632,22 @@ void PipeWireManager::createMeterStream(ChannelId channel, const std::string& si
     ChannelIO& io = io_[channelIndex(channel)];
     const std::string meterName = sinkName + ".meter";
 
+    // Meter the *output* of the channel, not its input. The sink's monitor taps
+    // the signal before the filter graph and before the fader, so a meter there
+    // shows what an application sent us rather than what we send onwards — and an
+    // automatic gain driven from it would be blind to the EQ's own boost.
+    // `<sink>.out` is the filter chain's playback side: post-EQ, post-volume.
+    const std::string meterTarget =
+        channel == ChannelId::Microphone ? sinkName : sinkName + ".out";
+
     pw_properties* props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_MEDIA_ROLE, "Music",
         PW_KEY_NODE_NAME, meterName.c_str(),
         PW_KEY_NODE_PASSIVE, "true",
-        PW_KEY_TARGET_OBJECT, sinkName.c_str(),
+        PW_KEY_TARGET_OBJECT, meterTarget.c_str(),
         nullptr);
-    // Sinks are metered from their monitor; the mic is a source, captured directly.
-    if (channel != ChannelId::Microphone) {
-        pw_properties_set(props, PW_KEY_STREAM_CAPTURE_SINK, "true");
-    }
 
     io.meter = pw_stream_new(core_, meterName.c_str(), props);
     if (io.meter == nullptr) {
@@ -685,8 +689,17 @@ void PipeWireManager::applyVolume(ChannelIO& io) {
     // Volume and balance both drive channelVolumes, so they must be computed
     // together — otherwise setting one would wipe the other. Balance pans by
     // attenuating one side.
-    float left = io.desiredVolume;
-    float right = io.desiredVolume;
+    // Three factors multiply into the level actually sent to the sink:
+    //   desiredVolume  what the user set on the channel fader
+    //   gain           the channel's trim, for taming a loud or quiet source
+    //   eqHeadroom     compensation for however much the EQ boosts
+    // plus a small fixed reserve: even a flat biquad cascade overshoots slightly,
+    // and a track mastered to full scale then clips on conversion to the device's
+    // integer format. One dB is inaudible and removes that whole class of grit.
+    constexpr float kFilterHeadroom = 0.891f;  // -1 dB
+    const float level = io.desiredVolume * io.desiredGain * io.eqHeadroom * kFilterHeadroom;
+    float left = level;
+    float right = level;
     if (io.desiredBalance > 0.0f) {
         left *= 1.0f - io.desiredBalance;    // pan right -> attenuate left
     } else if (io.desiredBalance < 0.0f) {
@@ -744,8 +757,11 @@ void PipeWireManager::applyEqualizer(ChannelId id, const dsp::EqSettings& settin
     int changed[kEqBands];
     int count = 0;
     for (int i = 0; i < kEqBands; ++i) {
+        // Each biquad gets its OWN band gain. Using the summed curve here would
+        // re-apply the overlap between neighbouring bands, because the biquads are
+        // chained in series and their responses already add.
         float g = settings.enabled
-                      ? dsp::responseDbAt(settings, dspFreqs()[static_cast<std::size_t>(i)])
+                      ? dsp::bandGainAt(settings, dspFreqs()[static_cast<std::size_t>(i)])
                       : 0.0f;
         g = std::clamp(g, dsp::kMinGainDb, dsp::kMaxGainDb);
         if (std::abs(g - io.eqGains[static_cast<std::size_t>(i)]) > 0.01f) {
@@ -770,6 +786,19 @@ void PipeWireManager::applyEqualizer(ChannelId id, const dsp::EqSettings& settin
         spa_pod_builder_pop(&b, &frame[1]);
         auto* pod = static_cast<spa_pod*>(spa_pod_builder_pop(&b, &frame[0]));
         pw_node_set_param(io.node, SPA_PARAM_Props, 0, pod);
+    }
+
+    // Headroom. A boosting EQ multiplies the signal, and music is already mastered
+    // close to full scale, so +6 dB of bass turns into hard clipping the moment the
+    // float graph is converted to the device's integer format — audible as gritty
+    // distortion rather than "too loud". Attenuate ahead of the filters by exactly
+    // the peak boost, so the loudest EQ'd frequency lands back at unity and the
+    // volume slider stays usable across its whole range.
+    const float headroom = settings.enabled ? dsp::peakBoostDb(settings) : 0.0f;
+    const float scale = std::pow(10.0f, -headroom / 20.0f);
+    if (std::abs(scale - io.eqHeadroom) > 0.001f) {
+        io.eqHeadroom = scale;
+        applyVolume(io);  // re-send channelVolumes with the new headroom folded in
     }
     pw_thread_loop_unlock(loop_);
 }
@@ -1168,6 +1197,27 @@ void PipeWireManager::setChannelBalance(ChannelId id, float balance) {
     io.desiredBalance = std::clamp(balance, -1.0f, 1.0f);
     applyVolume(io);
     pw_thread_loop_unlock(loop_);
+}
+
+void PipeWireManager::setChannelGain(ChannelId id, float gain) {
+    if (loop_ == nullptr) {
+        return;
+    }
+    pw_thread_loop_lock(loop_);
+    ChannelIO& io = io_[channelIndex(id)];
+    // Up to +6 dB, so a quiet source can be lifted as well as tamed.
+    io.desiredGain = std::clamp(gain, 0.0f, 2.0f);
+    applyVolume(io);
+    pw_thread_loop_unlock(loop_);
+}
+
+float PipeWireManager::channelHeadroom(ChannelId id) const {
+    // kFilterHeadroom mirrors applyVolume; eqHeadroom is whatever the current EQ
+    // curve required. Read without the loop lock: it is a single float that only
+    // ever moves between plausible values, and a metering client can tolerate
+    // reading the previous one.
+    constexpr float kFilterHeadroom = 0.891f;
+    return io_[channelIndex(id)].eqHeadroom * kFilterHeadroom;
 }
 
 void PipeWireManager::setChannelMute(ChannelId id, bool muted) {

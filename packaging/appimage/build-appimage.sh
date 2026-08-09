@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 #
-# Builds LinuxSonar as a self-contained AppImage.
+# Builds Sonero as a self-contained AppImage.
 #
 #   ./packaging/appimage/build-appimage.sh [output_dir]
 #
 # What it does:
 #   1. downloads linuxdeploy + its Qt plugin + appimagetool (cached in .tools/)
-#   2. builds LinuxSonar in Release and installs it into an AppDir
+#   2. builds Sonero in Release and installs it into an AppDir
 #   3. lets linuxdeploy bundle Qt and the remaining dependencies
 #   4. drops libpipewire from the bundle on purpose (see below)
-#   5. packs the AppDir into LinuxSonar-<version>-x86_64.AppImage
+#   5. packs the AppDir into Sonero-<version>-x86_64.AppImage
 #
 # Why libpipewire is NOT bundled: the client library loads SPA plugins from the
 # host (/usr/lib/.../spa-0.2). Shipping our own copy risks pairing it with the
-# host's mismatched plugins. LinuxSonar requires a running PipeWire session
+# host's mismatched plugins. Sonero requires a running PipeWire session
 # anyway, so the host is guaranteed to provide a matching library.
 #
-# Env overrides: LINUXDEPLOY_URL, LINUXDEPLOY_QT_URL, APPIMAGETOOL_URL,
-#                UPDATE_INFO (embeds update metadata for self-updating builds)
+# Env overrides: LINUXDEPLOY_URL, LINUXDEPLOY_QT_URL, APPIMAGETOOL_URL
 
 set -euo pipefail
 
@@ -61,7 +60,7 @@ command -v cmake >/dev/null || die "cmake is required"
 VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9.]\+\).*/\1/p' \
     "${REPO_ROOT}/CMakeLists.txt" | head -1)"
 [[ -n "${VERSION}" ]] || die "could not read VERSION from CMakeLists.txt"
-log "LinuxSonar ${VERSION}"
+log "Sonero ${VERSION}"
 
 # --- 1. tools ----------------------------------------------------------------
 mkdir -p "${TOOLS_DIR}"
@@ -95,9 +94,9 @@ log "bundling Qt and dependencies"
 "${TOOLS_DIR}/linuxdeploy" \
     --appdir "${APPDIR}" \
     --plugin qt \
-    --desktop-file "${APPDIR}/usr/share/applications/LinuxSonar.desktop" \
-    --icon-file "${REPO_ROOT}/packaging/icons/linuxsonar-256.png" \
-    --icon-filename LinuxSonar
+    --desktop-file "${APPDIR}/usr/share/applications/Sonero.desktop" \
+    --icon-file "${REPO_ROOT}/packaging/icons/sonero-256.png" \
+    --icon-filename Sonero
 
 # --- 3b. Wayland platform support -------------------------------------------
 # linuxdeploy-plugin-qt only ships the xcb platform plugin, which forces the app
@@ -162,17 +161,10 @@ fi
 
 # --- 5. pack -----------------------------------------------------------------
 mkdir -p "${OUTPUT_DIR}"
-readonly OUTPUT="${OUTPUT_DIR}/LinuxSonar-${VERSION}-x86_64.AppImage"
-
-appimagetool_args=("${APPDIR}" "${OUTPUT}")
-if [[ -n "${UPDATE_INFO:-}" ]]; then
-    # Enables `--appimage-update`-style delta updates for published releases.
-    appimagetool_args=(-u "${UPDATE_INFO}" "${APPDIR}" "${OUTPUT}")
-    log "embedding update info: ${UPDATE_INFO}"
-fi
+readonly OUTPUT="${OUTPUT_DIR}/Sonero-${VERSION}-x86_64.AppImage"
 
 log "packing AppImage"
-ARCH=x86_64 "${TOOLS_DIR}/appimagetool" "${appimagetool_args[@]}"
+ARCH=x86_64 "${TOOLS_DIR}/appimagetool" "${APPDIR}" "${OUTPUT}"
 
 chmod +x "${OUTPUT}"
 log "done: ${OUTPUT}"

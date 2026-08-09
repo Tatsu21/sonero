@@ -263,7 +263,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     if (!probe.accessible) {
         auto* hint = new QLabel(QStringLiteral(
             "No permission to talk to the base station. Install the udev rule:\n"
-            "  sudo cp packaging/udev/70-linuxsonar-steelseries.rules /etc/udev/rules.d/\n"
+            "  sudo cp packaging/udev/70-sonero-steelseries.rules /etc/udev/rules.d/\n"
             "  sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw"));
         hint->setObjectName(QStringLiteral("Hint"));
         hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -271,8 +271,9 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     }
     body->addSpacing(6);
 
+    // The base station reports the headset's battery only; the spare battery in
+    // the dock is not part of its status report, so it is not shown here.
     batteryRow(body, QStringLiteral("Headset battery"), headsetBar_, headsetPct_);
-    batteryRow(body, QStringLiteral("Spare battery (dock)"), spareBar_, sparePct_);
 
     if (std::getenv("SONAR_HID_DEBUG") != nullptr) {  // dev-only raw report line
         rawLabel_ = new QLabel;
@@ -805,15 +806,28 @@ void DevicesPage::refresh() {
         statusLabel_->setStyleSheet(QStringLiteral("color:#ff5c7a; font-weight:800;"));
         return;
     }
-    statusLabel_->setText(QStringLiteral("● Connected"));
-    statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
+    // The dock stays reachable even when the headset itself is powered off, so
+    // report the headset's link state rather than just "connected".
+    switch (s.state) {
+        case hid::HeadsetState::Offline:
+            statusLabel_->setText(QStringLiteral("● Headset off"));
+            statusLabel_->setStyleSheet(QStringLiteral("color:#facc15; font-weight:800;"));
+            break;
+        case hid::HeadsetState::Charging:
+            statusLabel_->setText(QStringLiteral("● Charging"));
+            statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
+            break;
+        default:
+            statusLabel_->setText(QStringLiteral("● Connected"));
+            statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
+            break;
+    }
 
     const auto apply = [](QProgressBar* bar, QLabel* pct, int value) {
         bar->setValue(value < 0 ? 0 : value);
         pct->setText(value < 0 ? QStringLiteral("—") : QStringLiteral("%1%").arg(value));
     };
     apply(headsetBar_, headsetPct_, s.headsetPercent);
-    apply(spareBar_, sparePct_, s.sparePercent);
 
     // Low-battery notifications, edge-triggered with hysteresis (warn ≤20%, rearm >25%).
     const auto lowBattery = [this](int pct, bool& warned, const QString& what) {
@@ -829,7 +843,6 @@ void DevicesPage::refresh() {
         }
     };
     lowBattery(s.headsetPercent, headsetLowWarned_, QStringLiteral("Headset"));
-    lowBattery(s.sparePercent, dockLowWarned_, QStringLiteral("Base station"));
 
     if (rawLabel_ != nullptr) {
         QString raw = QStringLiteral("raw: ");

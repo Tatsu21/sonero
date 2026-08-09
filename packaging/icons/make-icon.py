@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Render the LinuxSonar application icon.
+"""Render the Sonero icons.
 
 Writes square PNGs (no third-party deps: the PNG is encoded by hand with zlib).
-The artwork is a dark rounded tile with three mixer faders in the app's accent
-colours — readable down to 32x32, which is what desktops use in tray/task lists.
+
+Two variants, because a launcher icon and a panel icon have different jobs:
+
+  sonero-<N>.png       the app icon — a dark rounded tile with three mixer
+                           faders, shown at 32px and up in menus and docks.
+  sonero-tray-<N>.png  the system-tray icon for Cinnamon, KDE, XFCE. Drawn
+                           at 16-48px on a panel whose colour we cannot know, so
+                           it has no background tile and uses thicker strokes in
+                           mid-tones that stay legible on light *and* dark panels.
 
 Usage:  python3 make-icon.py [output_dir]
 """
@@ -19,6 +26,10 @@ SS = 4  # supersampling factor, downsampled at the end for anti-aliasing
 BG_TOP = (0x1E, 0x21, 0x30)
 BG_BOTTOM = (0x11, 0x12, 0x19)
 TRACK = (0x2C, 0x31, 0x48)
+# Mid-tone track for the tray icon: dark enough to read on a light panel, light
+# enough to read on a dark one.
+TRAY_TRACK = (0x7C, 0x83, 0x96)
+
 FADERS = [  # (x_centre_ratio, knob_y_ratio, colour)
     (0.285, 0.62, (0x7A, 0xA2, 0xF7)),
     (0.500, 0.38, (0x9E, 0xCE, 0x6A)),
@@ -36,44 +47,55 @@ def rounded_rect_alpha(x, y, w, h, r):
     return 1.0 if dx * dx + dy * dy <= r * r else 0.0
 
 
-def blend(dst, src, alpha):
-    return tuple(int(round(d + (s - d) * alpha)) for d, s in zip(dst, src))
-
-
-def render(size):
+def render(size, tray=False):
+    """Render one icon, returning raw PNG scanlines (RGBA, filter byte per row)."""
     n = size * SS
-    # Geometry in supersampled space.
-    radius = n * 0.22
-    track_w = n * 0.055
-    track_top, track_bottom = n * 0.235, n * 0.765
-    knob_r = n * 0.072
+
+    if tray:
+        # No tile: thicker tracks and bigger knobs so the shape survives at 16px.
+        radius = 0.0
+        track_w = n * 0.085
+        track_top, track_bottom = n * 0.14, n * 0.86
+        knob_r = n * 0.105
+        track_colour = TRAY_TRACK
+    else:
+        radius = n * 0.22
+        track_w = n * 0.055
+        track_top, track_bottom = n * 0.235, n * 0.765
+        knob_r = n * 0.072
+        track_colour = TRACK
 
     rows = []
     for py in range(n):
         row = []
         for px in range(n):
             x, y = px + 0.5, py + 0.5
-            a = rounded_rect_alpha(x, y, n, n, radius)
-            if a <= 0.0:
-                row.append((0, 0, 0, 0))
-                continue
-            t = y / n
-            colour = tuple(
-                int(round(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * t)) for i in range(3)
-            )
+
+            if tray:
+                colour = None  # transparent until something is drawn
+            else:
+                if rounded_rect_alpha(x, y, n, n, radius) <= 0.0:
+                    row.append((0, 0, 0, 0))
+                    continue
+                t = y / n
+                colour = tuple(
+                    int(round(BG_TOP[i] + (BG_BOTTOM[i] - BG_TOP[i]) * t)) for i in range(3)
+                )
+
             for fx, fy, accent in FADERS:
                 cx = n * fx
                 # Fader track (a vertical capsule).
                 if abs(x - cx) <= track_w / 2 and track_top <= y <= track_bottom:
-                    colour = TRACK
+                    colour = track_colour
                 else:
                     for end_y in (track_top, track_bottom):
                         if math.hypot(x - cx, y - end_y) <= track_w / 2:
-                            colour = TRACK
+                            colour = track_colour
                 # Knob.
                 if math.hypot(x - cx, y - n * fy) <= knob_r:
                     colour = accent
-            row.append(colour + (255,))
+
+            row.append((0, 0, 0, 0) if colour is None else colour + (255,))
         rows.append(row)
 
     # Box-downsample to the requested size.
@@ -98,8 +120,8 @@ def render(size):
     return b"".join(out)
 
 
-def write_png(path, size):
-    raw = render(size)
+def write_png(path, size, tray=False):
+    raw = render(size, tray)
 
     def chunk(tag, data):
         c = struct.pack(">I", len(data)) + tag + data
@@ -111,16 +133,21 @@ def write_png(path, size):
     png += chunk(b"IEND", b"")
     with open(path, "wb") as fh:
         fh.write(png)
-    print(f"wrote {path} ({size}x{size}, {len(png)} bytes)")
+    print(f"wrote {os.path.basename(path)} ({size}x{size}, {len(png)} bytes)")
 
 
 def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
     os.makedirs(out_dir, exist_ok=True)
+
     for size in (256, 128, 64, 48, 32):
-        write_png(os.path.join(out_dir, f"linuxsonar-{size}.png"), size)
-    # The canonical icon the desktop entry and AppImage refer to.
-    write_png(os.path.join(out_dir, "linuxsonar.png"), 256)
+        write_png(os.path.join(out_dir, f"sonero-{size}.png"), size)
+    # The canonical icon the desktop entry refers to.
+    write_png(os.path.join(out_dir, "sonero.png"), 256)
+
+    # Panel sizes actually used by trays: 16 and 22-24 are the common ones.
+    for size in (16, 22, 24, 32, 48):
+        write_png(os.path.join(out_dir, f"sonero-tray-{size}.png"), size, tray=True)
 
 
 if __name__ == "__main__":

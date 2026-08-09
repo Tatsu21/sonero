@@ -10,7 +10,7 @@
 namespace sonar::autostart {
 
 namespace {
-constexpr char kEntryName[] = "LinuxSonar.desktop";
+constexpr char kEntryName[] = "Sonero.desktop";
 
 QString autostartDir() {
     return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) +
@@ -52,10 +52,10 @@ bool setEnabled(bool on) {
         QStringLiteral(
             "[Desktop Entry]\n"
             "Type=Application\n"
-            "Name=LinuxSonar\n"
+            "Name=Sonero\n"
             "Comment=Audio mixer and router\n"
             "Exec=\"%1\" --background\n"
-            "Icon=LinuxSonar\n"
+            "Icon=Sonero\n"
             "Terminal=false\n"
             "Categories=AudioVideo;Audio;Mixer;\n"
             "X-GNOME-Autostart-enabled=true\n")
