@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <format>
 #include <set>
 
 #include <pipewire/pipewire.h>
@@ -20,6 +19,7 @@
 #include <spa/pod/iter.h>
 #include <spa/pod/parser.h>
 
+#include "core/Format.h"
 #include "core/Log.h"
 #include "dsp/Equalizer.h"
 
@@ -85,16 +85,16 @@ std::string filterChainArgs(const std::string& node, const std::string& desc,
     std::string nodes;
     std::string links;
     for (std::size_t i = 0; i < freqs.size(); ++i) {
-        nodes += std::format(
+        nodes += fmt::format(
             R"({{ type = builtin name = "{}_eq{}" label = bq_peaking )"
             R"(control = {{ "Freq" = {:.4f} "Q" = {:.4f} "Gain" = {:.4f} }} }} )",
             node, i, freqs[i], q, gains[i]);
         if (i + 1 < freqs.size()) {
-            links += std::format(R"({{ output = "{}_eq{}:Out" input = "{}_eq{}:In" }} )",
+            links += fmt::format(R"({{ output = "{}_eq{}:Out" input = "{}_eq{}:In" }} )",
                                  node, i, node, i + 1);
         }
     }
-    return std::format(
+    return fmt::format(
         R"({{ node.description = "{0}" )"
         R"(filter.graph = {{ nodes = [ {1} ] links = [ {2} ] }} )"
         R"(capture.props = {{ node.name = "{3}" media.class = Audio/Sink )"
@@ -114,12 +114,12 @@ std::string filterChainSourceArgs(const std::string& node, const std::string& de
     std::string nodes;
     std::string links;
     for (std::size_t i = 0; i < freqs.size(); ++i) {
-        nodes += std::format(
+        nodes += fmt::format(
             R"({{ type = builtin name = "{}_eq{}" label = bq_peaking )"
             R"(control = {{ "Freq" = {:.4f} "Q" = {:.4f} "Gain" = {:.4f} }} }} )",
             node, i, freqs[i], q, gains[i]);
         if (i + 1 < freqs.size()) {
-            links += std::format(R"({{ output = "{}_eq{}:Out" input = "{}_eq{}:In" }} )",
+            links += fmt::format(R"({{ output = "{}_eq{}:Out" input = "{}_eq{}:In" }} )",
                                  node, i, node, i + 1);
         }
     }
@@ -128,8 +128,8 @@ std::string filterChainSourceArgs(const std::string& node, const std::string& de
     // into HFP (mono headset mode), collapsing A2DP music quality.
     const std::string target =
         captureTarget.empty() ? std::string("node.autoconnect = false ")
-                              : std::format(R"(target.object = "{}" )", captureTarget);
-    return std::format(
+                              : fmt::format(R"(target.object = "{}" )", captureTarget);
+    return fmt::format(
         R"({{ node.description = "{0}" )"
         R"(filter.graph = {{ nodes = [ {1} ] links = [ {2} ] }} )"
         R"(capture.props = {{ node.name = "{3}.input" node.passive = true {4})"

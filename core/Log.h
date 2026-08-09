@@ -1,13 +1,15 @@
 #pragma once
 
-#include <format>
 #include <string_view>
 #include <utility>
+
+#include "core/Format.h"
 
 // Thin logging facade so the rest of the codebase never depends directly on a
 // concrete logging library. When spdlog is available the facade forwards to it;
 // otherwise it falls back to a small stderr/stdout writer. Message formatting
-// always uses std::format (C++20), keeping call sites identical either way.
+// uses the project's own brace formatter (see core/Format.h), so the code stays
+// buildable on compilers whose libstdc++ predates std::format.
 namespace sonar::log {
 
 enum class Level { Trace, Debug, Info, Warn, Error, Off };
@@ -20,28 +22,28 @@ void setLevel(Level level);
 void write(Level level, std::string_view message);
 
 template <class... Args>
-void trace(std::format_string<Args...> fmt, Args&&... args) {
-    write(Level::Trace, std::format(fmt, std::forward<Args>(args)...));
+void trace(std::string_view fmt, Args&&... args) {
+    write(Level::Trace, sonar::fmt::format(fmt, std::forward<Args>(args)...));
 }
 
 template <class... Args>
-void debug(std::format_string<Args...> fmt, Args&&... args) {
-    write(Level::Debug, std::format(fmt, std::forward<Args>(args)...));
+void debug(std::string_view fmt, Args&&... args) {
+    write(Level::Debug, sonar::fmt::format(fmt, std::forward<Args>(args)...));
 }
 
 template <class... Args>
-void info(std::format_string<Args...> fmt, Args&&... args) {
-    write(Level::Info, std::format(fmt, std::forward<Args>(args)...));
+void info(std::string_view fmt, Args&&... args) {
+    write(Level::Info, sonar::fmt::format(fmt, std::forward<Args>(args)...));
 }
 
 template <class... Args>
-void warn(std::format_string<Args...> fmt, Args&&... args) {
-    write(Level::Warn, std::format(fmt, std::forward<Args>(args)...));
+void warn(std::string_view fmt, Args&&... args) {
+    write(Level::Warn, sonar::fmt::format(fmt, std::forward<Args>(args)...));
 }
 
 template <class... Args>
-void error(std::format_string<Args...> fmt, Args&&... args) {
-    write(Level::Error, std::format(fmt, std::forward<Args>(args)...));
+void error(std::string_view fmt, Args&&... args) {
+    write(Level::Error, sonar::fmt::format(fmt, std::forward<Args>(args)...));
 }
 
 }  // namespace sonar::log

@@ -46,6 +46,8 @@ endif()
 
 # --- Core library (Qt-free): audio backend + cross-cutting utilities ---------
 add_library(sonero_core STATIC
+    core/Format.h
+    core/Format.cpp
     core/Log.h
     core/Log.cpp
     audio/IAudioBackend.h

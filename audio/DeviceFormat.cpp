@@ -4,8 +4,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <format>
 
+#include "core/Format.h"
 #include "core/Log.h"
 
 namespace sonar::audio {
@@ -65,7 +65,7 @@ std::string OutputFormatManager::configPath() const {
 }
 
 std::string OutputFormatManager::renderConfig(const OutputFormat& fmt) const {
-    return std::format(
+    return fmt::format(
         "# Managed by Sonero — output format for the SteelSeries base station.\n"
         "# Pins the ALSA open format so the device emits at the chosen rate/bit depth.\n"
         "# Edits here are overwritten when you change the format in the app.\n"

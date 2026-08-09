@@ -43,3 +43,8 @@ add_test(NAME EqualizerTest COMMAND EqualizerTest)
 add_executable(AutoGainTest AutoGainTest.cpp)
 target_link_libraries(AutoGainTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME AutoGainTest COMMAND AutoGainTest)
+
+# The brace formatter that stands in for std::format on older toolchains.
+add_executable(FormatTest FormatTest.cpp)
+target_link_libraries(FormatTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME FormatTest COMMAND FormatTest)
