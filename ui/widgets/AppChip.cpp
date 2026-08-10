@@ -1,5 +1,7 @@
 #include "ui/widgets/AppChip.h"
 
+#include "ui/widgets/ChannelStrip.h"
+
 #include <QApplication>
 #include <QByteArray>
 #include <QDrag>
@@ -26,6 +28,8 @@ AppChip::AppChip(std::uint32_t appId, const QString& name,
                  std::optional<audio::ChannelId> channel, QWidget* parent)
     : QFrame(parent), appId_(appId) {
     setObjectName(QStringLiteral("AppChip"));
+    // A chip must never be squeezed thinner than its own text.
+    setMinimumHeight(26);
     setCursor(Qt::OpenHandCursor);
     setToolTip(QStringLiteral("Drag onto a channel to route it"));
 
@@ -43,9 +47,16 @@ AppChip::AppChip(std::uint32_t appId, const QString& name,
     layout->addWidget(nameLabel);
 
     if (channel) {
-        auto* badge = new QLabel(QStringLiteral("→ %1").arg(channelText(*channel)), this);
-        badge->setObjectName(QStringLiteral("ChipBadge"));
-        layout->addWidget(badge);
+        // Tint the chip with its channel's colour, so a glance across the mixer
+        // shows where everything went. The chip already sits inside that channel's
+        // column, which is why the old "-> Channel" badge is gone.
+        const QString accent = ChannelStrip::accentFor(*channel);
+        setStyleSheet(QStringLiteral("#AppChip { background:%1; border-radius:8px; }"
+                                     " #ChipName { color:#12131b; font-weight:700; }")
+                          .arg(accent));
+        dot->setStyleSheet(QStringLiteral("color:#12131b; font-size:12px;"));
+        setToolTip(QStringLiteral("%1 — on %2. Drag it onto another channel to move it.")
+                       .arg(name, channelText(*channel)));
     }
 }
 

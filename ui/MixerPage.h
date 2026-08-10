@@ -80,6 +80,9 @@ private:
     std::unordered_map<QString, int> savedAppChannel_;
     std::set<std::uint32_t> routedAppIds_;
     FlowLayout* appsLayout_ = nullptr;
+    // The unrouted pool, hidden entirely when every stream already has a channel
+    // — otherwise it costs the strips the height their app chips need.
+    QWidget* appsSection_ = nullptr;
     QTimer* timer_ = nullptr;
     bool simulate_ = true;
     std::uint64_t appsRevision_ = ~0ULL;     // force initial rebuild

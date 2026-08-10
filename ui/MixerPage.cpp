@@ -33,6 +33,9 @@ using audio::ChannelLevel;
 namespace {
 constexpr int kRefreshIntervalMs = 40;  // ~25 fps meter updates
 
+// The channel that acts as the master fader for all the others.
+constexpr ChannelId kMasterChannel = ChannelId::System;
+
 QString toQString(std::string_view sv) {
     return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size()));
 }
@@ -119,7 +122,13 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         connect(strip, &ChannelStrip::volumeChanged, this, [this](ChannelId ch, float v) {
             mixer_.setVolume(ch, v);
             if (controller_ != nullptr) {
-                controller_->setChannelVolume(ch, v);
+                // Moving the master rescales every channel, so re-push them all.
+                if (ch == kMasterChannel) {
+                    pushChannelVolumes();
+                } else {
+                    controller_->setChannelVolume(
+                        ch, v * mixer_.state(kMasterChannel).volume);
+                }
             }
             saveMixerState();
         });
@@ -190,7 +199,7 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         stripRow->addWidget(strip);
     }
     stripRow->addStretch(1);
-    root->addLayout(stripRow);
+    root->addLayout(stripRow, 1);  // the strips get the room, not the pool below
 
     // Push the model's initial state onto the real channel sinks. Some sinks may
     // not be bound yet, and the session manager applies its own default volume
@@ -204,21 +213,27 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
     }
 
     // --- Applications panel --------------------------------------------------
-    auto* separator = new QFrame(this);
+    appsSection_ = new QWidget(this);
+    auto* sectionCol = new QVBoxLayout(appsSection_);
+    sectionCol->setContentsMargins(0, 0, 0, 0);
+    sectionCol->setSpacing(8);
+    root->addWidget(appsSection_);
+
+    auto* separator = new QFrame(appsSection_);
     separator->setObjectName(QStringLiteral("Sep"));
     separator->setFrameShape(QFrame::NoFrame);
     separator->setFixedHeight(1);
-    root->addWidget(separator);
+    sectionCol->addWidget(separator);
 
-    auto* appsTitle = new QLabel(QStringLiteral("Applications"), this);
+    auto* appsTitle = new QLabel(QStringLiteral("Unrouted applications"), appsSection_);
     appsTitle->setObjectName(QStringLiteral("SectionTitle"));
-    root->addWidget(appsTitle);
+    sectionCol->addWidget(appsTitle);
 
     if (router_ != nullptr) {
         auto* dragHint = new QLabel(
             QStringLiteral("Drag an app onto a channel above to route it."), this);
         dragHint->setObjectName(QStringLiteral("Hint"));
-        root->addWidget(dragHint);
+        sectionCol->addWidget(dragHint);
 
         auto* scroll = new QScrollArea(this);
         scroll->setWidgetResizable(true);
@@ -228,13 +243,14 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         auto* host = new QWidget;
         appsLayout_ = new FlowLayout(host, 0, 10, 10);
         scroll->setWidget(host);
-        root->addWidget(scroll, 1);
+        scroll->setMaximumHeight(110);
+        sectionCol->addWidget(scroll);
     } else {
         auto* hint = new QLabel(
             QStringLiteral("Routing requires a running PipeWire server (unavailable)."),
             this);
         hint->setObjectName(QStringLiteral("Hint"));
-        root->addWidget(hint);
+        sectionCol->addWidget(hint);
         root->addStretch(1);
     }
 
@@ -282,9 +298,14 @@ void MixerPage::pushChannelVolumes() {
     if (controller_ == nullptr) {
         return;
     }
+    // System is the master: its fader scales every other channel, so pulling it
+    // down brings the whole mix with it. Applied as a multiplier here rather than
+    // in the model, so each channel's own fader keeps showing what the user set.
+    const float master = mixer_.state(kMasterChannel).volume;
     for (const ChannelId id : mixer_.channels()) {
         if (id == ChannelId::Microphone) continue;
-        controller_->setChannelVolume(id, mixer_.state(id).volume);
+        const float own = mixer_.state(id).volume;
+        controller_->setChannelVolume(id, id == kMasterChannel ? own : own * master);
     }
 }
 
@@ -292,10 +313,12 @@ void MixerPage::pushMuteStates() {
     if (controller_ == nullptr) {
         return;
     }
-    // Mute + solo together decide audibility; push the effective mute per channel.
+    // Mute + solo together decide audibility; the master mute silences everything
+    // on top of that.
+    const bool masterSilent = !mixer_.isAudible(kMasterChannel);
     for (const ChannelId id : mixer_.channels()) {
         if (id == ChannelId::Microphone) continue;
-        controller_->setChannelMute(id, !mixer_.isAudible(id));
+        controller_->setChannelMute(id, !mixer_.isAudible(id) || masterSilent);
     }
 }
 
@@ -482,34 +505,38 @@ void MixerPage::refresh() {
 }
 
 void MixerPage::rebuildApplications() {
-    if (appsLayout_ == nullptr) {
-        return;
-    }
-    clearLayout(appsLayout_);
-
     const std::vector<audio::AppStream> apps = router_->applications();
-    std::unordered_map<int, QStringList> perChannel;
 
-    if (apps.empty()) {
-        auto* empty = new QLabel(QStringLiteral("No applications are playing audio."));
-        empty->setObjectName(QStringLiteral("Hint"));
-        appsLayout_->addWidget(empty);
+    // Each chip now lives inside the channel it is routed to, so a column shows
+    // what it is actually carrying. Only genuinely unrouted streams stay in the
+    // pool below.
+    for (auto* strip : strips_) {
+        strip->clearApps();
+    }
+    if (appsLayout_ != nullptr) {
+        clearLayout(appsLayout_);
     }
 
+    int unrouted = 0;
     for (const audio::AppStream& app : apps) {
-        appsLayout_->addWidget(
-            new AppChip(app.id, QString::fromStdString(app.name), app.channel));
-
+        auto* chip = new AppChip(app.id, QString::fromStdString(app.name), app.channel);
         if (app.channel) {
-            perChannel[static_cast<int>(*app.channel)]
-                << QString::fromStdString(app.name);
+            const auto it = stripByChannel_.find(static_cast<int>(*app.channel));
+            if (it != stripByChannel_.end()) {
+                it->second->addApp(chip);
+                continue;
+            }
+        }
+        if (appsLayout_ != nullptr) {
+            appsLayout_->addWidget(chip);
+            ++unrouted;
+        } else {
+            chip->deleteLater();
         }
     }
 
-    for (auto* strip : strips_) {
-        const int key = static_cast<int>(strip->channelId());
-        const auto it = perChannel.find(key);
-        strip->setAssignedApps(it != perChannel.end() ? it->second : QStringList{});
+    if (appsSection_ != nullptr) {
+        appsSection_->setVisible(unrouted > 0);
     }
 }
 

@@ -35,9 +35,34 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     setAcceptDrops(true);                         // app chips can be dropped here
     setFixedWidth(kStripWidth);
 
-    auto* title = new QLabel(name, this);
+    const QString accent = accentFor(id);
+
+    auto* glyph = new QLabel(glyphFor(id), this);
+    if (id == ChannelId::System) {
+        setToolTip(QStringLiteral(
+            "Master: this fader scales every other channel, and muting it "
+            "silences the whole mix."));
+    }
+    glyph->setStyleSheet(QStringLiteral("font-size:17px;"));
+    // System doubles as the master fader, so it is labelled for what it does
+    // rather than for the streams it happens to carry.
+    const bool isMaster = id == ChannelId::System;
+    auto* title = new QLabel(isMaster ? QStringLiteral("MASTER") : name.toUpper(), this);
     title->setObjectName(QStringLiteral("ChannelName"));
-    title->setAlignment(Qt::AlignHCenter);
+    title->setStyleSheet(
+        QStringLiteral("color:%1; font-weight:800; letter-spacing:1px;").arg(accent));
+    auto* titleRow = new QHBoxLayout;
+    titleRow->setSpacing(7);
+    titleRow->addStretch(1);
+    titleRow->addWidget(glyph);
+    titleRow->addWidget(title);
+    titleRow->addStretch(1);
+
+    // A hairline in the channel's colour, as a divider under the header.
+    auto* accentRule = new QFrame(this);
+    accentRule->setFixedHeight(isMaster ? 3 : 2);
+    accentRule->setStyleSheet(
+        QStringLiteral("background:%1; border-radius:1px;").arg(accent));
 
     meter_ = new VuMeter(this);
 
@@ -110,17 +135,30 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     output_->addItem(QStringLiteral("Default"), QString());
     output_->setMaximumWidth(kStripWidth - 24);
 
-    appsLabel_ = new QLabel(this);
-    appsLabel_->setObjectName(QStringLiteral("AppsLabel"));
-    appsLabel_->setWordWrap(true);
-    appsLabel_->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
-    appsLabel_->setMinimumHeight(30);
+    auto* appsCaption = new QLabel(QStringLiteral("APPS"), this);
+    appsCaption->setObjectName(QStringLiteral("BalanceCaption"));
+
+    auto* appsHost = new QFrame(this);
+    appsHost->setObjectName(QStringLiteral("AppsHost"));
+    appsHost->setStyleSheet(
+        QStringLiteral("#AppsHost { background:#0f1017; border-radius:8px; }"));
+    appsHost->setMinimumHeight(52);
+    appsBody_ = new QVBoxLayout(appsHost);
+    appsBody_->setContentsMargins(7, 7, 7, 7);
+    appsBody_->setSpacing(5);
+    appsBody_->setAlignment(Qt::AlignTop);
+
+    appsEmpty_ = new QLabel(QStringLiteral("drop an app here"), this);
+    appsEmpty_->setObjectName(QStringLiteral("Hint"));
+    appsEmpty_->setAlignment(Qt::AlignHCenter);
+    appsBody_->addWidget(appsEmpty_);
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 14, 12, 14);
-    layout->setSpacing(9);
-    layout->addWidget(title);
-    layout->addLayout(faderRow, 1);
+    layout->setContentsMargins(11, 11, 11, 11);
+    layout->setSpacing(6);
+    layout->addLayout(titleRow);
+    layout->addWidget(accentRule);
+    layout->addLayout(faderRow, 2);   // meter + fader keep the bulk of the height
     layout->addWidget(volumeLabel_);
     layout->addWidget(balanceCaption);
     layout->addWidget(balance_);
@@ -134,7 +172,8 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     layout->addLayout(buttonRow);
     layout->addWidget(outputCaption);
     layout->addWidget(output_);
-    layout->addWidget(appsLabel_);
+    layout->addWidget(appsCaption);
+    layout->addWidget(appsHost, 1);  // shares what is left, so chips stay legible
 
     // Translate widget events into channel intent.
     connect(volume_, &QSlider::valueChanged, this, [this](int value) {
@@ -213,9 +252,50 @@ void ChannelStrip::setLevel(float left, float right) {
     meter_->setLevel(left, right);
 }
 
-void ChannelStrip::setAssignedApps(const QStringList& appNames) {
-    appsLabel_->setText(appNames.isEmpty() ? QStringLiteral("—")
-                                           : appNames.join(QStringLiteral("\n")));
+QString ChannelStrip::accentFor(ChannelId id) {
+    switch (id) {
+        case ChannelId::System:     return QStringLiteral("#7aa2f7");  // blue
+        case ChannelId::Game:       return QStringLiteral("#4ade80");  // green
+        case ChannelId::Chat:       return QStringLiteral("#f59e0b");  // amber
+        case ChannelId::Media:      return QStringLiteral("#f7768e");  // pink
+        case ChannelId::Browser:    return QStringLiteral("#22d3ee");  // cyan
+        case ChannelId::Microphone: return QStringLiteral("#facc15");  // yellow
+        case ChannelId::Aux:        return QStringLiteral("#a78bfa");  // violet
+    }
+    return QStringLiteral("#7aa2f7");
+}
+
+QString ChannelStrip::glyphFor(ChannelId id) {
+    switch (id) {
+        case ChannelId::System:     return QString::fromUtf8("\xF0\x9F\x8E\x9B");   // control knobs
+        case ChannelId::Game:       return QString::fromUtf8("\xF0\x9F\x8E\xAE");   // gamepad
+        case ChannelId::Chat:       return QString::fromUtf8("\xF0\x9F\x92\xAC");   // speech balloon
+        case ChannelId::Media:      return QString::fromUtf8("\xF0\x9F\x8E\xB5");   // note
+        case ChannelId::Browser:    return QString::fromUtf8("\xF0\x9F\x8C\x90");   // globe
+        case ChannelId::Microphone: return QString::fromUtf8("\xF0\x9F\x8E\xA4");   // microphone
+        case ChannelId::Aux:        return QString::fromUtf8("\xF0\x9F\x8E\x9A");   // fader
+    }
+    return QString::fromUtf8("\xF0\x9F\x8E\x9B");
+}
+
+void ChannelStrip::clearApps() {
+    while (appsBody_->count() > 0) {
+        QLayoutItem* item = appsBody_->takeAt(0);
+        if (QWidget* w = item->widget()) {
+            if (w == appsEmpty_) {
+                w->hide();          // reused, never destroyed
+            } else {
+                w->deleteLater();
+            }
+        }
+        delete item;
+    }
+}
+
+void ChannelStrip::addApp(QWidget* chip) {
+    appsEmpty_->hide();
+    chip->setParent(nullptr);
+    appsBody_->addWidget(chip);
 }
 
 void ChannelStrip::setDropActive(bool active) {

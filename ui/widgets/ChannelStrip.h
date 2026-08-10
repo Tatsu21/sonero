@@ -17,6 +17,7 @@ class QLabel;
 class QPushButton;
 class QCheckBox;
 class QSlider;
+class QVBoxLayout;
 
 namespace sonar::ui {
 
@@ -40,7 +41,14 @@ public:
     void showGainDb(float gainDb);
     void setAutoGain(bool on);
     void setLevel(float left, float right);
-    void setAssignedApps(const QStringList& appNames);
+    // Accent colour and glyph that identify the channel at a glance.
+    [[nodiscard]] static QString accentFor(sonar::audio::ChannelId id);
+    [[nodiscard]] static QString glyphFor(sonar::audio::ChannelId id);
+
+    // Application chips live inside the strip, so a channel shows what it is
+    // actually carrying. MixerPage owns the chips and hands them over here.
+    void clearApps();
+    void addApp(QWidget* chip);
 
     // Populate the output selector. Each entry is {display label, device
     // node.name}; the first is conventionally {"Default", ""}. `currentNodeName`
@@ -78,7 +86,8 @@ private:
     QPushButton* mute_ = nullptr;
     QPushButton* solo_ = nullptr;
     QLabel* volumeLabel_ = nullptr;
-    QLabel* appsLabel_ = nullptr;
+    QLabel* appsEmpty_ = nullptr;
+    QVBoxLayout* appsBody_ = nullptr;
     QComboBox* output_ = nullptr;
 };
 
