@@ -27,6 +27,7 @@ struct pw_core_info;
 struct pw_registry;
 struct pw_metadata;
 struct pw_impl_module;
+struct pw_proxy;
 struct pw_node;
 struct pw_node_info;
 struct pw_stream;
@@ -79,6 +80,8 @@ public:
 
     void setChannelBalance(ChannelId id, float balance) override;
     void setChannelGain(ChannelId id, float gain) override;
+    void setStreamLevel(ChannelId id, float level) override;
+    [[nodiscard]] float streamLevel(ChannelId id) const override;
     [[nodiscard]] float channelHeadroom(ChannelId id) const override;
     // --- IChannelController ---
     void setChannelVolume(ChannelId id, float volume) override;
@@ -163,6 +166,10 @@ private:
     pw_thread_loop* loop_ = nullptr;
     pw_context* context_ = nullptr;
     pw_core* core_ = nullptr;
+    pw_proxy* streamMix_ = nullptr;
+    // Per-channel send into the stream mix: node id (from the registry) and level.
+    std::unordered_map<int, std::uint32_t> streamSendNode_;
+    std::unordered_map<int, float> streamLevel_;  // the sink OBS captures (see createVirtualSinks)
     spa_hook coreListener_{};
 
     // Graph objects.

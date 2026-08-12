@@ -1,5 +1,6 @@
 #include "ui/EqualizerPage.h"
 
+#include <cmath>
 #include <cstdlib>
 
 #include <QButtonGroup>
@@ -14,10 +15,12 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSlider>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include "audio/IAudioDevices.h"
 #include "audio/IEqualizerController.h"
 #include "config/SettingsStore.h"
 #include "ui/EqPresetStore.h"
@@ -85,8 +88,9 @@ constexpr std::array<dsp::EqPreset, 24> kBuiltinPresets = {
 }  // namespace
 
 EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
-                             config::SettingsStore* settings, QWidget* parent)
-    : QWidget(parent), controller_(controller), settings_(settings) {
+                             config::SettingsStore* settings, audio::IAudioDevices* devices,
+                             QWidget* parent)
+    : QWidget(parent), controller_(controller), devices_(devices), settings_(settings) {
     for (auto& s : eq_) {
         dsp::resetBands(s, dsp::BandCount::Bands10);
         s.enabled = true;
@@ -96,10 +100,10 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     root->setContentsMargins(40, 34, 40, 34);
     root->setSpacing(18);
 
-    auto* title = new QLabel(QStringLiteral("Equalizer"), this);
+    auto* title = new QLabel(QStringLiteral("Channels"), this);
     title->setObjectName(QStringLiteral("PageTitle"));
     auto* subtitle =
-        new QLabel(QStringLiteral("Per-channel EQ — drag the curve to shape the sound"), this);
+        new QLabel(QStringLiteral("Per-channel trim, output and equalizer"), this);
     subtitle->setObjectName(QStringLiteral("PageSubtitle"));
     auto* head = new QVBoxLayout;
     head->setSpacing(4);
@@ -112,6 +116,50 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
         channelLabels << toQString(audio::channelName(id));
     }
     root->addWidget(makeSegmented(channelLabels, channelGroup_, this));
+
+    // --- Trim and output for the selected channel ---------------------------
+    gain_ = new QSlider(Qt::Horizontal, this);
+    gain_->setRange(-20, 6);
+    gain_->setFixedWidth(150);
+    gain_->setToolTip(QStringLiteral("Input trim in dB (0 dB = unchanged)"));
+    gainValue_ = new QLabel(QStringLiteral("0 dB"), this);
+    gainValue_->setObjectName(QStringLiteral("VolumeValue"));
+    gainValue_->setMinimumWidth(52);
+    autoGain_ = new QCheckBox(QStringLiteral("Auto"), this);
+    autoGain_->setToolTip(QStringLiteral(
+        "Watch the channel's level and trim it automatically: it listens for a few\n"
+        "seconds, settles on one gain and holds it."));
+
+    output_ = new QComboBox(this);
+    output_->setMinimumWidth(190);
+    output_->setToolTip(QStringLiteral("Which device this channel plays to"));
+
+    auto* routeRow = new QHBoxLayout;
+    routeRow->setSpacing(8);
+    routeRow->addWidget(caption(QStringLiteral("Trim"), this));
+    routeRow->addWidget(gain_);
+    routeRow->addWidget(gainValue_);
+    routeRow->addWidget(autoGain_);
+    routeRow->addSpacing(18);
+    routeRow->addWidget(caption(QStringLiteral("Output"), this));
+    routeRow->addWidget(output_, 1);
+    root->addLayout(routeRow);
+
+    connect(gain_, &QSlider::valueChanged, this, [this](int db) {
+        gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
+                                   : QStringLiteral("%1 dB").arg(db));
+        emit channelGainChanged(audio::kAllChannels[static_cast<std::size_t>(channel_)],
+                                static_cast<float>(db));
+    });
+    connect(autoGain_, &QCheckBox::toggled, this, [this](bool on) {
+        gain_->setEnabled(!on);  // the loop owns the value while it runs
+        emit channelAutoGainToggled(
+            audio::kAllChannels[static_cast<std::size_t>(channel_)], on);
+    });
+    connect(output_, &QComboBox::activated, this, [this](int) {
+        emit channelOutputChanged(audio::kAllChannels[static_cast<std::size_t>(channel_)],
+                                  output_->currentData().toString());
+    });
 
     // Controls: enabled | presets + save/import/export | band count.
     enabledCheck_ = new QCheckBox(QStringLiteral("EQ enabled"), this);
@@ -153,6 +201,7 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     connect(channelGroup_, &QButtonGroup::idClicked, this, [this](int id) {
         channel_ = id;
         loadChannel();
+        emit channelSelected(audio::kAllChannels[static_cast<std::size_t>(channel_)]);
     });
     connect(bandGroup_, &QButtonGroup::idClicked, this, [this](int id) {
         dsp::EqSettings& s = current();
@@ -262,7 +311,37 @@ void EqualizerPage::reflectControls(bool includeCombo) {
     curve_->setSettings(s);
 }
 
-void EqualizerPage::loadChannel() { reflectControls(true); }
+void EqualizerPage::loadChannel() {
+    reflectControls(true);
+    refreshOutputs();
+}
+
+void EqualizerPage::refreshOutputs() {
+    if (devices_ == nullptr || output_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker block(output_);
+    output_->clear();
+    output_->addItem(QStringLiteral("Default output"), QString());
+    for (const audio::AudioDevice& dev : devices_->outputDevices()) {
+        output_->addItem(QString::fromStdString(dev.description),
+                         QString::fromStdString(dev.name));
+    }
+}
+
+void EqualizerPage::showChannelGain(float gainDb, bool autoOn) {
+    if (gain_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker g(gain_);
+    const QSignalBlocker a(autoGain_);
+    const int db = static_cast<int>(std::lround(gainDb));
+    gain_->setValue(db);
+    gain_->setEnabled(!autoOn);
+    autoGain_->setChecked(autoOn);
+    gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
+                               : QStringLiteral("%1 dB").arg(db));
+}
 
 void EqualizerPage::onBandChanged(int index, float gainDb) {
     dsp::EqSettings& s = current();

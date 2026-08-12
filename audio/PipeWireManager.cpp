@@ -31,6 +31,9 @@ constexpr int kRoundtripTimeoutSeconds = 3;
 // count is sampled onto these frequencies.
 constexpr float kEqQ = 4.318f;  // 1/3-octave Q
 
+// Node name of the stream mix; its monitor is what OBS captures.
+constexpr const char* kStreamMixNode = "sonero_stream";
+
 // Function-local static avoids a static-init-order dependency on Equalizer.cpp.
 const std::vector<float>& dspFreqs() {
     static const std::vector<float> freqs = dsp::standardFrequencies(dsp::BandCount::Bands31);
@@ -136,6 +139,34 @@ std::string filterChainSourceArgs(const std::string& node, const std::string& de
         R"(playback.props = {{ node.name = "{3}" media.class = Audio/Source )"
         R"(priority.session = 100 audio.position = [ FL FR ] }} }})",
         desc, nodes, links, node, target);
+}
+
+// The stream mix is a sink whose monitor is what a capture application (OBS,
+// Discord) selects as its input. Everything sent there is heard by the stream but
+// not by the user — the whole point of a second mix.
+
+// Expose the stream mix as a real capture device, so it appears in a recorder's
+// input list next to the microphone rather than hiding as a sink monitor — which
+// is where OBS's "Audio Input Capture" looks.
+std::string streamSourceArgs(const std::string& mixNode, const std::string& sourceNode) {
+    return fmt::format(
+        R"({{ capture.props = {{ node.name = "{1}.capture" target.object = "{0}" )"
+        R"(stream.capture.sink = true node.passive = true audio.position = [ FL FR ] }} )"
+        R"(playback.props = {{ node.name = "{1}" media.class = Audio/Source )"
+        R"(node.description = "Sonero Stream" audio.position = [ FL FR ] }} }})",
+        mixNode, sourceNode);
+}
+
+// One send per channel: tap the channel's monitor and feed the stream mix, with a
+// level of its own. A loopback rather than a second filter-chain output, because
+// the send must be attenuated independently of what the user hears.
+std::string streamSendArgs(const std::string& channelNode, const std::string& mixNode) {
+    return fmt::format(
+        R"({{ capture.props = {{ node.name = "{0}.stream" target.object = "{0}" )"
+        R"(stream.capture.sink = true node.passive = true audio.position = [ FL FR ] }} )"
+        R"(playback.props = {{ node.name = "{0}.stream.out" target.object = "{1}" )"
+        R"(node.passive = true audio.position = [ FL FR ] }} }})",
+        channelNode, mixNode);
 }
 
 // Extract the sink name from a default metadata value like {"name":"foo"}.
@@ -287,6 +318,49 @@ void PipeWireManager::createVirtualSinks() {
             log::warn("PipeWire: failed to create virtual sink '{}'", node);
         }
     }
+    // The stream mix and its per-channel sends. "adapter" is a factory the daemon
+    // already provides, not a module we can load with arguments — creating the node
+    // through it is what `pw-cli create-node adapter` does.
+    pw_properties* mixProps = pw_properties_new(
+        "factory.name", "support.null-audio-sink",
+        PW_KEY_NODE_NAME, kStreamMixNode,
+        PW_KEY_NODE_DESCRIPTION, "Sonero Stream",
+        PW_KEY_MEDIA_CLASS, "Audio/Sink",
+        "audio.position", "[ FL, FR ]",
+        "monitor.channel-volumes", "true",
+        "object.linger", "false",
+        nullptr);
+    streamMix_ = static_cast<pw_proxy*>(pw_core_create_object(
+        core_, "adapter", PW_TYPE_INTERFACE_Node, PW_VERSION_NODE,
+        &mixProps->dict, 0));
+    pw_properties_free(mixProps);
+
+    if (streamMix_ != nullptr) {
+        // The capture-side face of the mix, which is what a recorder selects.
+        if (pw_impl_module* src = pw_context_load_module(
+                context_, "libpipewire-module-loopback",
+                streamSourceArgs(kStreamMixNode, "sonero_stream_source").c_str(), nullptr)) {
+            modules_.push_back(src);
+        } else {
+            log::warn("PipeWire: could not expose the stream mix as a source");
+        }
+
+        for (const ChannelId id : kAllChannels) {
+            if (id == ChannelId::Microphone) {
+                continue;  // the mic is already an input; it needs no send
+            }
+            const std::string args = streamSendArgs(nodeNameFor(id), kStreamMixNode);
+            if (pw_impl_module* send = pw_context_load_module(
+                    context_, "libpipewire-module-loopback", args.c_str(), nullptr)) {
+                modules_.push_back(send);
+            } else {
+                log::warn("PipeWire: no stream send for '{}'", nodeNameFor(id));
+            }
+        }
+    } else {
+        log::warn("PipeWire: could not create the stream mix");
+    }
+
     log::info("PipeWire: created {} virtual channel sinks", modules_.size());
 }
 
@@ -473,6 +547,16 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             }
             devicesRevision_.fetch_add(1, std::memory_order_relaxed);
             applyAllRoutesLocked();  // a (re)connected device may reclaim its channels
+        } else if (std::strcmp(mediaClass, "Stream/Input/Audio") == 0 &&
+                   startsWith(nodeName, "sonero_") && endsWith(nodeName, ".stream")) {
+            // The capture side of a channel's stream send. Remember its id so the
+            // send level can be set later; the level itself is applied by binding
+            // briefly, exactly as device volumes are.
+            const std::string base = nodeName.substr(0, nodeName.size() - 7);
+            if (const auto ch = channelForNodeName(base)) {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                streamSendNode_[static_cast<int>(*ch)] = id;
+            }
         } else if (std::strcmp(mediaClass, "Stream/Output/Audio") == 0) {
             if (startsWith(nodeName, "sonero_")) {
                 // Our channel output streams (sonero_<channel>.out): track them so
@@ -1217,6 +1301,28 @@ float PipeWireManager::channelHeadroom(ChannelId id) const {
     // reading the previous one.
     constexpr float kFilterHeadroom = 0.891f;
     return io_[channelIndex(id)].eqHeadroom * kFilterHeadroom;
+}
+
+void PipeWireManager::setStreamLevel(ChannelId id, float level) {
+    level = std::clamp(level, 0.0f, 1.0f);
+    std::uint32_t nodeId = 0;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        streamLevel_[static_cast<int>(id)] = level;
+        const auto it = streamSendNode_.find(static_cast<int>(id));
+        if (it != streamSendNode_.end()) {
+            nodeId = it->second;
+        }
+    }
+    if (nodeId != 0) {
+        setDeviceVolume(nodeId, level);  // same mechanism: bind, set, release
+    }
+}
+
+float PipeWireManager::streamLevel(ChannelId id) const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    const auto it = streamLevel_.find(static_cast<int>(id));
+    return it != streamLevel_.end() ? it->second : 1.0f;
 }
 
 void PipeWireManager::setChannelMute(ChannelId id, bool muted) {

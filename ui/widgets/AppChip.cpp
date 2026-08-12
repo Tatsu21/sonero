@@ -29,13 +29,14 @@ AppChip::AppChip(std::uint32_t appId, const QString& name,
     : QFrame(parent), appId_(appId) {
     setObjectName(QStringLiteral("AppChip"));
     // A chip must never be squeezed thinner than its own text.
+    // No height ceiling: the chip must fit its own text, or the name is clipped.
     setMinimumHeight(26);
     setCursor(Qt::OpenHandCursor);
     setToolTip(QStringLiteral("Drag onto a channel to route it"));
 
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(14, 8, 15, 8);
-    layout->setSpacing(9);
+    layout->setContentsMargins(10, 4, 11, 4);
+    layout->setSpacing(7);
 
     auto* dot = new QLabel(QStringLiteral("☰"), this);  // grip glyph
     dot->setObjectName(QStringLiteral("ChipDot"));

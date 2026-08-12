@@ -18,8 +18,10 @@ class SettingsStore;
 
 namespace sonar::ui {
 class Notifier;
+class MixerPage;
 }
 
+class QButtonGroup;
 class QListWidget;
 class QStackedWidget;
 class QSystemTrayIcon;
@@ -64,7 +66,8 @@ private:
     audio::IAudioDevices* audioDevices_ = nullptr;
     config::SettingsStore* settings_ = nullptr;  // owned via QObject parenting
     Notifier* notifier_ = nullptr;                // owned via QObject parenting
-    QListWidget* nav_ = nullptr;
+    MixerPage* mixerPage_ = nullptr;  // owns the per-channel trim / auto state
+    QButtonGroup* navGroup_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     QSystemTrayIcon* trayIcon_ = nullptr;         // owned via QObject parenting
     bool forceQuit_ = false;                       // set by the tray's Quit action

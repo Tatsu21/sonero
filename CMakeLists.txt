@@ -164,6 +164,10 @@ foreach(icon_size 16 22 24 32 48)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
 endforeach()
 
+# The GitHub mark shown in the footer.
+install(FILES packaging/icons/github.png
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
+
 # Two copies of the udev rule, for the two ways Sonero is delivered:
 #  - /lib/udev/rules.d is where a package's rules live, so installing the .deb
 #    grants SteelSeries HID access immediately (postinst reloads udev).

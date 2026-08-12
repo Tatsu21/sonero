@@ -45,6 +45,15 @@ public:
               sonar::audio::IAudioDevices* devices = nullptr,
               sonar::config::SettingsStore* settings = nullptr, QWidget* parent = nullptr);
 
+public:
+    // Called by the Channels page, which owns the trim / auto / output controls
+    // while the metering loop that drives auto-gain stays here.
+    void applyChannelGainDb(audio::ChannelId id, float gainDb);
+    void applyChannelAutoGain(audio::ChannelId id, bool on);
+    void applyChannelOutput(audio::ChannelId id, const QString& deviceNodeName);
+    [[nodiscard]] float channelGainDb(audio::ChannelId id) const;
+    [[nodiscard]] bool channelAutoGain(audio::ChannelId id) const;
+
 private:
     void refresh();
     void injectSimulatedLevels();
@@ -72,6 +81,9 @@ private:
     // Auto-gain: one control loop per channel, fed by the meters in refresh().
     std::unordered_map<int, bool> autoGainOn_;
     std::unordered_map<int, dsp::AutoGain> autoGain_;
+    // Second mix: how loud each channel is for a capture application.
+    std::unordered_map<int, float> streamLevel_;
+    bool streamMode_ = false;
 
     // Remembered app routing, keyed by application name — PipeWire hands out a
     // fresh node id every time an application starts, so the id is useless across

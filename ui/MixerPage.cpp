@@ -93,16 +93,29 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
     titleCol->addWidget(title);
     titleCol->addWidget(subtitle);
 
-    auto* simCheck = new QCheckBox(QStringLiteral("Simulate signal"), this);
-    simCheck->setChecked(simulate_);
-    simCheck->setToolTip(QStringLiteral(
-        "When off, VU meters show the real audio flowing on each channel. "
-        "Turn on only to preview meter behaviour without audio."));
+    // Stream mode reveals the second mix: a "to stream" fader per channel, feeding
+    // the Sonero Stream source a capture application (OBS, Discord) records. What
+    // you hear and what the stream hears become independent.
+    auto* streamCheck = new QCheckBox(QStringLiteral("Stream mode"), this);
+    streamCheck->setToolTip(QStringLiteral(
+        "Show a second fader per channel controlling how loud it is for the "
+        "stream.\nIn OBS, pick \"Monitor of Sonero Stream\" as the audio source."));
+    connect(streamCheck, &QCheckBox::toggled, this, [this](bool on) {
+        streamMode_ = on;
+        for (auto* strip : strips_) {
+            strip->setStreamMode(on);
+        }
+        if (settings_ != nullptr) {
+            QJsonObject g = settings_->section(QStringLiteral("general"));
+            g[QStringLiteral("streamMode")] = on;
+            settings_->putSection(QStringLiteral("general"), g);
+        }
+    });
 
     auto* header = new QHBoxLayout;
     header->addLayout(titleCol);
     header->addStretch(1);
-    header->addWidget(simCheck, 0, Qt::AlignTop);
+    header->addWidget(streamCheck, 0, Qt::AlignTop);
     root->addLayout(header);
 
     auto* stripRow = new QHBoxLayout;
@@ -115,9 +128,6 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         }
         auto* strip = new ChannelStrip(id, toQString(audio::channelName(id)), this);
         strip->setState(mixer_.state(id));
-        // Reflect the persisted trim / auto state that restoreMixerState() loaded.
-        strip->showGainDb(channelGainDb_[static_cast<int>(id)]);
-        strip->setAutoGain(autoGainOn_[static_cast<int>(id)]);
 
         connect(strip, &ChannelStrip::volumeChanged, this, [this](ChannelId ch, float v) {
             mixer_.setVolume(ch, v);
@@ -132,26 +142,21 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
             }
             saveMixerState();
         });
+        strip->setStreamLevel(streamLevel_.count(static_cast<int>(id)) != 0
+                                  ? streamLevel_[static_cast<int>(id)]
+                                  : 1.0f);
+        connect(strip, &ChannelStrip::streamLevelChanged, this,
+                [this](ChannelId ch, float level) {
+                    streamLevel_[static_cast<int>(ch)] = level;
+                    if (controller_ != nullptr) {
+                        controller_->setStreamLevel(ch, level);
+                    }
+                    saveMixerState();
+                });
         connect(strip, &ChannelStrip::balanceChanged, this, [this](ChannelId ch, float b) {
             mixer_.setBalance(ch, b);
             if (controller_ != nullptr) {
                 controller_->setChannelBalance(ch, b);
-            }
-            saveMixerState();
-        });
-        connect(strip, &ChannelStrip::gainChanged, this, [this](ChannelId ch, float gainDb) {
-            channelGainDb_[static_cast<int>(ch)] = gainDb;
-            if (controller_ != nullptr) {
-                controller_->setChannelGain(ch, std::pow(10.0f, gainDb / 20.0f));
-            }
-            saveMixerState();
-        });
-        connect(strip, &ChannelStrip::autoGainToggled, this, [this](ChannelId ch, bool on) {
-            autoGainOn_[static_cast<int>(ch)] = on;
-            if (on) {
-                // Start from whatever the user had dialled in, so enabling Auto
-                // does not jump the level.
-                autoGain_[static_cast<int>(ch)].reset(channelGainDb_[static_cast<int>(ch)]);
             }
             saveMixerState();
         });
@@ -165,13 +170,6 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
             pushMuteStates();
             saveMixerState();
         });
-        connect(strip, &ChannelStrip::outputChanged, this,
-                [this](ChannelId ch, const QString& deviceNodeName) {
-                    if (controller_ != nullptr) {
-                        controller_->setChannelOutput(ch, deviceNodeName.toStdString());
-                    }
-                    saveMixerState();
-                });
         connect(strip, &ChannelStrip::appDropped, this,
                 [this](ChannelId ch, std::uint32_t appId) {
                     if (router_ == nullptr) {
@@ -199,7 +197,14 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         stripRow->addWidget(strip);
     }
     stripRow->addStretch(1);
-    root->addLayout(stripRow, 1);  // the strips get the room, not the pool below
+    root->addLayout(stripRow, 1);
+
+    if (settings_ != nullptr) {
+        streamMode_ = settings_->section(QStringLiteral("general"))
+                          .value(QStringLiteral("streamMode"))
+                          .toBool(false);
+        streamCheck->setChecked(streamMode_);
+    }  // the strips get the room, not the pool below
 
     // Push the model's initial state onto the real channel sinks. Some sinks may
     // not be bound yet, and the session manager applies its own default volume
@@ -254,8 +259,6 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         root->addStretch(1);
     }
 
-    connect(simCheck, &QCheckBox::toggled, this, [this](bool on) { simulate_ = on; });
-
     timer_ = new QTimer(this);
     timer_->setInterval(kRefreshIntervalMs);
     connect(timer_, &QTimer::timeout, this, &MixerPage::refresh);
@@ -266,22 +269,7 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
                controller_ != nullptr ? "real" : "simulated");
 }
 void MixerPage::syncOutputDevices() {
-    if (devices_ == nullptr) {
-        return;
-    }
-    QList<QPair<QString, QString>> options;
-    options.append({QStringLiteral("Default"), QString()});
-    for (const audio::AudioDevice& d : devices_->outputDevices()) {
-        options.append(
-            {QString::fromStdString(d.description), QString::fromStdString(d.name)});
-    }
-    for (auto* strip : strips_) {
-        const QString current =
-            controller_ != nullptr
-                ? QString::fromStdString(controller_->channelOutput(strip->channelId()))
-                : QString();
-        strip->setOutputDevices(options, current);
-    }
+    // The output selector now lives on the Channels page; nothing to refresh here.
 }
 
 void MixerPage::pushChannelBalances() {
@@ -320,6 +308,40 @@ void MixerPage::pushMuteStates() {
         if (id == ChannelId::Microphone) continue;
         controller_->setChannelMute(id, !mixer_.isAudible(id) || masterSilent);
     }
+}
+
+void MixerPage::applyChannelGainDb(ChannelId id, float gainDb) {
+    channelGainDb_[static_cast<int>(id)] = gainDb;
+    if (controller_ != nullptr) {
+        controller_->setChannelGain(id, std::pow(10.0f, gainDb / 20.0f));
+    }
+    saveMixerState();
+}
+
+void MixerPage::applyChannelAutoGain(ChannelId id, bool on) {
+    autoGainOn_[static_cast<int>(id)] = on;
+    if (on) {
+        // Start from what the user had dialled in, so enabling it does not jump.
+        autoGain_[static_cast<int>(id)].reset(channelGainDb_[static_cast<int>(id)]);
+    }
+    saveMixerState();
+}
+
+void MixerPage::applyChannelOutput(ChannelId id, const QString& deviceNodeName) {
+    if (controller_ != nullptr) {
+        controller_->setChannelOutput(id, deviceNodeName.toStdString());
+    }
+    saveMixerState();
+}
+
+float MixerPage::channelGainDb(ChannelId id) const {
+    const auto it = channelGainDb_.find(static_cast<int>(id));
+    return it != channelGainDb_.end() ? it->second : 0.0f;
+}
+
+bool MixerPage::channelAutoGain(ChannelId id) const {
+    const auto it = autoGainOn_.find(static_cast<int>(id));
+    return it != autoGainOn_.end() && it->second;
 }
 
 void MixerPage::saveAppRouting(const QString& appName, audio::ChannelId channel) {
@@ -384,7 +406,6 @@ void MixerPage::updateAutoGain(ChannelStrip* strip, float peak) {
     }
     channelGainDb_[key] = gainDb;
     controller_->setChannelGain(strip->channelId(), std::pow(10.0f, gainDb / 20.0f));
-    strip->showGainDb(gainDb);
 }
 
 void MixerPage::restoreMixerState() {
@@ -415,6 +436,12 @@ void MixerPage::restoreMixerState() {
         channelGainDb_[static_cast<int>(id)] = gainDb;
         autoGainOn_[static_cast<int>(id)] =
             c.value(QStringLiteral("autoGain")).toBool(false);
+        const float sendLevel =
+            static_cast<float>(c.value(QStringLiteral("streamLevel")).toDouble(1.0));
+        streamLevel_[static_cast<int>(id)] = sendLevel;
+        if (controller_ != nullptr) {
+            controller_->setStreamLevel(id, sendLevel);
+        }
         autoGain_[static_cast<int>(id)].reset(gainDb);
         if (controller_ != nullptr && gainDb != 0.0f) {
             controller_->setChannelGain(id, std::pow(10.0f, gainDb / 20.0f));
@@ -444,6 +471,9 @@ void MixerPage::saveMixerState() {
         c[QStringLiteral("volume")] = st.volume;
         c[QStringLiteral("balance")] = st.balance;
         c[QStringLiteral("muted")] = st.muted;
+        if (const auto it = streamLevel_.find(static_cast<int>(id)); it != streamLevel_.end()) {
+            c[QStringLiteral("streamLevel")] = it->second;
+        }
         if (const auto it = channelGainDb_.find(static_cast<int>(id));
             it != channelGainDb_.end()) {
             c[QStringLiteral("gainDb")] = it->second;

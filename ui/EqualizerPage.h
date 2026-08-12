@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include <QWidget>
 
@@ -10,10 +11,13 @@
 class QButtonGroup;
 class QCheckBox;
 class QComboBox;
+class QLabel;
+class QSlider;
 class QTimer;
 
 namespace sonar::audio {
 class IEqualizerController;
+class IAudioDevices;
 }
 
 namespace sonar::config {
@@ -32,12 +36,26 @@ class EqualizerPage : public QWidget {
 
 public:
     explicit EqualizerPage(audio::IEqualizerController* controller,
-                           config::SettingsStore* settings = nullptr, QWidget* parent = nullptr);
+                           config::SettingsStore* settings = nullptr,
+                           audio::IAudioDevices* devices = nullptr, QWidget* parent = nullptr);
+
+signals:
+    // The Mixer page owns this state (its metering loop drives auto-gain), so the
+    // controls here report intent rather than applying it directly.
+    void channelGainChanged(audio::ChannelId id, float gainDb);
+    void channelAutoGainToggled(audio::ChannelId id, bool on);
+    void channelOutputChanged(audio::ChannelId id, const QString& deviceNodeName);
+    void channelSelected(audio::ChannelId id);
+
+public slots:
+    // Reflect values the Mixer page holds, when the selection changes.
+    void showChannelGain(float gainDb, bool autoOn);
 
 private:
     [[nodiscard]] dsp::EqSettings& current();
     void reflectControls(bool includeCombo);  // model -> controls
     void loadChannel();
+    void refreshOutputs();  // refill the per-channel device selector
     void onBandChanged(int index, float gainDb);
     void pushEq();          // current channel -> real audio
     void restoreEq();       // load persisted per-channel EQ into the model
@@ -52,6 +70,12 @@ private:
     std::array<dsp::EqSettings, sonar::audio::kAllChannels.size()> eq_;
     int channel_ = 0;
     audio::IEqualizerController* controller_ = nullptr;
+    audio::IAudioDevices* devices_ = nullptr;
+    class QSlider* gain_ = nullptr;
+    QCheckBox* autoGain_ = nullptr;
+    QLabel* gainValue_ = nullptr;
+    QComboBox* output_ = nullptr;
+    std::uint64_t devicesRevision_ = ~0ULL;
     config::SettingsStore* settings_ = nullptr;
 
     EqCurve* curve_ = nullptr;

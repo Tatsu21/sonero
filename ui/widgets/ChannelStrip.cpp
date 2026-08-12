@@ -1,5 +1,6 @@
 #include "ui/widgets/ChannelStrip.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QComboBox>
@@ -12,6 +13,7 @@
 #include <QMimeData>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSlider>
 #include <QStyle>
 #include <QVBoxLayout>
@@ -91,28 +93,6 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     balance_->setValue(0);
     balance_->setToolTip(QStringLiteral("Balance (L / R)"));
 
-    auto* gainCaption = new QLabel(QStringLiteral("GAIN"), this);
-    gainCaption->setObjectName(QStringLiteral("BalanceCaption"));
-    gainCaption->setAlignment(Qt::AlignHCenter);
-
-    // Trim in dB, separate from the fader: it tames a source that is far louder
-    // than the others without giving up fader travel. Cuts go deeper than boosts
-    // because boosting a full-scale source is what clips in the first place.
-    gain_ = new QSlider(Qt::Horizontal, this);
-    gain_->setRange(-20, 6);
-    gain_->setValue(0);
-    gain_->setToolTip(QStringLiteral("Input trim in dB (0 dB = unchanged)"));
-
-    autoGain_ = new QCheckBox(QStringLiteral("Auto"), this);
-    autoGain_->setToolTip(QStringLiteral(
-        "Track the level of what is playing and trim it automatically.\n"
-        "Pulls loud passages down quickly, lifts quiet ones slowly, and holds\n"
-        "still during silence."));
-
-    gainValue_ = new QLabel(QStringLiteral("0 dB"), this);
-    gainValue_->setObjectName(QStringLiteral("BalanceCaption"));
-    gainValue_->setAlignment(Qt::AlignHCenter);
-
     mute_ = new QPushButton(QStringLiteral("Mute"), this);
     mute_->setCheckable(true);
     mute_->setProperty("toggleRole", QStringLiteral("mute"));
@@ -126,32 +106,51 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     buttonRow->addWidget(mute_);
     buttonRow->addWidget(solo_);
 
-    auto* outputCaption = new QLabel(QStringLiteral("OUTPUT"), this);
-    outputCaption->setObjectName(QStringLiteral("BalanceCaption"));
-    outputCaption->setAlignment(Qt::AlignHCenter);
+    // --- stream send (hidden unless stream mode is on) -----------------------
+    streamRow_ = new QWidget(this);
+    auto* streamCol = new QVBoxLayout(streamRow_);
+    streamCol->setContentsMargins(0, 0, 0, 0);
+    streamCol->setSpacing(3);
+    auto* streamCaption = new QLabel(QStringLiteral("TO STREAM"), streamRow_);
+    streamCaption->setObjectName(QStringLiteral("BalanceCaption"));
+    streamCaption->setStyleSheet(QStringLiteral("color:%1;").arg(accent));
+    stream_ = new QSlider(Qt::Horizontal, streamRow_);
+    stream_->setFixedHeight(14);
+    stream_->setRange(0, 100);
+    stream_->setValue(100);
+    stream_->setToolTip(QStringLiteral("How loud this channel is for the stream"));
+    // The level reads out in the slider's tooltip; a widget with no place in the
+    // layout would otherwise paint at the origin, on top of the caption.
+    streamValue_ = new QLabel(streamRow_);
+    streamValue_->hide();
+    streamCol->addWidget(streamCaption);
+    streamCol->addWidget(stream_);
 
-    output_ = new QComboBox(this);
-    output_->setToolTip(QStringLiteral("Output device for this channel"));
-    output_->addItem(QStringLiteral("Default"), QString());
-    output_->setMaximumWidth(kStripWidth - 24);
+    streamRow_->setStyleSheet(QStringLiteral("background:transparent;"));
+    streamRow_->setVisible(false);
 
-    auto* appsCaption = new QLabel(QStringLiteral("APPS"), this);
-    appsCaption->setObjectName(QStringLiteral("BalanceCaption"));
+    connect(stream_, &QSlider::valueChanged, this, [this](int v) {
+        stream_->setToolTip(QStringLiteral("To stream: %1%").arg(v));
+        emit streamLevelChanged(id_, static_cast<float>(v) / 100.0f);
+    });
+
 
     auto* appsHost = new QFrame(this);
     appsHost->setObjectName(QStringLiteral("AppsHost"));
     appsHost->setStyleSheet(
         QStringLiteral("#AppsHost { background:#0f1017; border-radius:8px; }"));
-    appsHost->setMinimumHeight(52);
+    appsHost->setMinimumHeight(64);
     appsBody_ = new QVBoxLayout(appsHost);
-    appsBody_->setContentsMargins(7, 7, 7, 7);
+    appsBody_->setContentsMargins(6, 6, 6, 6);
     appsBody_->setSpacing(5);
     appsBody_->setAlignment(Qt::AlignTop);
+
 
     appsEmpty_ = new QLabel(QStringLiteral("drop an app here"), this);
     appsEmpty_->setObjectName(QStringLiteral("Hint"));
     appsEmpty_->setAlignment(Qt::AlignHCenter);
     appsBody_->addWidget(appsEmpty_);
+
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(11, 11, 11, 11);
@@ -162,18 +161,9 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     layout->addWidget(volumeLabel_);
     layout->addWidget(balanceCaption);
     layout->addWidget(balance_);
-    auto* gainHead = new QHBoxLayout;
-    gainHead->setContentsMargins(0, 0, 0, 0);
-    gainHead->addWidget(gainCaption, 1);
-    gainHead->addWidget(autoGain_);
-    layout->addLayout(gainHead);
-    layout->addWidget(gain_);
-    layout->addWidget(gainValue_);
     layout->addLayout(buttonRow);
-    layout->addWidget(outputCaption);
-    layout->addWidget(output_);
-    layout->addWidget(appsCaption);
-    layout->addWidget(appsHost, 1);  // shares what is left, so chips stay legible
+    layout->addWidget(streamRow_);
+    layout->addWidget(appsHost, 1);
 
     // Translate widget events into channel intent.
     connect(volume_, &QSlider::valueChanged, this, [this](int value) {
@@ -183,55 +173,12 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     connect(balance_, &QSlider::valueChanged, this, [this](int value) {
         emit balanceChanged(id_, static_cast<float>(value) / 100.0f);
     });
-    connect(gain_, &QSlider::valueChanged, this, [this](int db) {
-        gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
-                                   : QStringLiteral("%1 dB").arg(db));
-        emit gainChanged(id_, static_cast<float>(db));
-    });
-    connect(autoGain_, &QCheckBox::toggled, this, [this](bool on) {
-        gain_->setEnabled(!on);  // the loop owns the value while it is running
-        emit autoGainToggled(id_, on);
-    });
     connect(mute_, &QPushButton::toggled, this, [this](bool checked) {
         emit muteToggled(id_, checked);
     });
     connect(solo_, &QPushButton::toggled, this, [this](bool checked) {
         emit soloToggled(id_, checked);
     });
-    connect(output_, &QComboBox::activated, this, [this](int) {
-        emit outputChanged(id_, output_->currentData().toString());
-    });
-}
-
-void ChannelStrip::setOutputDevices(const QList<QPair<QString, QString>>& devices,
-                                    const QString& currentNodeName) {
-    const QSignalBlocker block(output_);
-    output_->clear();
-    for (const auto& [label, nodeName] : devices) {
-        output_->addItem(label, nodeName);
-    }
-    int idx = output_->findData(currentNodeName);
-    if (idx < 0 && !currentNodeName.isEmpty()) {
-        // Pinned to a device that is not connected right now — keep the choice
-        // visible instead of silently snapping back to Default.
-        output_->addItem(currentNodeName + QStringLiteral(" (offline)"), currentNodeName);
-        idx = output_->count() - 1;
-    }
-    output_->setCurrentIndex(idx >= 0 ? idx : 0);
-}
-
-void ChannelStrip::showGainDb(float gainDb) {
-    const int db = static_cast<int>(std::lround(gainDb));
-    const QSignalBlocker block(gain_);
-    gain_->setValue(db);
-    gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
-                               : QStringLiteral("%1 dB").arg(db));
-}
-
-void ChannelStrip::setAutoGain(bool on) {
-    const QSignalBlocker block(autoGain_);
-    autoGain_->setChecked(on);
-    gain_->setEnabled(!on);
 }
 
 void ChannelStrip::setState(const ChannelState& state) {
@@ -276,6 +223,15 @@ QString ChannelStrip::glyphFor(ChannelId id) {
         case ChannelId::Aux:        return QString::fromUtf8("\xF0\x9F\x8E\x9A");   // fader
     }
     return QString::fromUtf8("\xF0\x9F\x8E\x9B");
+}
+
+void ChannelStrip::setStreamMode(bool on) { streamRow_->setVisible(on); }
+
+void ChannelStrip::setStreamLevel(float level) {
+    const QSignalBlocker block(stream_);
+    const int v = std::clamp(static_cast<int>(std::lround(level * 100.0f)), 0, 100);
+    stream_->setValue(v);
+    stream_->setToolTip(QStringLiteral("To stream: %1%").arg(v));
 }
 
 void ChannelStrip::clearApps() {

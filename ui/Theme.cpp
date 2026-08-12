@@ -38,25 +38,10 @@ QToolTip {
     border-radius: 8px; padding: 6px 9px;
 }
 
-/* ---- Sidebar ---- */
-#Sidebar { background: #111219; border: none; border-right: 1px solid #1c1e29; }
-#AppLogo { font-size: 18px; font-weight: 800; padding: 24px 20px 8px 20px; }
-#SidebarSection {
-    color: #565b74; font-size: 10px; font-weight: 800; letter-spacing: 1.5px;
-    padding: 14px 22px 6px 22px;
-}
-
-#Nav { background: transparent; border: none; padding: 4px 12px; }
-#Nav::item {
-    padding: 11px 14px; margin: 3px 0; border-radius: 10px; color: #8b90a8;
-}
-#Nav::item:hover { background: #1a1c28; color: #e7e9f2; }
-#Nav::item:selected {
-    background: #1b1e2e; color: #ffffff;
-    border-left: 3px solid #6366f1; padding-left: 11px;
-}
-
-#StatusChip { padding: 14px 20px 20px 20px; color: #8b90a8; font-size: 12px; }
+/* ---- Top bar ---- */
+/* No padding: the wordmark is centred by the layout, and any asymmetric padding
+   would push it off the mark's and the nav pills' shared centre line. */
+#AppLogo { font-size: 18px; font-weight: 800; padding: 0; }
 
 /* ---- Page content ---- */
 #PageTitle { font-size: 25px; font-weight: 800; color: #ffffff; }

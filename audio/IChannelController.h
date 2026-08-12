@@ -24,6 +24,12 @@ public:
     // divide it back out.
     [[nodiscard]] virtual float channelHeadroom(ChannelId id) const = 0;
 
+    // How loud this channel is in the stream mix — the separate mix a capture
+    // application records. Independent of what the user hears, which is the point:
+    // you can keep game audio loud in your headphones and quiet on stream.
+    virtual void setStreamLevel(ChannelId id, float level) = 0;
+    [[nodiscard]] virtual float streamLevel(ChannelId id) const = 0;
+
     // Per-channel trim (linear, 1.0 = unity), independent of the volume fader.
     // Use it to tame a source that is far louder or quieter than the others; it
     // multiplies with the fader rather than replacing it.
