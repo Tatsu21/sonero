@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(Sonero
     VERSION 0.1.1
-    DESCRIPTION "Native Linux audio mixer & router inspired by SteelSeries Sonar"
+    DESCRIPTION "Per-application audio mixer, router and equalizer for PipeWire"
     HOMEPAGE_URL "https://github.com/"
     LANGUAGES CXX)
 
@@ -167,6 +167,14 @@ endforeach()
 # The GitHub mark shown in the footer.
 install(FILES packaging/icons/github.png
     DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
+
+# Licensing, in the two places a user looks for it: the Debian convention
+# (/usr/share/doc/<package>/copyright, machine-readable DEP-5) and the plain
+# MIT text next to it for anyone unpacking an AppImage or a tarball.
+install(FILES packaging/deb/copyright
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/sonero)
+install(FILES LICENSE
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/sonero)
 
 # Two copies of the udev rule, for the two ways Sonero is delivered:
 #  - /lib/udev/rules.d is where a package's rules live, so installing the .deb

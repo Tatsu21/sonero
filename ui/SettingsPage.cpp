@@ -161,8 +161,37 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
     bg->addLayout(quitRow);
 
     buildSystemCard(root);
+    buildAboutCard(root);
 
     root->addStretch(1);
+}
+
+void SettingsPage::buildAboutCard(QVBoxLayout* root) {
+    QVBoxLayout* body = makeCard(root, QStringLiteral("About"),
+                                 QStringLiteral("Sonero %1 — free and open source, "
+                                                "MIT licensed.")
+                                     .arg(QString::fromLatin1(SONAR_VERSION)));
+
+    // Rich text so the two links are clickable; the AI note is stated plainly here
+    // and not only in the README, because it is part of how the app came to be.
+    auto* text = new QLabel(QStringLiteral(
+        "<p style='margin:0 0 8px 0'>A personal project, built to learn and to use "
+        "every day — not a commercial product. Shared in the hope that it is useful "
+        "to someone else too.</p>"
+        "<p style='margin:0 0 8px 0'>Source, issues and releases: "
+        "<a style='color:#7c83ff; text-decoration:none' "
+        "href='https://github.com/Tatsu21/sonero'>github.com/Tatsu21/sonero</a></p>"
+        "<p style='margin:0 0 8px 0'>Built with AI assistance: much of the code was "
+        "drafted together with Anthropic's Claude, then reviewed, built and verified "
+        "against real audio hardware by a human. Every decision, and the "
+        "responsibility for the result, is the author's.</p>"
+        "<p style='margin:0'>Not affiliated with SteelSeries. Sonar was the "
+        "inspiration, not the source.</p>"));
+    text->setObjectName(QStringLiteral("Hint"));
+    text->setTextFormat(Qt::RichText);
+    text->setWordWrap(true);
+    text->setOpenExternalLinks(true);
+    body->addWidget(text);
 }
 
 void SettingsPage::buildSystemCard(QVBoxLayout* root) {

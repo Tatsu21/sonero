@@ -161,9 +161,9 @@ std::vector<Check> runChecks() {
     udev.status = udevRuleInstalled() ? Status::Ok : Status::Missing;
     udev.detail =
         udev.status == Status::Ok
-            ? QStringLiteral("Battery level and the onboard equalizer are available.")
-            : QStringLiteral("Needed to read battery and write the onboard EQ of SteelSeries "
-                             "headsets. Installs a udev rule granting your user access.");
+            ? QStringLiteral("Headset battery level is available.")
+            : QStringLiteral("Needed to read the battery level of SteelSeries headsets. "
+                             "Installs a udev rule granting your user access.");
     udev.needsRoot = true;
     udev.fixable = udev.status == Status::Missing;
     checks.push_back(udev);

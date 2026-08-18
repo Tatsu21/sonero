@@ -23,6 +23,7 @@ public:
 
 private:
     void buildSystemCard(QVBoxLayout* root);
+    void buildAboutCard(QVBoxLayout* root);  // version, license, how it was built
     void refreshSystemChecks();  // re-run the checks and repaint the rows
 
     Notifier* notifier_ = nullptr;

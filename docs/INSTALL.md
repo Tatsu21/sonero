@@ -20,8 +20,8 @@ sudo apt install ./sonero_0.1.0_amd64.deb
 ```
 
 apt pulls in Qt and the rest. The package also installs the udev rule granting
-your user access to SteelSeries HID devices and reloads udev, so battery level
-and the onboard equalizer work right away — no extra steps.
+your user access to SteelSeries HID devices and reloads udev, so headset battery
+level works right away — no extra steps.
 
 PipeWire itself is a *recommended* dependency rather than a hard one (it is
 already running on any current desktop), so installation never drags in an audio
@@ -107,9 +107,9 @@ you the **exact commands**, then your desktop asks for your password. Nothing ru
 if you cancel.
 
 ### SteelSeries headset access
-Reading battery level and writing the onboard equalizer of a SteelSeries headset
-means talking to `/dev/hidraw*`, which is root-only by default. The fix installs a
-udev rule granting the logged-in user access to SteelSeries devices only:
+Reading the battery level of a SteelSeries headset means talking to `/dev/hidraw*`,
+which is root-only by default. The fix installs a udev rule granting the logged-in
+user access to SteelSeries devices only:
 
 ```sh
 install -m 0644 70-sonero-steelseries.rules /etc/udev/rules.d/
@@ -118,6 +118,31 @@ udevadm trigger --subsystem-match=hidraw
 ```
 
 Undo it by deleting `/etc/udev/rules.d/70-sonero-steelseries.rules`.
+
+#### My headset is not the one Sonero knows about
+
+Battery level speaks a protocol that differs per model, and Sonero currently ships only
+the SteelSeries Arctis Nova Pro Wireless. Every other headset still plays audio
+perfectly — routing, volume, the equalizer and the mixer need no HID at all — it is
+only the battery percentage that is model-specific.
+
+**You do not have to read the code to add yours.** The repository carries a written
+procedure at [`hid/SKILL.md`](../hid/SKILL.md), meant to be handed to an AI assistant
+(Claude Code, or any model that can read a repository) so it can do the work for you:
+it walks through identifying the device, granting it access, sourcing the protocol
+from an existing implementation, writing a new device class next to the existing one,
+and — the part that matters — how to prove the result is real rather than plausible.
+If you use Claude Code, the same procedure is registered as the `add-hid-headset`
+skill, so `/add-hid-headset` starts it.
+
+It covers battery level and stops there. Sonero can also send an equalizer to the
+Arctis's onboard DSP, but the headset accepts the write without any audible change and
+nobody has worked out why — so the procedure tells an assistant not to attempt onboard
+EQ, sidetone or ANC for a new model, since there is no working example to copy.
+
+What is asked of you is the physical half an assistant cannot do: plugging the headset
+in, turning it off and on when asked, and saying whether the number it produces
+matches what your headset actually reports. If it works, a pull request is welcome.
 
 ### Bluetooth battery reporting
 BlueZ only exposes battery level with its experimental interfaces enabled. The fix
