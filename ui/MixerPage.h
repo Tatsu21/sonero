@@ -45,8 +45,12 @@ public:
               sonar::audio::IAudioDevices* devices = nullptr,
               sonar::config::SettingsStore* settings = nullptr, QWidget* parent = nullptr);
 
+signals:
+
+    void channelGainDbChanged(audio::ChannelId id, float gainDb);
+
 public:
-    // Called by the Channels page, which owns the trim / auto / output controls
+    // Called by the Channels page, which owns the gain / auto / output controls
     // while the metering loop that drives auto-gain stays here.
     void applyChannelGainDb(audio::ChannelId id, float gainDb);
     void applyChannelAutoGain(audio::ChannelId id, bool on);
@@ -76,7 +80,7 @@ private:
 
     std::vector<ChannelStrip*> strips_;
     std::unordered_map<int, ChannelStrip*> stripByChannel_;
-    // Per-channel trim in dB, persisted alongside the rest of the channel state.
+    // Per-channel gain in dB, persisted alongside the rest of the channel state.
     std::unordered_map<int, float> channelGainDb_;
     // Auto-gain: one control loop per channel, fed by the meters in refresh().
     std::unordered_map<int, bool> autoGainOn_;

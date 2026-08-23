@@ -82,7 +82,6 @@ public:
     void setChannelGain(ChannelId id, float gain) override;
     void setStreamLevel(ChannelId id, float level) override;
     [[nodiscard]] float streamLevel(ChannelId id) const override;
-    [[nodiscard]] float channelHeadroom(ChannelId id) const override;
     // --- IChannelController ---
     void setChannelVolume(ChannelId id, float volume) override;
     void setChannelMute(ChannelId id, bool muted) override;

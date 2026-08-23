@@ -18,12 +18,6 @@ public:
 
     virtual void setChannelBalance(ChannelId id, float balance) = 0;
 
-    // Linear attenuation this channel currently applies on top of the fader:
-    // equalizer-boost compensation times the fixed filter reserve. Metering taps
-    // the output, i.e. after this, so anything judging the *source* level has to
-    // divide it back out.
-    [[nodiscard]] virtual float channelHeadroom(ChannelId id) const = 0;
-
     // How loud this channel is in the stream mix — the separate mix a capture
     // application records. Independent of what the user hears, which is the point:
     // you can keep game audio loud in your headphones and quiet on stream.

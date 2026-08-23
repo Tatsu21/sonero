@@ -2,7 +2,6 @@
 #include <memory>
 
 #include <QApplication>
-#include <QTimer>
 #include <QWidget>
 
 #include "app/Application.h"
@@ -58,17 +57,6 @@ int main(int argc, char* argv[]) {
                 w->showNormal();
                 w->raise();
                 w->activateWindow();
-            });
-        }
-
-        // Optional headless screenshot for development: SONAR_SCREENSHOT=/path.png
-        if (const char* shot = std::getenv("SONAR_SCREENSHOT")) {
-            const QString path = QString::fromLocal8Bit(shot);
-            QTimer::singleShot(1700, &qtApp, [&app, path]() {
-                if (QWidget* w = app.mainWindow()) {
-                    w->grab().save(path);
-                }
-                QCoreApplication::quit();
             });
         }
 

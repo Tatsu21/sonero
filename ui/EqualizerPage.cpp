@@ -57,6 +57,16 @@ QFrame* makeSegmented(const QStringList& labels, QButtonGroup*& group, QWidget* 
     return frame;
 }
 
+// The gain readout. Manual moves are whole decibels, but the auto-gain loop
+// settles on fractions of one — rounding those to an integer would make the
+// display look stuck while the value is still moving, so keep a decimal there.
+QString formatGainDb(float gainDb, bool fractional) {
+    const QString number = fractional ? QString::number(gainDb, 'f', 1)
+                                      : QString::number(static_cast<int>(std::lround(gainDb)));
+    return gainDb > 0.0f ? QStringLiteral("+%1 dB").arg(number)
+                         : QStringLiteral("%1 dB").arg(number);
+}
+
 QLabel* caption(const QString& text, QWidget* parent) {
     auto* label = new QLabel(text, parent);
     label->setObjectName(QStringLiteral("CardKey"));
@@ -103,7 +113,7 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     auto* title = new QLabel(QStringLiteral("Channels"), this);
     title->setObjectName(QStringLiteral("PageTitle"));
     auto* subtitle =
-        new QLabel(QStringLiteral("Per-channel trim, output and equalizer"), this);
+        new QLabel(QStringLiteral("Per-channel gain, output and equalizer"), this);
     subtitle->setObjectName(QStringLiteral("PageSubtitle"));
     auto* head = new QVBoxLayout;
     head->setSpacing(4);
@@ -117,18 +127,20 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     }
     root->addWidget(makeSegmented(channelLabels, channelGroup_, this));
 
-    // --- Trim and output for the selected channel ---------------------------
+    // --- Gain and output for the selected channel ---------------------------
     gain_ = new QSlider(Qt::Horizontal, this);
     gain_->setRange(-20, 6);
     gain_->setFixedWidth(150);
-    gain_->setToolTip(QStringLiteral("Input trim in dB (0 dB = unchanged)"));
+    gain_->setToolTip(QStringLiteral("Channel gain in dB (0 dB = unchanged)"));
     gainValue_ = new QLabel(QStringLiteral("0 dB"), this);
     gainValue_->setObjectName(QStringLiteral("VolumeValue"));
     gainValue_->setMinimumWidth(52);
     autoGain_ = new QCheckBox(QStringLiteral("Auto"), this);
     autoGain_->setToolTip(QStringLiteral(
-        "Watch the channel's level and trim it automatically: it listens for a few\n"
-        "seconds, settles on one gain and holds it."));
+        "Take as much gain as the material allows: it climbs to the top of the\n"
+        "range wherever there is room, and comes back down by exactly what a peak\n"
+        "overshoots. Slow going up, immediate coming down, so the level does not\n"
+        "breathe. The slider follows along."));
 
     output_ = new QComboBox(this);
     output_->setMinimumWidth(190);
@@ -136,7 +148,7 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
 
     auto* routeRow = new QHBoxLayout;
     routeRow->setSpacing(8);
-    routeRow->addWidget(caption(QStringLiteral("Trim"), this));
+    routeRow->addWidget(caption(QStringLiteral("Gain"), this));
     routeRow->addWidget(gain_);
     routeRow->addWidget(gainValue_);
     routeRow->addWidget(autoGain_);
@@ -146,8 +158,7 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     root->addLayout(routeRow);
 
     connect(gain_, &QSlider::valueChanged, this, [this](int db) {
-        gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
-                                   : QStringLiteral("%1 dB").arg(db));
+        gainValue_->setText(formatGainDb(static_cast<float>(db), false));
         emit channelGainChanged(audio::kAllChannels[static_cast<std::size_t>(channel_)],
                                 static_cast<float>(db));
     });
@@ -329,18 +340,31 @@ void EqualizerPage::refreshOutputs() {
     }
 }
 
+ChannelId EqualizerPage::selectedChannel() const {
+    return audio::kAllChannels[static_cast<std::size_t>(channel_)];
+}
+
 void EqualizerPage::showChannelGain(float gainDb, bool autoOn) {
     if (gain_ == nullptr) {
         return;
     }
     const QSignalBlocker g(gain_);
     const QSignalBlocker a(autoGain_);
-    const int db = static_cast<int>(std::lround(gainDb));
-    gain_->setValue(db);
+    gain_->setValue(static_cast<int>(std::lround(gainDb)));
     gain_->setEnabled(!autoOn);
     autoGain_->setChecked(autoOn);
-    gainValue_->setText(db > 0 ? QStringLiteral("+%1 dB").arg(db)
-                               : QStringLiteral("%1 dB").arg(db));
+    gainValue_->setText(formatGainDb(gainDb, autoOn));
+}
+
+void EqualizerPage::showAutoGainValue(ChannelId id, float gainDb) {
+    // The loop reports every channel; only the one on screen has anything to show.
+    if (gain_ == nullptr ||
+        audio::kAllChannels[static_cast<std::size_t>(channel_)] != id) {
+        return;
+    }
+    const QSignalBlocker g(gain_);  // moving the slider must not look like a user edit
+    gain_->setValue(static_cast<int>(std::lround(gainDb)));
+    gainValue_->setText(formatGainDb(gainDb, true));
 }
 
 void EqualizerPage::onBandChanged(int index, float gainDb) {

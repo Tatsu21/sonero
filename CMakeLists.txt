@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(Sonero
-    VERSION 0.1.1
+    VERSION 0.1.2
     DESCRIPTION "Per-application audio mixer, router and equalizer for PipeWire"
     HOMEPAGE_URL "https://github.com/"
     LANGUAGES CXX)

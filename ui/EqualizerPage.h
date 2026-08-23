@@ -47,9 +47,17 @@ signals:
     void channelOutputChanged(audio::ChannelId id, const QString& deviceNodeName);
     void channelSelected(audio::ChannelId id);
 
+public:
+    // Which channel the page is showing, so the owner can seed the controls with
+    // that channel's stored gain before the user touches anything.
+    [[nodiscard]] audio::ChannelId selectedChannel() const;
+
 public slots:
     // Reflect values the Mixer page holds, when the selection changes.
     void showChannelGain(float gainDb, bool autoOn);
+    // Follow the auto-gain loop while it runs: it owns the value, so the slider
+    // and the readout have to be told, not asked.
+    void showAutoGainValue(audio::ChannelId id, float gainDb);
 
 private:
     [[nodiscard]] dsp::EqSettings& current();

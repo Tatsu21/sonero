@@ -1294,15 +1294,6 @@ void PipeWireManager::setChannelGain(ChannelId id, float gain) {
     pw_thread_loop_unlock(loop_);
 }
 
-float PipeWireManager::channelHeadroom(ChannelId id) const {
-    // kFilterHeadroom mirrors applyVolume; eqHeadroom is whatever the current EQ
-    // curve required. Read without the loop lock: it is a single float that only
-    // ever moves between plausible values, and a metering client can tolerate
-    // reading the previous one.
-    constexpr float kFilterHeadroom = 0.891f;
-    return io_[channelIndex(id)].eqHeadroom * kFilterHeadroom;
-}
-
 void PipeWireManager::setStreamLevel(ChannelId id, float level) {
     level = std::clamp(level, 0.0f, 1.0f);
     std::uint32_t nodeId = 0;

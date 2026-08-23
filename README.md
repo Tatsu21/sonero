@@ -46,7 +46,7 @@ to two different devices at once.
 | 🎚️ | **Six output channels** — Master (System), Game, Chat, Media, Browser, Aux. Volume, mute, solo, balance and live VU meters per channel. |
 | 🧲 | **Drag-free app routing** — every playing app shows up as a chip; move it to a channel and it stays there across restarts. |
 | 🎛️ | **Equalizer per channel** in 10, 15 or 31 bands, with 20+ built-in presets (music, gaming, voice, movie) plus save / import / export of your own. |
-| 🔊 | **Per-channel trim and auto-gain** — a ReplayGain-style normaliser that measures the post-EQ signal and holds a steady level instead of pumping like a compressor. |
+| 🔊 | **Per-channel gain, set automatically on request** — it holds the highest gain (up to +6 dB) that keeps the channel's real output clear of full scale: quiet material climbs, a peak that overshoots is taken back by exactly what it overshot. Slow up, immediate down, so nothing breathes. |
 | 🎥 | **Streaming mix for OBS** — a `Sonero Stream` input source with an independent send level per channel, so your viewers hear a different balance than you do. |
 | 🎤 | **Virtual microphone** with input gain, mute and level metering; it appears to apps as a normal source. |
 | 🎧 | **Any output device** — USB, Bluetooth, HDMI, S/PDIF and analog, each detected and badged automatically, each with its own output selection per channel. |
@@ -362,8 +362,9 @@ biquads — the equalizer. A `module-loopback` then carries that chain's output 
 device you picked, and a second loopback taps the same sink at its own send level to
 feed the `Sonero Stream` source that OBS records. Applications move between channels
 by rewriting their `target.object` metadata, which PipeWire applies without
-interrupting playback. Gain staging is deliberate: volume × trim × EQ headroom × a
-fixed filter reserve, so a boosted band cannot clip on the way to the device.
+interrupting playback. Gain staging is deliberate: volume × channel gain × EQ
+headroom × a fixed filter reserve, so a boosted band cannot clip on the way to the
+device.
 
 <div align="center">
 <img src="docs/images/channels.png" alt="Per-channel equalizer" width="820">
@@ -379,8 +380,8 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-- `SONAR_PAGE=<n>` opens the app straight on a page; with `SONAR_SCREENSHOT=<path>`
-  it captures that page and exits — handy for UI review.
+- `SONAR_PAGE=<n>` opens the app straight on a page, so a UI change can be checked
+  without clicking through to it.
 - `./build/hidprobe` dumps the SteelSeries base-station HID conversation.
 - The project targets GCC 11 and up. `core/Format` exists precisely because
   `std::format` is not available there, and packaged builds must run on distributions

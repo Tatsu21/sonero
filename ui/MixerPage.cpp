@@ -391,13 +391,14 @@ void MixerPage::updateAutoGain(ChannelStrip* strip, float peak) {
     if (!autoGainOn_[key] || controller_ == nullptr) {
         return;
     }
-    // The meter reads the channel output, which already carries the EQ and filter
-    // headroom. Divide that back out so the loop judges how hot the *source* is —
-    // otherwise its target sits below anything the chain can produce and it never
-    // has a reason to act.
-    const float headroom = std::max(controller_->channelHeadroom(strip->channelId()), 0.01f);
+    // The meter reads the channel output — post-EQ, post-fader, post-reserve —
+    // which is exactly what this device needs: the number that reaches the device
+    // is the only one that says whether anything is about to clip. Nothing is
+    // divided back out, deliberately. Turning a fader down really does mean there
+    // is less to protect against.
+    const ChannelId id = strip->channelId();
     const float dt = static_cast<float>(kRefreshIntervalMs) / 1000.0f;
-    const float gainDb = autoGain_[key].update(peak / headroom, dt);
+    const float gainDb = autoGain_[key].update(peak, dt);
 
     // Only touch the audio path when the value actually moved: the loop runs 25
     // times a second and most ticks change nothing.
@@ -405,7 +406,8 @@ void MixerPage::updateAutoGain(ChannelStrip* strip, float peak) {
         return;
     }
     channelGainDb_[key] = gainDb;
-    controller_->setChannelGain(strip->channelId(), std::pow(10.0f, gainDb / 20.0f));
+    controller_->setChannelGain(id, std::pow(10.0f, gainDb / 20.0f));
+    emit channelGainDbChanged(id, gainDb);
 }
 
 void MixerPage::restoreMixerState() {

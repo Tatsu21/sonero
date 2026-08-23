@@ -47,7 +47,7 @@ struct PageDef {
 constexpr PageDef kPages[] = {
     {"Dashboard", "Overview of your audio engine"},
     {"Mixer",     "Per-channel volume, mute, solo, balance and live VU meters"},
-    {"Channels",  "Per-channel trim, output device and equalizer"},
+    {"Channels",  "Per-channel gain, output device and equalizer"},
     {"Microphone", "Mic input gain, level, noise suppression, gate and monitoring"},
     {"Devices",   "USB, Bluetooth, HDMI and external DAC detection & routing"},
     {"Profiles",  "Save and load complete audio configurations"},
@@ -199,6 +199,15 @@ void MainWindow::buildUi() {
                             channels->showChannelGain(mixerPage_->channelGainDb(id),
                                                       mixerPage_->channelAutoGain(id));
                         });
+                // ...and back: while auto-gain runs it, not the user, owns the value.
+                connect(mixerPage_, &MixerPage::channelGainDbChanged, channels,
+                        &EqualizerPage::showAutoGainValue);
+                // Nothing has been clicked yet, so seed the controls with the
+                // channel the page opens on — otherwise a restored gain or an
+                // enabled Auto only appears after switching channels once.
+                const audio::ChannelId first = channels->selectedChannel();
+                channels->showChannelGain(mixerPage_->channelGainDb(first),
+                                          mixerPage_->channelAutoGain(first));
             }
             pages_->addWidget(channels);
         } else if (titleView == "Microphone") {
