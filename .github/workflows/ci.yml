@@ -65,3 +65,54 @@ jobs:
           path: |
             dist/*.deb
             dist/*.AppImage
+
+  # Arch and Fedora ship no package of their own — their users build from source
+  # or take the AppImage. They are in CI because rolling/fast-moving toolchains
+  # break the build long before the Ubuntu LTS runners notice: GCC 15+ dropped
+  # the transitive <unistd.h> the tests relied on, and Arch's -z pack-relative-relocs
+  # produces .relr.dyn sections that linuxdeploy's bundled strip cannot read.
+  rolling:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: arch
+            image: archlinux:latest
+          - name: fedora
+            image: fedora:latest
+
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    name: ${{ matrix.name }}
+
+    steps:
+      # Dependencies first: with git present, checkout clones instead of
+      # falling back to a tarball download.
+      - name: Install build dependencies (Arch)
+        if: matrix.name == 'arch'
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel cmake ninja git qt6-base qt6-wayland libpipewire \
+            desktop-file-utils file curl
+
+      - name: Install build dependencies (Fedora)
+        if: matrix.name == 'fedora'
+        run: |
+          dnf -y install \
+            gcc-c++ cmake ninja-build pkgconf-pkg-config git \
+            qt6-qtbase-devel qt6-qtwayland-devel pipewire-devel \
+            desktop-file-utils file curl
+
+      - uses: actions/checkout@v4
+
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+      # Not an artifact anyone should ship — an AppImage built here links a glibc
+      # far newer than the one in the released build. It runs on both so that
+      # bundling regressions surface on whichever distribution triggers them.
+      - name: Build AppImage (bundling regression check)
+        run: ./packaging/appimage/build-appimage.sh dist
