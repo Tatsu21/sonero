@@ -41,17 +41,18 @@ namespace {
 struct PageDef {
     const char* title;
     const char* subtitle;
+    bool ready;  // false -> placeholder page, and a nav pill that cannot be clicked
 };
 
 // Order here defines both the sidebar order and the stacked-page order.
 constexpr PageDef kPages[] = {
-    {"Dashboard", "Overview of your audio engine"},
-    {"Mixer",     "Per-channel volume, mute, solo, balance and live VU meters"},
-    {"Channels",  "Per-channel gain, output device and equalizer"},
-    {"Microphone", "Mic input gain, level, noise suppression, gate and monitoring"},
-    {"Devices",   "USB, Bluetooth, HDMI and external DAC detection & routing"},
-    {"Profiles",  "Save and load complete audio configurations"},
-    {"Settings",  "Application preferences, themes and performance options"},
+    {"Dashboard", "Overview of your audio engine", true},
+    {"Mixer",     "Per-channel volume, mute, solo, balance and live VU meters", true},
+    {"Channels",  "Per-channel gain, output device and equalizer", true},
+    {"Microphone", "Mic input gain, level, noise suppression, gate and monitoring", true},
+    {"Devices",   "USB, Bluetooth, HDMI and external DAC detection & routing", true},
+    {"Profiles",  "Save and load complete audio configurations", false},
+    {"Settings",  "Application preferences, themes and performance options", true},
 };
 
 QString toQString(std::string_view sv) {
@@ -264,15 +265,20 @@ void MainWindow::buildUi() {
     for (int i = 0; i < static_cast<int>(std::size(kPages)); ++i) {
         auto* tab = new QPushButton(QString::fromUtf8(kPages[i].title), topBar);
         tab->setCheckable(true);
-        tab->setCursor(Qt::PointingHandCursor);
+        tab->setCursor(kPages[i].ready ? Qt::PointingHandCursor : Qt::ArrowCursor);
         tab->setToolTip(QString::fromUtf8(kPages[i].subtitle));
+        // The pill carries its own sheet, so the theme's disabled rule does not
+        // reach it — the grey for a page that has nothing behind it is here.
         tab->setStyleSheet(
             QStringLiteral("QPushButton { background:%1; border:none; border-radius:9px;"
                            " padding:0 18px; color:#c8ccd8; font-size:14px; }"
                            "QPushButton:hover { color:#ffffff; }"
-                           "QPushButton:checked { color:#ffffff; font-weight:700; }")
+                           "QPushButton:checked { color:#ffffff; font-weight:700; }"
+                           "QPushButton:disabled { background:#15161c; color:#474b5c; }")
                 .arg(QString::fromUtf8(kTabTints[i % 7])));
         tab->setFixedHeight(38);
+        // Opening a placeholder only promises a module that is not there.
+        tab->setEnabled(kPages[i].ready);
         navGroup_->addButton(tab, i);
         topRow->addWidget(tab, 1, Qt::AlignVCenter);
     }
@@ -281,6 +287,10 @@ void MainWindow::buildUi() {
     int startRow = 0;
     if (const char* p = std::getenv("SONAR_PAGE")) {  // dev hook for screenshots
         startRow = QString::fromLatin1(p).toInt();
+    }
+    const QAbstractButton* startTab = navGroup_->button(startRow);
+    if (startTab == nullptr || !startTab->isEnabled()) {  // SONAR_PAGE may name a placeholder
+        startRow = 0;
     }
     if (QAbstractButton* first = navGroup_->button(startRow)) {
         first->setChecked(true);

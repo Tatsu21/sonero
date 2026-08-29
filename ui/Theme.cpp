@@ -175,6 +175,30 @@ QCheckBox::indicator {
 QCheckBox::indicator:hover { border-color: #6366f1; }
 QCheckBox::indicator:checked { background: #6366f1; border-color: #6366f1; }
 
+/* ---- Disabled: present in the UI, not yet wired to anything ---- */
+/* Qt's disabled palette never reaches these widgets — the rules above set their
+   colours outright — so every inert control needs its own grey here. One grey
+   for all of them, so "you cannot touch this" reads the same on a button, a
+   slider and a checkbox. */
+QPushButton:disabled { background: #171922; color: #4a4e63; border-color: #23262f; }
+QSlider::groove:horizontal:disabled,
+QSlider::groove:vertical:disabled,
+QSlider::sub-page:horizontal:disabled,
+QSlider::sub-page:vertical:disabled,
+QSlider::add-page:vertical:disabled { background: #23262f; }
+QSlider::handle:horizontal:disabled,
+QSlider::handle:vertical:disabled { background: #3a3e4e; border-color: #23262f; }
+QComboBox:disabled { background: #171922; color: #4a4e63; border-color: #23262f; }
+QComboBox::down-arrow:disabled { border-top: 5px solid #4a4e63; }
+QCheckBox:disabled { color: #4a4e63; }
+QCheckBox::indicator:disabled { background: #171922; border-color: #23262f; }
+#MicLevel::chunk:disabled { background: #2f333f; }
+/* An id selector outranks QLabel:disabled, so every named label needs its own
+   disabled colour or it stays bright next to the control it belongs to. */
+QLabel:disabled { color: #4a4e63; }
+#CardKey:disabled, #CardVal:disabled, #VolumeValue:disabled,
+#BalanceCaption:disabled, #ChannelName:disabled { color: #4a4e63; }
+
 /* ---- Scroll bars ---- */
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical { background: #2a2e3f; border-radius: 5px; min-height: 32px; }

@@ -69,7 +69,8 @@ QVBoxLayout* makeCard(QVBoxLayout* root, const QString& title, const QString& su
 QSlider* sliderRow(QVBoxLayout* body, const QString& label, int min, int max, int value,
                    const QString& suffix, bool enabled = true) {
     auto* row = new QHBoxLayout;
-    row->addWidget(caption(label));
+    auto* key = caption(label);
+    row->addWidget(key);
     auto* slider = new QSlider(Qt::Horizontal);
     slider->setRange(min, max);
     slider->setValue(value);
@@ -78,12 +79,23 @@ QSlider* sliderRow(QVBoxLayout* body, const QString& label, int min, int max, in
     val->setObjectName(QStringLiteral("VolumeValue"));
     val->setMinimumWidth(52);
     val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    // The caption and the readout are part of the control: a live-looking value
+    // beside a dead slider is the one thing that would still read as usable.
+    key->setEnabled(enabled);
+    val->setEnabled(enabled);
     QObject::connect(slider, &QSlider::valueChanged, val,
                      [val, suffix](int v) { val->setText(QStringLiteral("%1%2").arg(v).arg(suffix)); });
     row->addWidget(slider, 1);
     row->addWidget(val);
     body->addLayout(row);
     return slider;
+}
+
+// A checkbox for a card that is only prepared: shown, explained, not clickable.
+QCheckBox* preparedCheck(const QString& text) {
+    auto* box = new QCheckBox(text);
+    box->setEnabled(false);
+    return box;
 }
 }  // namespace
 
@@ -107,7 +119,8 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     auto* title = new QLabel(QStringLiteral("Microphone"), page);
     title->setObjectName(QStringLiteral("PageTitle"));
     auto* subtitle = new QLabel(
-        QStringLiteral("Your mic is a virtual source apps can select — shape it here"), page);
+        QStringLiteral("Your mic is a virtual source apps can select — shaping it arrives "
+                       "in a later stage"), page);
     subtitle->setObjectName(QStringLiteral("PageSubtitle"));
     auto* head = new QVBoxLayout;
     head->setSpacing(4);
@@ -115,25 +128,36 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     head->addWidget(subtitle);
     root->addLayout(head);
 
-    // --- Input (functional) ---
+    // --- Input (prepared) ---
+    // The wiring below is real — gain and mute reach the virtual mic and the
+    // meter polls it — but nothing of it takes effect yet, so the card is inert
+    // like the three below it. Re-enabling is a matter of flipping the
+    // setEnabled(false) calls and starting timer_ again.
     QVBoxLayout* input = makeCard(root, QStringLiteral("Input"),
-                                  QStringLiteral("Live gain, mute and level of the virtual mic."),
-                                  false);
+                                  QStringLiteral("Gain, mute and level of the virtual mic."),
+                                  true);
 
     auto* deviceRow = new QHBoxLayout;
-    deviceRow->addWidget(caption(QStringLiteral("Device")));
+    auto* deviceKey = caption(QStringLiteral("Device"));
+    deviceKey->setEnabled(false);
+    deviceRow->addWidget(deviceKey);
     auto* device = new QComboBox;
     device->addItem(QStringLiteral("System default microphone"));
-    device->setToolTip(QStringLiteral("Per-device selection arrives in a later stage."));
+    // Nothing reads this yet — the mic is always the system default. A disabled
+    // widget shows no tooltip, so the note that would explain it lives here.
+    device->setEnabled(false);
     deviceRow->addWidget(device, 1);
     input->addLayout(deviceRow);
 
-    gain_ = sliderRow(input, QStringLiteral("Input gain"), 0, 100, 100, QStringLiteral("%"));
+    gain_ = sliderRow(input, QStringLiteral("Input gain"), 0, 100, 100, QStringLiteral("%"), false);
     gainValue_ = nullptr;  // handled inside sliderRow
 
     auto* levelRow = new QHBoxLayout;
-    levelRow->addWidget(caption(QStringLiteral("Input level")));
+    auto* levelKey = caption(QStringLiteral("Input level"));
+    levelKey->setEnabled(false);
+    levelRow->addWidget(levelKey);
     level_ = new QProgressBar;
+    level_->setEnabled(false);
     level_->setObjectName(QStringLiteral("MicLevel"));
     level_->setRange(0, 100);
     level_->setValue(0);
@@ -142,7 +166,7 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     input->addLayout(levelRow);
 
     auto* muteRow = new QHBoxLayout;
-    mute_ = new QCheckBox(QStringLiteral("Mute microphone"));
+    mute_ = preparedCheck(QStringLiteral("Mute microphone"));
     muteRow->addWidget(mute_);
     muteRow->addStretch(1);
     input->addLayout(muteRow);
@@ -151,24 +175,24 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     QVBoxLayout* ns = makeCard(
         root, QStringLiteral("Noise Suppression"),
         QStringLiteral("Removes background noise (RNNoise). DSP is wired in a later stage."), true);
-    ns->addWidget(new QCheckBox(QStringLiteral("Enable noise suppression")));
-    sliderRow(ns, QStringLiteral("Strength"), 0, 100, 70, QStringLiteral("%"));
+    ns->addWidget(preparedCheck(QStringLiteral("Enable noise suppression")));
+    sliderRow(ns, QStringLiteral("Strength"), 0, 100, 70, QStringLiteral("%"), false);
 
     // --- Noise gate (prepared) ---
     QVBoxLayout* gate = makeCard(
         root, QStringLiteral("Noise Gate"),
         QStringLiteral("Silences the mic below a threshold — great for keyboards/fans."), true);
-    gate->addWidget(new QCheckBox(QStringLiteral("Enable noise gate")));
-    sliderRow(gate, QStringLiteral("Threshold"), -80, 0, -45, QStringLiteral(" dB"));
-    sliderRow(gate, QStringLiteral("Attack"), 0, 200, 10, QStringLiteral(" ms"));
-    sliderRow(gate, QStringLiteral("Release"), 0, 1000, 150, QStringLiteral(" ms"));
+    gate->addWidget(preparedCheck(QStringLiteral("Enable noise gate")));
+    sliderRow(gate, QStringLiteral("Threshold"), -80, 0, -45, QStringLiteral(" dB"), false);
+    sliderRow(gate, QStringLiteral("Attack"), 0, 200, 10, QStringLiteral(" ms"), false);
+    sliderRow(gate, QStringLiteral("Release"), 0, 1000, 150, QStringLiteral(" ms"), false);
 
     // --- Monitoring (prepared) ---
     QVBoxLayout* mon = makeCard(
         root, QStringLiteral("Monitoring"),
         QStringLiteral("Hear your own microphone in your headphones."), true);
-    mon->addWidget(new QCheckBox(QStringLiteral("Hear myself")));
-    sliderRow(mon, QStringLiteral("Monitor level"), 0, 100, 50, QStringLiteral("%"));
+    mon->addWidget(preparedCheck(QStringLiteral("Hear myself")));
+    sliderRow(mon, QStringLiteral("Monitor level"), 0, 100, 50, QStringLiteral("%"), false);
 
     root->addStretch(1);
 
@@ -200,10 +224,12 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
         controller_->setChannelMute(kMic, mute_->isChecked());
     }
 
+    // Left unstarted on purpose: it only drives the level meter, which is
+    // disabled. Starting it would poll the controller 22 times a second to paint
+    // a bar nobody can read. Start it again when the card goes live.
     timer_ = new QTimer(this);
     timer_->setInterval(45);
     connect(timer_, &QTimer::timeout, this, &MicrophonePage::refresh);
-    timer_->start();
 }
 
 void MicrophonePage::refresh() {

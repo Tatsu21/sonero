@@ -290,10 +290,14 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
         headsetEq_ = config::eqFromJson(settings_->section(QStringLiteral("headsetEq")), headsetEq_);
     }
 
+    // Disabled, not removed: the write path is real and the headset acknowledges
+    // every report, but the curve is never applied to the audio and nobody has
+    // worked out why (see hid/SKILL.md). Leaving the controls live would let the
+    // user move sliders that change nothing.
     QVBoxLayout* eqBody = makeCard(
         ss, QStringLiteral("Headset EQ"),
-        QStringLiteral("Drag the curve or the per-band sliders (32 Hz – 16 kHz) — written "
-                       "straight to the headset's onboard equalizer."));
+        QStringLiteral("Unavailable — the headset accepts these writes but never applies "
+                       "them. Use the equalizer on the Channels page instead."));
 
     struct Preset {
         const char* name;
@@ -310,7 +314,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     presetRow->setSpacing(8);
     for (const Preset& p : kPresets) {
         auto* button = new QPushButton(QString::fromUtf8(p.name));
-        button->setCursor(Qt::PointingHandCursor);
+        button->setEnabled(false);
         const std::array<int, 10> gains = p.gains;
         connect(button, &QPushButton::clicked, this, [this, gains] { applyHeadsetPreset(gains); });
         presetRow->addWidget(button);
@@ -319,6 +323,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     eqBody->addLayout(presetRow);
 
     eqCurve_ = new EqCurve;
+    eqCurve_->setEnabled(false);  // stops the drag and greys the curve
     eqCurve_->setMinimumHeight(150);
     eqCurve_->setSettings(headsetEq_);
     eqBody->addWidget(eqCurve_);
@@ -342,8 +347,10 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
         auto* value = new QLabel(QString::number(g));
         value->setObjectName(QStringLiteral("VolumeValue"));
         value->setAlignment(Qt::AlignHCenter);
+        value->setEnabled(false);  // the whole band column reads as inert
 
         auto* slider = new QSlider(Qt::Vertical);
+        slider->setEnabled(false);
         slider->setRange(-10, 10);
         slider->setValue(g);
         slider->setMinimumHeight(110);
@@ -351,6 +358,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
         auto* freq = new QLabel(QString::fromUtf8(kFreqLabels[i]));
         freq->setObjectName(QStringLiteral("BalanceCaption"));
         freq->setAlignment(Qt::AlignHCenter);
+        freq->setEnabled(false);
 
         col->addWidget(value);
         col->addWidget(slider, 1, Qt::AlignHCenter);

@@ -140,6 +140,13 @@ void EqCurve::leaveEvent(QEvent* /*event*/) {
 void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
+    // Disabled means the curve is not editable (Qt already withholds the mouse
+    // events); fading it is what says so. Every setOpacity below multiplies by
+    // this factor instead of replacing it, or the later layers — the response
+    // curve and the band nodes, the two things that look most clickable — would
+    // paint back at full strength.
+    const qreal dim = isEnabled() ? 1.0 : 0.3;
+    p.setOpacity(dim);
 
     const QRectF r = plotRect();
 
@@ -174,7 +181,7 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     }
 
     const bool on = settings_.enabled;
-    p.setOpacity(on ? 1.0 : 0.45);
+    p.setOpacity(dim * (on ? 1.0 : 0.45));
 
     // Response curve.
     QPainterPath curve;
@@ -225,7 +232,7 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
         p.drawEllipse(c, kNodeRadius, kNodeRadius);
     }
 
-    p.setOpacity(1.0);
+    p.setOpacity(dim);
 
     // Readout pill for the active band.
     if (active >= 0 && active < static_cast<int>(settings_.bands.size())) {
