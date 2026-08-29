@@ -116,3 +116,11 @@ jobs:
       # bundling regressions surface on whichever distribution triggers them.
       - name: Build AppImage (bundling regression check)
         run: ./packaging/appimage/build-appimage.sh dist
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonero-${{ matrix.name }}-unreleasable
+          path: dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
