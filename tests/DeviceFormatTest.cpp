@@ -1,5 +1,7 @@
 #include <QtTest>
 
+#include <unistd.h>
+
 #include <filesystem>
 #include <fstream>
 

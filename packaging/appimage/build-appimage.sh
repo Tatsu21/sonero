@@ -9,7 +9,8 @@
 #   2. builds Sonero in Release and installs it into an AppDir
 #   3. lets linuxdeploy bundle Qt and the remaining dependencies
 #   4. drops libpipewire from the bundle on purpose (see below)
-#   5. packs the AppDir into Sonero-<version>-x86_64.AppImage
+#   5. strips the bundle with the host's strip (see NO_STRIP below)
+#   6. packs the AppDir into Sonero-<version>-x86_64.AppImage
 #
 # Why libpipewire is NOT bundled: the client library loads SPA plugins from the
 # host (/usr/lib/.../spa-0.2). Shipping our own copy risks pairing it with the
@@ -90,6 +91,15 @@ fi
 # Wayland sessions need these beyond the default platform plugins.
 export EXTRA_QT_PLUGINS="${EXTRA_QT_PLUGINS:-wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration}"
 
+# linuxdeploy-plugin-qt ships its own strip from binutils 2.35, which predates
+# SHT_RELR support. Distributions that link with -z pack-relative-relocs (Arch,
+# recent Fedora/Ubuntu) produce libraries with a .relr.dyn section, and that
+# strip aborts on them:
+#     strip: ... unknown type [0x13] section `.relr.dyn'
+#     strip: Unable to recognise the format of the input file
+# Turn the bundled strip off and use the host's afterwards (see strip_appdir).
+export NO_STRIP=1
+
 log "bundling Qt and dependencies"
 "${TOOLS_DIR}/linuxdeploy" \
     --appdir "${APPDIR}" \
@@ -158,6 +168,24 @@ shopt -u nullglob
 if (( pw_removed )); then
     log "removed bundled libpipewire (host provides it)"
 fi
+
+# --- 4b. strip with the host toolchain ---------------------------------------
+# Replaces the stripping NO_STRIP disabled above. The host's binutils matches
+# the libraries we just bundled, so it understands whatever relocation format
+# they use.
+strip_appdir() {
+    if ! command -v strip >/dev/null; then
+        log "no host strip found - shipping unstripped binaries"
+        return 0
+    fi
+    local count=0 f
+    while IFS= read -r -d '' f; do
+        [[ "$(od -An -tx1 -N4 "${f}" | tr -d ' ')" == 7f454c46 ]] || continue
+        strip --strip-unneeded "${f}" 2>/dev/null && count=$((count + 1))
+    done < <(find "${APPDIR}/usr" -type f \( -perm -u+x -o -name '*.so*' \) -print0)
+    log "stripped ${count} binaries (host $(strip --version | head -1))"
+}
+strip_appdir
 
 # --- 5. pack -----------------------------------------------------------------
 mkdir -p "${OUTPUT_DIR}"
