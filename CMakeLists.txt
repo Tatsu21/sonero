@@ -13,18 +13,33 @@ cmake_minimum_required(VERSION 3.21)
 set(SONERO_FALLBACK_VERSION 0.0.0)
 set(SONERO_VERSION "${SONERO_FALLBACK_VERSION}")
 if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.git")
-    execute_process(COMMAND git describe --tags --abbrev=0
+    # -c safe.directory: inside a container the checkout is owned by a different
+    # uid than the build user, and git then refuses to read the repository at
+    # all. That is how a 0.1.0 release once got 0.0.0 packages — the Arch and
+    # Fedora jobs build in containers, their tag lookup failed, and the fallback
+    # went out under a release name.
+    execute_process(COMMAND git -c "safe.directory=${CMAKE_CURRENT_SOURCE_DIR}"
+                            describe --tags --abbrev=0
                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                     OUTPUT_VARIABLE SONERO_RELEASE_TAG
-                    ERROR_QUIET
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+                    ERROR_VARIABLE SONERO_GIT_ERROR
+                    RESULT_VARIABLE SONERO_GIT_RESULT
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_STRIP_TRAILING_WHITESPACE)
     # v1.2.3 and 1.2.3 both count. Anything else is not a release tag, and is
     # ignored rather than handed to project(), which would fail the configure.
     if(SONERO_RELEASE_TAG MATCHES "^v?([0-9]+\\.[0-9]+\\.[0-9]+)$")
         set(SONERO_VERSION "${CMAKE_MATCH_1}")
     elseif(SONERO_RELEASE_TAG)
         message(WARNING "Sonero: tag '${SONERO_RELEASE_TAG}' is not x.y.z — "
-                        "falling back to ${SONERO_FALLBACK_VERSION}")
+                        "building as ${SONERO_FALLBACK_VERSION}")
+    else()
+        # Loud on purpose. The previous version swallowed git's error, so a
+        # container that could not read the repository looked exactly like a
+        # tarball with no tags, and the mislabelling only surfaced at publish.
+        message(WARNING "Sonero: no release tag readable — building as "
+                        "${SONERO_FALLBACK_VERSION}. git exited "
+                        "${SONERO_GIT_RESULT}: ${SONERO_GIT_ERROR}")
     endif()
 endif()
 
@@ -67,7 +82,9 @@ if(GIT_FOUND AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     endif()
 
     macro(sonero_git output)
-        execute_process(COMMAND "${GIT_EXECUTABLE}" ${ARGN}
+        # safe.directory for the same reason as the tag lookup above.
+        execute_process(COMMAND "${GIT_EXECUTABLE}"
+                                -c "safe.directory=${CMAKE_CURRENT_SOURCE_DIR}" ${ARGN}
                         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                         OUTPUT_VARIABLE ${output}
                         ERROR_QUIET

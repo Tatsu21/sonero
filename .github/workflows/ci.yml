@@ -57,6 +57,14 @@ jobs:
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
 
+      # Fail here rather than at publish. The packages are named from this
+      # number, so a wrong one wastes the whole run and, worse, is only noticed
+      # once the release is already public.
+      - name: The version must be the tag's
+        if: github.event_name == 'release'
+        run: ./packaging/check-release-version.sh build/sonero-version.txt \
+               "${{ github.event.release.tag_name }}"
+
       - name: Build Debian package
         run: ./packaging/deb/build-deb.sh dist
 
@@ -116,11 +124,24 @@ jobs:
         with:
           fetch-depth: 0  # tags: see the build job
 
+      # These jobs run in a container as root while the checkout is owned by the
+      # runner user, and git refuses to read a repository it considers foreign.
+      # When that happens the tag lookup returns nothing and the build quietly
+      # calls itself the fallback version — which is how a 0.1.0 release ended up
+      # with 0.0.0 Arch and Fedora packages.
+      - name: Let git read the checkout from inside the container
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
       - name: Build and test
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
+
+      - name: The version must be the tag's
+        if: github.event_name == 'release'
+        run: ./packaging/check-release-version.sh build/sonero-version.txt \
+               "${{ github.event.release.tag_name }}"
 
       # Runs on both so that bundling regressions surface on whichever
       # distribution triggers them, and ships alongside the portable build for
