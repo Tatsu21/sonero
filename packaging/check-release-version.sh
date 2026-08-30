@@ -19,7 +19,11 @@ if [[ ! -r "${FILE}" ]]; then
 fi
 
 resolved="$(tr -d '[:space:]' < "${FILE}")"
-expected="${TAG#v}"
+# Trim the tag too. A tag name never contains whitespace, and a caller that
+# passes some — a folded YAML line continuation is the way that happens — should
+# not turn into a version mismatch that sends you hunting through git.
+expected="$(printf '%s' "${TAG}" | tr -d '[:space:]')"
+expected="${expected#v}"
 
 echo "resolved '${resolved}', release tag '${TAG}'"
 if [[ "${resolved}" != "${expected}" ]]; then
