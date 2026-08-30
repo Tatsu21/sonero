@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  # Publishing a release re-runs the build and attaches its packages to it, so
+  # what ships is built from the tagged commit rather than uploaded by hand.
+  release:
+    types: [published]
 
 jobs:
   build:
@@ -111,16 +115,80 @@ jobs:
           cmake --build build --parallel
           ctest --test-dir build --output-on-failure
 
-      # Not an artifact anyone should ship — an AppImage built here links a glibc
-      # far newer than the one in the released build. It runs on both so that
-      # bundling regressions surface on whichever distribution triggers them.
-      - name: Build AppImage (bundling regression check)
+      # Runs on both so that bundling regressions surface on whichever
+      # distribution triggers them, and ships alongside the portable build for
+      # users on a distribution as new as this one.
+      - name: Build AppImage
         run: ./packaging/appimage/build-appimage.sh dist
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: Sonero-${{ matrix.name }}-unreleasable
+          name: Sonero-${{ matrix.name }}
           path: dist/*.AppImage
           if-no-files-found: error
-          retention-days: 7
+
+  # Attaches the packages to the release that triggered this run. Skipped on
+  # every other event.
+  publish:
+    if: github.event_name == 'release'
+    needs: [build, rolling]  # the release carries packages from both
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # gh release upload writes to the repository
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every package this run produced, each artifact in its own directory:
+      # merging them would be silent data loss, since all three AppImages are
+      # called Sonero-<version>-x86_64.AppImage.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Sonero-*
+          path: artifacts
+
+      - name: Collect the packages under names that do not collide
+        run: |
+          mkdir -p dist
+          # Both runners emit sonero_<version>_amd64.deb. Fold the target into
+          # the version part rather than the middle of the name, so the file
+          # keeps the name_version_arch shape Debian tooling expects.
+          for dir in artifacts/Sonero-mint*; do
+            target="${dir##*-}"  # Sonero-mint21-ubuntu2204 -> ubuntu2204
+            for f in "${dir}"/*.deb; do
+              cp "${f}" "dist/$(basename "${f}" _amd64.deb)-${target}_amd64.deb"
+            done
+          done
+          # Built on the oldest glibc, so it runs on the most systems: this is
+          # the one to download, and it keeps the plain name.
+          cp artifacts/Sonero-mint21-ubuntu2204/*.AppImage dist/
+          # The rolling-distribution builds need their distribution in the name.
+          for dir in artifacts/Sonero-arch artifacts/Sonero-fedora; do
+            distro="${dir##*-}"
+            for f in "${dir}"/*.AppImage; do
+              cp "${f}" "dist/$(basename "${f}" -x86_64.AppImage)-${distro}-x86_64.AppImage"
+            done
+          done
+
+      # A tag that disagrees with the project version would attach, say,
+      # Sonero-0.1.2-...AppImage to a release called v0.1.3. Catch it here rather
+      # than shipping binaries whose name contradicts the release they sit under.
+      - name: Check the tag matches the project version
+        run: |
+          version="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9.]\+\).*/\1/p' \
+              CMakeLists.txt | head -1)"
+          tag="${{ github.event.release.tag_name }}"
+          echo "CMakeLists.txt: ${version}    tag: ${tag}"
+          if [ "${tag#v}" != "${version}" ]; then
+            echo "::error::tag ${tag} does not match VERSION ${version} in CMakeLists.txt"
+            exit 1
+          fi
+
+      - name: Attach the packages to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release upload "${{ github.event.release.tag_name }}" dist/* \
+            --clobber --repo "${{ github.repository }}"
