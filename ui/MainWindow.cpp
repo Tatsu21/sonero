@@ -15,12 +15,14 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
+#include <QAction>
 #include <QMenu>
 #include <QPixmap>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QSystemTrayIcon>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -33,6 +35,7 @@
 #include "ui/SettingsPage.h"
 #include "ui/MicrophonePage.h"
 #include "ui/MixerPage.h"
+#include "ui/TrayMixer.h"
 
 namespace sonar::ui {
 
@@ -214,8 +217,12 @@ void MainWindow::buildUi() {
         } else if (titleView == "Microphone") {
             pages_->addWidget(new MicrophonePage(controller_, settings_));
         } else if (titleView == "Devices") {
-            pages_->addWidget(
-                new DevicesPage(audioDevices_, deviceFormats_, settings_, notifier_));
+            devicesPage_ = new DevicesPage(audioDevices_, deviceFormats_, settings_, notifier_);
+            // The page already polls both battery sources (USB HID and BlueZ);
+            // the tray reads its results rather than polling them a second time.
+            connect(devicesPage_, &DevicesPage::batteriesChanged, this,
+                    &MainWindow::showBatteries);
+            pages_->addWidget(devicesPage_);
         } else if (titleView == "Settings") {
             pages_->addWidget(new SettingsPage(notifier_, settings_));
         } else {
@@ -365,6 +372,14 @@ void MainWindow::buildUi() {
     setCentralWidget(central);
 
     buildTrayIcon();  // enables running in the background
+
+    // The page polled once while it was being constructed — before the connect
+    // above existed and before there was a tray to draw into — and it stays quiet
+    // until a level moves. Without this seeding, the menu shows no batteries at
+    // all until one of them happens to change.
+    if (devicesPage_ != nullptr) {
+        showBatteries(devicesPage_->batteries());
+    }
 }
 
 void MainWindow::buildTrayIcon() {
@@ -375,6 +390,14 @@ void MainWindow::buildTrayIcon() {
     trayIcon_->setToolTip(QStringLiteral("Sonero"));
 
     auto* menu = new QMenu(this);
+    trayMenu_ = menu;  // showBatteries() inserts its entries at the top
+    if (mixerPage_ != nullptr) {
+        // The faders open as a window rather than living in this menu: a desktop
+        // that takes the menu over DBusMenu (GNOME with AppIndicator, KDE) drops
+        // embedded widgets, so a slider here would arrive as an empty row.
+        QAction* volumeAction = menu->addAction(QStringLiteral("Volume…"));
+        connect(volumeAction, &QAction::triggered, this, &MainWindow::showTrayMixer);
+    }
     QAction* showAction = menu->addAction(QStringLiteral("Show Sonero"));
     connect(showAction, &QAction::triggered, this, [this] {
         showNormal();
@@ -401,6 +424,62 @@ void MainWindow::buildTrayIcon() {
                 }
             });
     trayIcon_->show();
+}
+
+void MainWindow::showTrayMixer() {
+    if (mixerPage_ == nullptr) {
+        return;
+    }
+    if (trayMixer_ != nullptr && trayMixer_->isVisible()) {
+        trayMixer_->close();  // the menu entry toggles: a second click puts it away
+        return;
+    }
+    if (trayMixer_ == nullptr) {
+        trayMixer_ = std::make_unique<TrayMixer>(mixer_);
+        // Both directions: the window asks the mixer page to change a volume, and
+        // follows the page when a fader there (or the master rescale) moves one.
+        connect(trayMixer_.get(), &TrayMixer::volumeChanged, mixerPage_,
+                &MixerPage::applyChannelVolume);
+        connect(mixerPage_, &MixerPage::channelVolumeChanged, trayMixer_.get(),
+                &TrayMixer::showVolume);
+    }
+    // Off the menu-activation stack. A StatusNotifier host (gnome-shell here)
+    // still holds its own input grab while it runs this action; showing and
+    // focusing a window inside that window leaves the grab hanging, and the whole
+    // desktop stops responding to clicks. Let the shell finish closing the menu
+    // first.
+    QTimer::singleShot(0, this, [this] { trayMixer_->popUp(); });
+}
+
+void MainWindow::showBatteries(const QList<BatteryLevel>& levels) {
+    if (trayMenu_ == nullptr) {
+        return;  // no system tray on this desktop
+    }
+    // Rebuild rather than edit in place: devices come and go, so the count
+    // changes, not just the numbers.
+    for (QAction* action : batteryActions_) {
+        trayMenu_->removeAction(action);
+        delete action;
+    }
+    batteryActions_.clear();
+    if (levels.isEmpty()) {
+        return;  // nothing with a battery is connected: no entries, no separator
+    }
+
+    // Above "Show Sonero", so the reading is the first thing the menu shows.
+    QAction* before = trayMenu_->actions().value(0);
+    for (const BatteryLevel& level : levels) {
+        const QString text = level.charging
+                                 ? QStringLiteral("%1 — %2% (charging)")
+                                       .arg(level.device)
+                                       .arg(level.percent)
+                                 : QStringLiteral("%1 — %2%").arg(level.device).arg(level.percent);
+        auto* entry = new QAction(text, trayMenu_);
+        entry->setEnabled(false);  // a reading, not a command
+        trayMenu_->insertAction(before, entry);
+        batteryActions_.append(entry);
+    }
+    batteryActions_.append(trayMenu_->insertSeparator(before));
 }
 
 void MainWindow::quitApplication() {

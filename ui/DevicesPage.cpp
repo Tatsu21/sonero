@@ -147,6 +147,9 @@ int codecRank(const std::string& codec) {
 
 // Battery percentage of a Bluetooth output via BlueZ (org.bluez.Battery1). Needs
 // BlueZ "Experimental = true"; returns nullopt when the device exposes no battery.
+// Spelled once: the Devices card and the tray menu must not drift apart.
+constexpr auto kHeadsetName = "Arctis Nova Pro Wireless";
+
 std::optional<int> btBatteryPercent(const std::string& nodeName) {
     const std::string prefix = "bluez_output.";
     const auto p = nodeName.find(prefix);
@@ -253,7 +256,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     }
 
     QVBoxLayout* body = makeCard(
-        ss, QStringLiteral("SteelSeries Arctis Nova Pro Wireless"),
+        ss, QStringLiteral("SteelSeries %1").arg(QString::fromUtf8(kHeadsetName)),
         QStringLiteral("USB base station · onboard battery, transmission format and equalizer"));
 
     statusLabel_ = new QLabel(QStringLiteral("● Connected"));
@@ -386,7 +389,7 @@ void DevicesPage::syncDevices() {
         if (rev != lastDevicesRev_) {
             lastDevicesRev_ = rev;
             clearLayout(deviceListBody_);
-            btBatteryLabels_.clear();  // labels were just deleted with the rows
+            btBatteries_.clear();  // labels were just deleted with the rows
             const std::vector<audio::AudioDevice> list = devices_->outputDevices();
             // Forget auto-prefer state for devices that went away, so a reconnect
             // re-applies the best codec.
@@ -436,9 +439,14 @@ void DevicesPage::syncDevices() {
         }
     }
 
-    // Refresh Bluetooth battery levels in place (they drift over time).
-    for (auto& [label, nodeName] : btBatteryLabels_) {
-        updateBtBattery(label, nodeName);
+    // Refresh Bluetooth battery levels in place (they drift over time), and
+    // collect them for the tray.
+    QList<BatteryLevel> levels;
+    for (const BtBattery& bt : btBatteries_) {
+        const std::optional<int> pct = updateBtBattery(bt.label, bt.nodeName);
+        if (pct.has_value()) {
+            levels.append({QString::fromStdString(bt.description), *pct, false});
+        }
     }
 
     // The SteelSeries HID controls follow the base station's USB presence.
@@ -450,10 +458,25 @@ void DevicesPage::syncDevices() {
         if (!device_.isOpen()) {
             device_.open();
         }
-        refresh();
+        refresh();  // fills headsetPercent_ / headsetCharging_
     } else {
         device_.close();
+        headsetPercent_ = -1;
     }
+
+    publishBatteries(std::move(levels));
+}
+
+void DevicesPage::publishBatteries(QList<BatteryLevel> levels) {
+    // The headset leads: it is the one whose charge runs out mid-call.
+    if (headsetPercent_ >= 0) {
+        levels.prepend({QString::fromUtf8(kHeadsetName), headsetPercent_, headsetCharging_});
+    }
+    if (levels == lastBatteries_) {
+        return;  // nothing moved; leave any menu built from this alone
+    }
+    lastBatteries_ = levels;
+    emit batteriesChanged(levels);
 }
 
 void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& dev) {
@@ -571,7 +594,7 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
     if (dev.type == audio::DeviceType::Bluetooth) {
         auto* bat = new QLabel;
         updateBtBattery(bat, dev.name);
-        btBatteryLabels_.push_back({bat, dev.name});
+        btBatteries_.push_back({bat, dev.name, dev.description});
         h->addWidget(bat);
     }
 
@@ -581,11 +604,11 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
     body->addWidget(row);
 }
 
-void DevicesPage::updateBtBattery(QLabel* label, const std::string& nodeName) {
+std::optional<int> DevicesPage::updateBtBattery(QLabel* label, const std::string& nodeName) {
     const std::optional<int> pct = btBatteryPercent(nodeName);
     if (!pct.has_value()) {
         label->setVisible(false);
-        return;
+        return std::nullopt;
     }
     const int p = *pct;
     const char* color = p <= 20 ? "#ff5c7a" : (p <= 40 ? "#facc15" : "#4ade80");
@@ -607,6 +630,7 @@ void DevicesPage::updateBtBattery(QLabel* label, const std::string& nodeName) {
     } else if (p > 25) {
         btLowWarned_.erase(nodeName);
     }
+    return pct;
 }
 
 void DevicesPage::buildFormatCard(QVBoxLayout* root) {
@@ -812,6 +836,7 @@ void DevicesPage::refresh() {
     if (!s.valid) {
         statusLabel_->setText(QStringLiteral("● No response"));
         statusLabel_->setStyleSheet(QStringLiteral("color:#ff5c7a; font-weight:800;"));
+        headsetPercent_ = -1;
         return;
     }
     // The dock stays reachable even when the headset itself is powered off, so
@@ -830,6 +855,11 @@ void DevicesPage::refresh() {
             statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
             break;
     }
+
+    // A powered-off headset reports no meaningful charge, so it drops out of the
+    // tray rather than showing a stale number.
+    headsetCharging_ = s.state == hid::HeadsetState::Charging;
+    headsetPercent_ = s.state == hid::HeadsetState::Offline ? -1 : s.headsetPercent;
 
     const auto apply = [](QProgressBar* bar, QLabel* pct, int value) {
         bar->setValue(value < 0 ? 0 : value);

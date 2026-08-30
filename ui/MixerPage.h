@@ -49,7 +49,17 @@ signals:
 
     void channelGainDbChanged(audio::ChannelId id, float gainDb);
 
+    // A channel's own fader moved, wherever it was moved from. Lets a second view
+    // of the same channel (the tray mixer) follow without polling.
+    void channelVolumeChanged(audio::ChannelId id, float volume);
+
 public:
+    // The single path that changes a channel's volume: updates the model, pushes
+    // it to PipeWire with the master multiplier applied, persists it, and moves
+    // this page's own strip. Every other view drives volume through here rather
+    // than repeating those four steps.
+    void applyChannelVolume(audio::ChannelId id, float volume);
+
     // Called by the Channels page, which owns the gain / auto / output controls
     // while the metering loop that drives auto-gain stays here.
     void applyChannelGainDb(audio::ChannelId id, float gainDb);

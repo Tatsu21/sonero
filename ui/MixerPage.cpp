@@ -129,19 +129,7 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
         auto* strip = new ChannelStrip(id, toQString(audio::channelName(id)), this);
         strip->setState(mixer_.state(id));
 
-        connect(strip, &ChannelStrip::volumeChanged, this, [this](ChannelId ch, float v) {
-            mixer_.setVolume(ch, v);
-            if (controller_ != nullptr) {
-                // Moving the master rescales every channel, so re-push them all.
-                if (ch == kMasterChannel) {
-                    pushChannelVolumes();
-                } else {
-                    controller_->setChannelVolume(
-                        ch, v * mixer_.state(kMasterChannel).volume);
-                }
-            }
-            saveMixerState();
-        });
+        connect(strip, &ChannelStrip::volumeChanged, this, &MixerPage::applyChannelVolume);
         strip->setStreamLevel(streamLevel_.count(static_cast<int>(id)) != 0
                                   ? streamLevel_[static_cast<int>(id)]
                                   : 1.0f);
@@ -308,6 +296,28 @@ void MixerPage::pushMuteStates() {
         if (id == ChannelId::Microphone) continue;
         controller_->setChannelMute(id, !mixer_.isAudible(id) || masterSilent);
     }
+}
+
+void MixerPage::applyChannelVolume(ChannelId id, float volume) {
+    mixer_.setVolume(id, volume);
+    if (controller_ != nullptr) {
+        // Moving the master rescales every channel, so re-push them all.
+        if (id == kMasterChannel) {
+            pushChannelVolumes();
+        } else {
+            controller_->setChannelVolume(id, volume * mixer_.state(kMasterChannel).volume);
+        }
+    }
+    saveMixerState();
+
+    // Report what the model actually holds, not what was asked for: setVolume
+    // clamps. setState blocks the strip's signals, so this cannot echo back.
+    const float stored = mixer_.state(id).volume;
+    if (const auto it = stripByChannel_.find(static_cast<int>(id));
+        it != stripByChannel_.end() && it->second != nullptr) {
+        it->second->setState(mixer_.state(id));
+    }
+    emit channelVolumeChanged(id, stored);
 }
 
 void MixerPage::applyChannelGainDb(ChannelId id, float gainDb) {

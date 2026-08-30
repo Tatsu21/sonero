@@ -2,12 +2,15 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <QList>
+#include <QString>
 #include <QWidget>
 
 #include "audio/DeviceFormat.h"
@@ -36,6 +39,16 @@ namespace sonar::ui {
 class EqCurve;
 class Notifier;
 
+// One connected device's battery, as the tray menu shows it. Reported by
+// DevicesPage, which already polls both sources (USB HID and BlueZ).
+struct BatteryLevel {
+    QString device;
+    int percent = -1;
+    bool charging = false;
+
+    bool operator==(const BatteryLevel&) const = default;
+};
+
 // Lists every connected audio output (USB, Bluetooth, HDMI, S/PDIF, analog) live
 // — devices appear and disappear as they are plugged / unplugged. The SteelSeries
 // Arctis Nova Pro base station additionally gets its onboard controls (battery,
@@ -49,13 +62,26 @@ public:
                          config::SettingsStore* settings = nullptr, Notifier* notifier = nullptr,
                          QWidget* parent = nullptr);
 
+    // The levels as of the last poll. The first poll happens inside the
+    // constructor, before any caller can connect to batteriesChanged(), and the
+    // signal then stays quiet until something changes — so a listener has to seed
+    // itself from this rather than wait for an edge that already went by.
+    [[nodiscard]] const QList<BatteryLevel>& batteries() const { return lastBatteries_; }
+
+signals:
+    // Emitted only when a level actually changes, so a listener can rebuild a
+    // menu without doing it every 1.5 s poll.
+    void batteriesChanged(const QList<BatteryLevel>& levels);
+
 private:
     // Rebuilds the connected-outputs list when the device set changes; keeps the
     // SteelSeries controls shown only while the base station is present.
     void syncDevices();
     void buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& dev);
     void buildSteelSeriesControls(QVBoxLayout* parent);
-    void updateBtBattery(QLabel* label, const std::string& nodeName);
+    // Refreshes the row's badge and hands back the level it found, if any.
+    std::optional<int> updateBtBattery(QLabel* label, const std::string& nodeName);
+    void publishBatteries(QList<BatteryLevel> levels);  // headset first, then Bluetooth
 
     void refresh();  // SteelSeries battery / status
     void onEqBandChanged(int index, float gainDb);
@@ -84,8 +110,13 @@ private:
     QWidget* steelSeriesCard_ = nullptr;      // battery + EQ (hidden when absent)
     std::uint64_t lastDevicesRev_ = ~0ULL;    // force the initial build
     QTimer* timer_ = nullptr;
-    // Bluetooth battery labels to refresh each tick: {label, device node.name}.
-    std::vector<std::pair<QLabel*, std::string>> btBatteryLabels_;
+    // Bluetooth outputs whose battery is polled each tick.
+    struct BtBattery {
+        QLabel* label;            // the row's "\U0001f50b 78%" badge
+        std::string nodeName;     // PipeWire node.name; keys the BlueZ lookup
+        std::string description;  // human name, for the tray menu
+    };
+    std::vector<BtBattery> btBatteries_;
     // Bluetooth outputs already switched to their best codec on connect (keyed by
     // node.name). Pruned when a device disappears so a reconnect re-applies.
     std::unordered_set<std::string> autoPreferredDevices_;
@@ -97,6 +128,9 @@ private:
     QLabel* statusLabel_ = nullptr;
     QProgressBar* headsetBar_ = nullptr;
     QLabel* headsetPct_ = nullptr;
+    int headsetPercent_ = -1;        // last reading; -1 when the dock is absent
+    bool headsetCharging_ = false;
+    QList<BatteryLevel> lastBatteries_;  // what was last emitted, to skip no-ops
     QLabel* rawLabel_ = nullptr;
 
     EqCurve* eqCurve_ = nullptr;

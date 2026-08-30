@@ -1,6 +1,11 @@
 #pragma once
 
+#include <memory>
+
+#include <QList>
 #include <QMainWindow>
+
+#include "ui/DevicesPage.h"  // BatteryLevel, reported to the tray menu
 
 namespace sonar::audio {
 class IAudioBackend;
@@ -19,7 +24,11 @@ class SettingsStore;
 namespace sonar::ui {
 class Notifier;
 class MixerPage;
+class TrayMixer;
 }
+
+class QAction;
+class QMenu;
 
 class QButtonGroup;
 class QListWidget;
@@ -51,6 +60,9 @@ protected:
 private:
     void buildUi();
     void buildTrayIcon();
+    void showTrayMixer();  // the volume faders, as a window the tray opens
+    // Rewrites the battery entries at the top of the tray menu.
+    void showBatteries(const QList<BatteryLevel>& levels);
     void showBackgroundHintOnce();  // one-time "still running" hint on first hide
     [[nodiscard]] bool runInBackgroundEnabled() const;
     void quitApplication();
@@ -70,6 +82,12 @@ private:
     QButtonGroup* navGroup_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     QSystemTrayIcon* trayIcon_ = nullptr;         // owned via QObject parenting
+    DevicesPage* devicesPage_ = nullptr;          // seeds the tray's battery entries
+    // Its own top-level window, not a child: a Qt::Tool child is hidden along
+    // with its parent, and the tray must stay usable while the window is hidden.
+    std::unique_ptr<TrayMixer> trayMixer_;
+    QMenu* trayMenu_ = nullptr;                   // null when no tray is available
+    QList<QAction*> batteryActions_;              // rebuilt as levels change
     bool forceQuit_ = false;                       // set by the tray's Quit action
 };
 
