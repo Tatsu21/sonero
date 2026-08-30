@@ -45,23 +45,31 @@ to two different devices at once.
 |---|---|
 | 🎚️ | **Six output channels** — Master (System), Game, Chat, Media, Browser, Aux. Volume, mute, solo, balance and live VU meters per channel. |
 | 🧲 | **Drag-free app routing** — every playing app shows up as a chip; move it to a channel and it stays there across restarts. |
-| 🎛️ | **Equalizer per channel** in 10, 15 or 31 bands, with 20+ built-in presets (music, gaming, voice, movie) plus save / import / export of your own. |
+| 🎛️ | **Equalizer per channel** in 10, 15 or 31 bands, with 24 built-in presets (music, gaming, voice, movie) plus save / import / export of your own. |
 | 🔊 | **Per-channel gain, set automatically on request** — it holds the highest gain (up to +6 dB) that keeps the channel's real output clear of full scale: quiet material climbs, a peak that overshoots is taken back by exactly what it overshot. Slow up, immediate down, so nothing breathes. |
 | 🎥 | **Streaming mix for OBS** — a `Sonero Stream` input source with an independent send level per channel, so your viewers hear a different balance than you do. |
-| 🎤 | **Virtual microphone** with input gain, mute and level metering; it appears to apps as a normal source. |
+| 🎤 | **Virtual microphone** — a `Sonero Microphone` source your apps can select like any other. Its gain, mute and level controls are laid out but not yet wired, and the page says so. |
 | 🎧 | **Any output device** — USB, Bluetooth, HDMI, S/PDIF and analog, each detected and badged automatically, each with its own output selection per channel. |
 | 💿 | **Per-device transmission format** — sample rate and bit depth up to 24-bit / 96 kHz, written as a per-device WirePlumber drop-in, so changing one device never disturbs the others. |
 | 📶 | **Bluetooth done properly** — automatic switch to the best A2DP codec the headset offers, ranked from LDAC (untested — see below) and aptX down to SBC, plus battery level through BlueZ. |
 | 🔋 | **SteelSeries headsets** — battery read straight from the base station over USB HID (Arctis Nova Pro Wireless and relatives), on top of everything above. |
 | 💾 | **Everything persists** — first launch gives you sane defaults; every change you make is remembered for the next session. |
-| 🖥️ | **A real desktop app** — tray icon, desktop notifications, autostart at login and background operation so your channels stay alive when the window is closed. |
+| 🖥️ | **A real desktop app** — tray icon, desktop notifications, autostart at login and background operation so your channels stay alive when the window is closed. The tray menu shows the battery of every connected device and opens a compact volume window for the channels. |
 
 <details>
 <summary><b>Not there yet</b></summary>
 
-- **Profiles** page — saving whole configurations as named profiles is stubbed out.
-- **Microphone DSP** — noise suppression, gate and monitoring are laid out in the UI and marked `PREPARED`; the DSP behind them is not wired.
-- **SteelSeries hardware EQ** — the HID writes succeed but produce no audible change on the tested dock; treat it as unsupported.
+Unfinished parts are greyed out and labelled in the app rather than left looking
+clickable, so nothing pretends to work:
+
+- **Profiles** — saving whole configurations as named profiles is not implemented; the
+  tab is disabled.
+- **Microphone page** — the virtual source is live and apps can record from it, but every
+  control on that page (gain, mute, level, noise suppression, gate, monitoring) is inert
+  and marked `PREPARED`. The DSP behind them is not wired.
+- **SteelSeries hardware EQ** — the HID writes are accepted by the dock and change nothing
+  audible; unsolved, so the card is disabled. Use the per-channel equalizer instead, which
+  runs in software and works with any headset.
 
 </details>
 
@@ -91,22 +99,24 @@ is built in spare time, by one person, and it will move at that pace.
 
 ## Install
 
+Download from the **[Releases page](https://github.com/Tatsu21/sonero/releases)** — every
+release carries all of the packages below. Pushes to `main` also refresh a `nightly`
+prerelease there if you would rather run what is being worked on; it is rebuilt from
+whatever the branch holds and is not a release.
+
 ### Debian, Ubuntu, Linux Mint — the `.deb`
 
 The best experience: apt pulls in Qt for you, and the package installs the udev rule
 that grants SteelSeries HID access, so headset battery works with no extra steps.
 
 ```sh
-sudo apt install ./sonero_0.1.1_amd64.deb
+sudo apt install ./sonero_0.1.1-ubuntu2204_amd64.deb
 ```
 
-Grab a package from **[Actions → the latest CI run → Artifacts](https://github.com/Tatsu21/sonero/actions)**,
-matching your base:
-
-| Artifact | For |
+| File | For |
 |---|---|
-| `Sonero-mint21-ubuntu2204` | Ubuntu 22.04, Linux Mint 21.x |
-| `Sonero-mint22-ubuntu2404` | Ubuntu 24.04, Linux Mint 22.x |
+| `sonero_<version>-ubuntu2204_amd64.deb` | Ubuntu 22.04, Linux Mint 21.x |
+| `sonero_<version>-ubuntu2404_amd64.deb` | Ubuntu 24.04, Linux Mint 22.x |
 
 > A `.deb` links against the distribution's own Qt, so one built on Ubuntu 24.04 will
 > not install on Mint 21. Build for another target with
@@ -122,10 +132,24 @@ chmod +x Sonero-*-x86_64.AppImage
 ./Sonero-*-x86_64.AppImage
 ```
 
-On first run it adds itself to your application menu. It needs FUSE 2
-(`libfuse2` / `fuse2`), or run it with `--appimage-extract-and-run`.
+| File | For |
+|---|---|
+| `Sonero-<version>-x86_64.AppImage` | **take this one** — built on the oldest glibc, so it runs almost anywhere |
+| `Sonero-<version>-arch-x86_64.AppImage` | Arch, or a distribution at least as new |
+| `Sonero-<version>-fedora-x86_64.AppImage` | Fedora, or a distribution at least as new |
 
-The AppImage is a CI artifact too, or build one yourself:
+The last two exist because CI builds on those distributions to catch bundling
+regressions; they link a newer glibc and offer nothing the portable one does not.
+
+It needs FUSE 2 (`libfuse2` / `fuse2`), or run it with `--appimage-extract-and-run`.
+
+**On first run it adds itself to your application menu — and deletes the AppImage it
+replaces.** Updating means downloading a new file, so without that every version you
+ever ran would pile up in `~/Downloads`. It only ever removes a bundle a previous run
+recorded, never a file it went looking for, and never the one you just started. If you
+keep two versions side by side on purpose, running one deletes the other.
+
+Or build one yourself:
 
 ```sh
 ./packaging/appimage/build-appimage.sh dist
@@ -302,11 +326,19 @@ you the exact commands before running them.
 | `BUILD_TESTING` | `ON` | Build the QtTest suites. |
 | `CMAKE_BUILD_TYPE` | `RelWithDebInfo` | Set explicitly for release builds. |
 
+**Where the version comes from.** The number is the latest `git tag` that looks like
+`x.y.z` (a leading `v` is fine), so cutting a release is one tag and not a tag plus an
+edit somewhere. A build with no readable tag — a source tarball, a clone without tags —
+falls back to `SONERO_FALLBACK_VERSION` in `CMakeLists.txt` and says so loudly in the
+configure output. The app shows the exact commit too: **Settings → About** reads
+`0.1.1 (main@1a2b3c)`, or the tag alone on a release build.
+
 </details>
 
-> **A note on CI coverage:** the pipeline builds and tests on Ubuntu 22.04 and 24.04.
-> The Arch, Fedora and openSUSE dependency lists are the standard equivalents and are
-> verified by contributors rather than by CI — open an issue if a package name drifts.
+> **A note on CI coverage:** the pipeline builds and tests on Ubuntu 22.04 and 24.04,
+> and in Arch and Fedora containers — rolling distributions carry the newest toolchains,
+> so they break a build long before an LTS runner notices. The openSUSE list is the
+> standard equivalent but is not built by CI; open an issue if a package name drifts.
 
 ---
 
@@ -345,13 +377,14 @@ Sonero keeps the audio engine free of Qt, so it can be tested headlessly and reu
 sonero/
 ├── app/       Composition root: main, Application, single-instance guard, autostart
 ├── ui/        Qt6 Widgets — pages (Mixer, Channels, Microphone, Devices, Settings)
+│   │           plus the tray's compact volume window
 │   └── widgets/   ChannelStrip, AppChip, EqCurve, VuMeter
 ├── audio/     Backend interfaces + PipeWireManager, Mixer, device formats
 ├── dsp/       Equalizer (biquad cascade) and AutoGain
 ├── hid/       SteelSeries base-station protocol over hidraw
-├── core/      Logging and a std::format stand-in for older toolchains
+├── core/      Logging, version string, a std::format stand-in for older toolchains
 ├── config/    Debounced JSON settings store
-├── packaging/ .deb, AppImage, icons, udev rules
+├── packaging/ .deb, AppImage, icons, udev rules, CI helper scripts
 ├── docs/      Install guide and notes
 └── tests/     QtTest suites
 ```
