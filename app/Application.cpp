@@ -3,6 +3,8 @@
 #include "app/AutoStart.h"
 
 #include "app/SystemSetup.h"
+
+#include "core/Version.h"
 #include "audio/IAppRouter.h"
 #include "audio/IAudioDevices.h"
 #include "audio/IChannelController.h"
@@ -29,7 +31,7 @@ Application::Application(std::unique_ptr<audio::IAudioBackend> backend,
 Application::~Application() = default;
 
 void Application::start(bool background) {
-    log::info("Sonero {} starting{}", SONAR_VERSION, background ? " (background)" : "");
+    log::info("Sonero {} starting{}", versionString(), background ? " (background)" : "");
 
     // Portable (AppImage) runs register themselves with the desktop on first
     // start: menu entry + icons under ~/.local/share. Purely user-level and

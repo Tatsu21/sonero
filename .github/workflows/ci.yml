@@ -35,7 +35,12 @@ jobs:
     name: ${{ matrix.target }}
 
     steps:
+      # fetch-depth: 0 — the version comes from the latest release tag, and the
+      # default shallow checkout fetches no tags at all, so every build would
+      # quietly fall back to the number in CMakeLists.txt.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install build dependencies
         run: |
@@ -108,6 +113,8 @@ jobs:
             desktop-file-utils file curl
 
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tags: see the build job
 
       - name: Build and test
         run: |
@@ -138,7 +145,10 @@ jobs:
       contents: write  # gh release upload writes to the repository
 
     steps:
-      - uses: actions/checkout@v4
+      # Before the download: actions/checkout deletes the contents of the
+      # workspace when it finds no .git there, which would take the artifacts
+      # with it.
+      - uses: actions/checkout@v4  # for packaging/collect-artifacts.sh
 
       # Every package this run produced, each artifact in its own directory:
       # merging them would be silent data loss, since all three AppImages are
@@ -149,41 +159,24 @@ jobs:
           path: artifacts
 
       - name: Collect the packages under names that do not collide
-        run: |
-          mkdir -p dist
-          # Both runners emit sonero_<version>_amd64.deb. Fold the target into
-          # the version part rather than the middle of the name, so the file
-          # keeps the name_version_arch shape Debian tooling expects.
-          for dir in artifacts/Sonero-mint*; do
-            target="${dir##*-}"  # Sonero-mint21-ubuntu2204 -> ubuntu2204
-            for f in "${dir}"/*.deb; do
-              cp "${f}" "dist/$(basename "${f}" _amd64.deb)-${target}_amd64.deb"
-            done
-          done
-          # Built on the oldest glibc, so it runs on the most systems: this is
-          # the one to download, and it keeps the plain name.
-          cp artifacts/Sonero-mint21-ubuntu2204/*.AppImage dist/
-          # The rolling-distribution builds need their distribution in the name.
-          for dir in artifacts/Sonero-arch artifacts/Sonero-fedora; do
-            distro="${dir##*-}"
-            for f in "${dir}"/*.AppImage; do
-              cp "${f}" "dist/$(basename "${f}" -x86_64.AppImage)-${distro}-x86_64.AppImage"
-            done
-          done
+        run: ./packaging/collect-artifacts.sh artifacts dist
 
-      # A tag that disagrees with the project version would attach, say,
-      # Sonero-0.1.2-...AppImage to a release called v0.1.3. Catch it here rather
-      # than shipping binaries whose name contradicts the release they sit under.
-      - name: Check the tag matches the project version
+      # The version is derived from this very tag, so the packages should already
+      # carry it. If one does not, the build resolved something else — a checkout
+      # that fetched no tags falling back to CMakeLists.txt is the likely cause —
+      # and these files would be published under a name that contradicts the
+      # release they sit under.
+      - name: Check the packages carry the release version
         run: |
-          version="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9.]\+\).*/\1/p' \
-              CMakeLists.txt | head -1)"
-          tag="${{ github.event.release.tag_name }}"
-          echo "CMakeLists.txt: ${version}    tag: ${tag}"
-          if [ "${tag#v}" != "${version}" ]; then
-            echo "::error::tag ${tag} does not match VERSION ${version} in CMakeLists.txt"
-            exit 1
-          fi
+          version="${{ github.event.release.tag_name }}"
+          version="${version#v}"
+          for f in dist/*; do
+            case "$(basename "${f}")" in
+              *"${version}"*) ;;
+              *) echo "::error::$(basename "${f}") is not version ${version}"; exit 1 ;;
+            esac
+          done
+          echo "every package carries ${version}"
 
       - name: Attach the packages to the release
         env:
@@ -192,3 +185,54 @@ jobs:
           ls -l dist
           gh release upload "${{ github.event.release.tag_name }}" dist/* \
             --clobber --repo "${{ github.repository }}"
+
+  # Every push to main refreshes one prerelease, so the newest build of the
+  # development branch has a permanent, public link — Actions artifacts expire and
+  # need a GitHub login to download.
+  #
+  # The release is deleted and recreated rather than edited: the tag has to move
+  # to the new commit, and recreating is the one operation that always leaves the
+  # tag, the target and the files agreeing. Creating it with GITHUB_TOKEN does not
+  # re-trigger this workflow's `release` event, so it cannot loop.
+  nightly:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, rolling]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4  # first: it would wipe the downloaded artifacts
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Sonero-*
+          path: artifacts
+
+      - name: Collect the packages under names that do not collide
+        run: ./packaging/collect-artifacts.sh artifacts dist
+
+      - name: Refresh the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Not a release: no tag was cut for it, and it is rebuilt from whatever
+          # main happens to hold. Say so where people will read it.
+          notes="$(printf '%s\n' \
+            "Automatic build of \`main\`, replaced on every push. **Not a release** —" \
+            "for a version that was actually cut, use the Releases page." \
+            "" \
+            "Commit: ${GITHUB_SHA}" \
+            "Built: $(date -u '+%Y-%m-%d %H:%M UTC')" \
+            "" \
+            "\`Sonero-*-x86_64.AppImage\` without a distribution in the name is the" \
+            "portable one — built on the oldest glibc, so it runs almost anywhere." \
+            "The \`-arch\` and \`-fedora\` builds need a distribution at least as new.")"
+
+          gh release delete nightly --yes --cleanup-tag --repo "${GITHUB_REPOSITORY}" || true
+          gh release create nightly dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Development build (main)" \
+            --notes "${notes}" \
+            --prerelease

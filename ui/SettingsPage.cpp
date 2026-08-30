@@ -1,5 +1,7 @@
 #include "ui/SettingsPage.h"
 
+#include "core/Version.h"
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QFrame>
@@ -170,7 +172,7 @@ void SettingsPage::buildAboutCard(QVBoxLayout* root) {
     QVBoxLayout* body = makeCard(root, QStringLiteral("About"),
                                  QStringLiteral("Sonero %1 — free and open source, "
                                                 "MIT licensed.")
-                                     .arg(QString::fromLatin1(SONAR_VERSION)));
+                                     .arg(QString::fromStdString(versionString())));
 
     // Rich text so the two links are clickable; the AI note is stated plainly here
     // and not only in the README, because it is part of how the app came to be.

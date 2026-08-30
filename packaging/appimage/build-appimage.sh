@@ -5,6 +5,7 @@
 #   ./packaging/appimage/build-appimage.sh [output_dir]
 #
 # What it does:
+#   0. reads the version the CMake configure resolved (the latest release tag)
 #   1. downloads linuxdeploy + its Qt plugin + appimagetool (cached in .tools/)
 #   2. builds Sonero in Release and installs it into an AppDir
 #   3. lets linuxdeploy bundle Qt and the remaining dependencies
@@ -57,12 +58,6 @@ fetch_tool() {
 command -v curl >/dev/null || die "curl is required"
 command -v cmake >/dev/null || die "cmake is required"
 
-# --- 0. project version (drives the output file name) ------------------------
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9.]\+\).*/\1/p' \
-    "${REPO_ROOT}/CMakeLists.txt" | head -1)"
-[[ -n "${VERSION}" ]] || die "could not read VERSION from CMakeLists.txt"
-log "Sonero ${VERSION}"
-
 # --- 1. tools ----------------------------------------------------------------
 mkdir -p "${TOOLS_DIR}"
 fetch_tool "${LINUXDEPLOY_URL}"    "${TOOLS_DIR}/linuxdeploy"
@@ -75,6 +70,13 @@ cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DBUILD_TESTING=OFF >/dev/null
+
+# The version comes from the latest release tag, so only the configure above
+# knows it. Parsing CMakeLists.txt would read the fallback number and mislabel
+# every tagged build.
+VERSION="$(cat "${BUILD_DIR}/sonero-version.txt" 2>/dev/null || true)"
+[[ -n "${VERSION}" ]] || die "no version at ${BUILD_DIR}/sonero-version.txt"
+log "Sonero ${VERSION}"
 
 log "building"
 cmake --build "${BUILD_DIR}" --parallel "$(nproc)" >/dev/null

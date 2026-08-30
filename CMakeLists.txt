@@ -1,10 +1,98 @@
 cmake_minimum_required(VERSION 3.21)
 
+# --- Release version ---------------------------------------------------------
+# The canonical version is the latest release tag, so cutting a release is one
+# `git tag` rather than a tag plus an edit here that someone forgets.
+#
+# The fallback is what a build uses when no tag is readable: a source tarball, a
+# shallow CI clone (actions/checkout fetches no tags unless asked), or this
+# repository before its first release. Keep it at or below the newest tag.
+#
+# Plain `git` rather than find_package(Git): this has to run before project(),
+# and find_package before project() is not supported.
+set(SONERO_FALLBACK_VERSION 0.0.0)
+set(SONERO_VERSION "${SONERO_FALLBACK_VERSION}")
+if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(COMMAND git describe --tags --abbrev=0
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE SONERO_RELEASE_TAG
+                    ERROR_QUIET
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    # v1.2.3 and 1.2.3 both count. Anything else is not a release tag, and is
+    # ignored rather than handed to project(), which would fail the configure.
+    if(SONERO_RELEASE_TAG MATCHES "^v?([0-9]+\\.[0-9]+\\.[0-9]+)$")
+        set(SONERO_VERSION "${CMAKE_MATCH_1}")
+    elseif(SONERO_RELEASE_TAG)
+        message(WARNING "Sonero: tag '${SONERO_RELEASE_TAG}' is not x.y.z — "
+                        "falling back to ${SONERO_FALLBACK_VERSION}")
+    endif()
+endif()
+
 project(Sonero
-    VERSION 0.1.2
+    VERSION ${SONERO_VERSION}
     DESCRIPTION "Per-application audio mixer, router and equalizer for PipeWire"
-    HOMEPAGE_URL "https://github.com/"
+    HOMEPAGE_URL "https://github.com/Tatsu21/sonero"
     LANGUAGES CXX)
+
+# Packaging scripts must not re-derive the version — parsing this file stopped
+# working the moment the number came from a tag. They read what this configure
+# resolved.
+file(WRITE "${CMAKE_BINARY_DIR}/sonero-version.txt" "${PROJECT_VERSION}\n")
+
+# --- Build identity ----------------------------------------------------------
+# project(VERSION) above is the release number and drives packaging. This adds
+# *which code* a binary was built from — the tag, or the branch and commit — so a
+# bug report from a nightly says something more useful than "0.1.2".
+#
+# Empty when the source is not a git checkout (a release tarball, say); the app
+# then shows the plain version, which is correct rather than made up.
+set(SONERO_BUILD_ID "")
+find_package(Git QUIET)
+if(GIT_FOUND AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    set(SONERO_GIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+
+    # Without these, the id is frozen at whichever branch was checked out when the
+    # build tree was first configured. HEAD changes on checkout, the branch's ref
+    # file changes on commit; either must re-run CMake.
+    if(EXISTS "${SONERO_GIT_DIR}/HEAD")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                     "${SONERO_GIT_DIR}/HEAD")
+        file(READ "${SONERO_GIT_DIR}/HEAD" SONERO_GIT_HEAD)
+        string(STRIP "${SONERO_GIT_HEAD}" SONERO_GIT_HEAD)
+        if(SONERO_GIT_HEAD MATCHES "^ref: (.+)$" AND
+           EXISTS "${SONERO_GIT_DIR}/${CMAKE_MATCH_1}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                         "${SONERO_GIT_DIR}/${CMAKE_MATCH_1}")
+        endif()
+    endif()
+
+    macro(sonero_git output)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" ${ARGN}
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                        OUTPUT_VARIABLE ${output}
+                        ERROR_QUIET
+                        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    endmacro()
+
+    sonero_git(SONERO_GIT_TAG describe --tags --exact-match)
+    sonero_git(SONERO_GIT_BRANCH rev-parse --abbrev-ref HEAD)
+    sonero_git(SONERO_GIT_HASH rev-parse --short HEAD)
+    # Tracked changes only: build/ and dist/ are untracked, and counting those
+    # would mark every working tree dirty forever.
+    sonero_git(SONERO_GIT_DIRTY status --porcelain --untracked-files=no)
+
+    if(SONERO_GIT_TAG)
+        set(SONERO_BUILD_ID "${SONERO_GIT_TAG}")  # sitting exactly on a release
+    elseif(SONERO_GIT_HASH AND SONERO_GIT_BRANCH AND NOT SONERO_GIT_BRANCH STREQUAL "HEAD")
+        set(SONERO_BUILD_ID "${SONERO_GIT_BRANCH}@${SONERO_GIT_HASH}")
+    elseif(SONERO_GIT_HASH)
+        set(SONERO_BUILD_ID "${SONERO_GIT_HASH}")  # detached HEAD: no branch to name
+    endif()
+    if(SONERO_BUILD_ID AND SONERO_GIT_DIRTY)
+        string(APPEND SONERO_BUILD_ID "-dirty")
+    endif()
+endif()
+message(STATUS "Sonero: version ${PROJECT_VERSION}, build '${SONERO_BUILD_ID}'")
 
 # --- Global C++ settings -----------------------------------------------------
 set(CMAKE_CXX_STANDARD 20)
@@ -48,6 +136,7 @@ endif()
 add_library(sonero_core STATIC
     core/Format.h
     core/Format.cpp
+    core/Version.h
     core/Log.h
     core/Log.cpp
     audio/IAudioBackend.h
@@ -71,7 +160,9 @@ add_library(sonero_core STATIC
 
 target_include_directories(sonero_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(sonero_core PUBLIC PkgConfig::PIPEWIRE)
-target_compile_definitions(sonero_core PUBLIC SONAR_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(sonero_core PUBLIC
+    SONAR_VERSION="${PROJECT_VERSION}"
+    SONERO_BUILD_ID="${SONERO_BUILD_ID}")
 target_compile_features(sonero_core PUBLIC cxx_std_20)
 
 if(SONAR_USE_SPDLOG AND spdlog_FOUND)

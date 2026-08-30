@@ -9,6 +9,7 @@
 #include "audio/Mixer.h"
 #include "audio/PipeWireManager.h"
 #include "core/Log.h"
+#include "core/Version.h"
 #include "ui/Theme.h"
 
 int main(int argc, char* argv[]) {
@@ -25,7 +26,7 @@ int main(int argc, char* argv[]) {
     }
     QApplication::setApplicationName(QStringLiteral("Sonero"));
     QApplication::setOrganizationName(QStringLiteral("Sonero"));
-    QApplication::setApplicationVersion(QStringLiteral(SONAR_VERSION));
+    QApplication::setApplicationVersion(QString::fromStdString(sonar::versionString()));
     // Ties the process to Sonero.desktop so Wayland/GNOME uses its icon for the
     // window, notifications and (with the AppIndicator extension) the tray item.
     QApplication::setDesktopFileName(QStringLiteral("Sonero"));
