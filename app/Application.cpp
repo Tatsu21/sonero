@@ -1,5 +1,7 @@
 #include "app/Application.h"
 
+#include "app/AutoStart.h"
+
 #include "app/SystemSetup.h"
 #include "audio/IAppRouter.h"
 #include "audio/IAudioDevices.h"
@@ -33,11 +35,28 @@ void Application::start(bool background) {
     // start: menu entry + icons under ~/.local/share. Purely user-level and
     // idempotent — anything needing root is offered on the Settings page instead.
     if (setup::runningFromAppImage()) {
+        // Read the old bundle's path first — installDesktopIntegration() is about
+        // to overwrite the entry that holds it — but delete it only once the entry
+        // names this bundle instead. The other order leaves the app menu pointing
+        // at a file that no longer exists.
+        const QString previous = setup::previousBundlePath();
         if (setup::installDesktopIntegration()) {
             log::info("Desktop integration installed (menu entry + icons)");
+            if (const QString removed = setup::removeSupersededBundle(previous);
+                !removed.isEmpty()) {
+                log::info("Removed the superseded AppImage {}", removed.toStdString());
+            }
         } else {
             log::warn("Could not install desktop integration");
         }
+    }
+
+    // The autostart entry holds a path, and a newer AppImage lives at a different
+    // one. Without this, "start at login" keeps launching the bundle it was
+    // switched on with — or silently stops working once that file is deleted.
+    if (autostart::refreshExecPath()) {
+        log::info("Autostart entry re-pointed at {}",
+                  autostart::executablePath().toStdString());
     }
 
     if (backend_->initialize()) {

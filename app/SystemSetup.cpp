@@ -252,6 +252,34 @@ bool installDesktopIntegration() {
     return QFileInfo::exists(desktopEntryPath());
 }
 
+QString previousBundlePath() { return autostart::execPathIn(desktopEntryPath()); }
+
+QString removeSupersededBundle(const QString& previous) {
+    const QString current = qEnvironmentVariable("APPIMAGE");
+    if (current.isEmpty()) {
+        return {};  // not a bundle run: nothing here supersedes anything
+    }
+    if (previous.isEmpty() || previous == current) {
+        return {};
+    }
+    // Only ever a plain, unmistakable bundle file: not a directory, not a
+    // symlink, and not the installed binary (which does not end in .AppImage).
+    const QFileInfo info(previous);
+    if (!info.isFile() || info.isSymLink() ||
+        !previous.endsWith(QLatin1String(".AppImage"), Qt::CaseInsensitive)) {
+        return {};
+    }
+    // Two paths can name one file. Resolving both is what stops a bundle that
+    // was launched through a symlink from deleting itself.
+    if (info.canonicalFilePath() == QFileInfo(current).canonicalFilePath()) {
+        return {};
+    }
+    if (!QFile::remove(previous)) {
+        return {};
+    }
+    return previous;
+}
+
 QString privilegedFixScript(CheckId id) {
     switch (id) {
         case CheckId::UdevRule: {

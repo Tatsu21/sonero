@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -19,7 +20,27 @@ private slots:
     void enableCreatesValidEntry();
     void disableRemovesEntry();
     void enableIsIdempotent();
+    void refreshDoesNothingWhenDisabled();
+    void refreshLeavesACurrentEntryAlone();
+    void refreshRewritesWhenTheRecordedProgramIsGone();
+    void refreshWillNotHijackAnEntryThatStillWorks();
+
+private:
+    // Writes an entry whose Exec points at `program`, as an older run would have.
+    static void writeEntryPointingAt(const QString& program);
 };
+
+void AutoStartTest::writeEntryPointingAt(const QString& program) {
+    QDir().mkpath(QFileInfo(autostart::desktopFilePath()).absolutePath());
+    QFile f(autostart::desktopFilePath());
+    QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    f.write(QStringLiteral("[Desktop Entry]\n"
+                           "Type=Application\n"
+                           "Name=Sonero\n"
+                           "Exec=\"%1\" --background\n")
+                .arg(program)
+                .toUtf8());
+}
 
 void AutoStartTest::initTestCase() {
     QStandardPaths::setTestModeEnabled(true);  // never touch the real autostart dir
@@ -69,6 +90,43 @@ void AutoStartTest::enableIsIdempotent() {
     QVERIFY(autostart::setEnabled(true));  // rewriting must not fail or duplicate
     QCOMPARE(autostart::desktopFilePath(), first);
     QVERIFY(autostart::isEnabled());
+}
+
+// Autostart off: nothing to keep in step, and nothing may be created.
+void AutoStartTest::refreshDoesNothingWhenDisabled() {
+    QVERIFY(!autostart::isEnabled());
+    QVERIFY(!autostart::refreshExecPath());
+    QVERIFY(!autostart::isEnabled());
+}
+
+void AutoStartTest::refreshLeavesACurrentEntryAlone() {
+    QVERIFY(autostart::setEnabled(true));
+    QVERIFY(!autostart::refreshExecPath());  // already points here
+}
+
+// The AppImage case: the bundle the entry was switched on with is gone, so the
+// entry is dead and this run takes it over.
+void AutoStartTest::refreshRewritesWhenTheRecordedProgramIsGone() {
+    writeEntryPointingAt(QStringLiteral("/nonexistent/Sonero-0.0.1-x86_64.AppImage"));
+    QVERIFY(autostart::refreshExecPath());
+
+    QFile f(autostart::desktopFilePath());
+    QVERIFY(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromUtf8(f.readAll());
+    QVERIFY(text.contains(autostart::executablePath()));
+    QVERIFY(!text.contains(QStringLiteral("/nonexistent/")));
+    QVERIFY(text.contains(QStringLiteral("--background")));
+}
+
+// A source-tree run must not steal the login entry from a working install.
+void AutoStartTest::refreshWillNotHijackAnEntryThatStillWorks() {
+    QVERIFY(qEnvironmentVariable("APPIMAGE").isEmpty());  // not an AppImage run
+    writeEntryPointingAt(QStringLiteral("/bin/sh"));      // a program that exists
+    QVERIFY(!autostart::refreshExecPath());
+
+    QFile f(autostart::desktopFilePath());
+    QVERIFY(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(QString::fromUtf8(f.readAll()).contains(QStringLiteral("/bin/sh")));
 }
 
 QTEST_GUILESS_MAIN(AutoStartTest)

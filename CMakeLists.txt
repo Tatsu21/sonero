@@ -109,6 +109,8 @@ qt_add_executable(Sonero
     ui/DevicesPage.cpp
     ui/SettingsPage.h
     ui/SettingsPage.cpp
+    ui/TrayMixer.h
+    ui/TrayMixer.cpp
     ui/Notifier.h
     ui/Notifier.cpp
     ui/EqPresetStore.h
