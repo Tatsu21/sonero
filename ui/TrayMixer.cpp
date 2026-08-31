@@ -37,6 +37,11 @@ TrayMixer::TrayMixer(audio::IMixer& mixer, QWidget* parent)
     // desktop. See the header for what the frameless version cost.
     setWindowTitle(QStringLiteral("Sonero — Volume"));
 
+    // Qt quits when the last window with this attribute closes. Opened from the
+    // tray while the main window is hidden, this is the only visible window —
+    // so without this, closing the volume window shut the whole app down.
+    setAttribute(Qt::WA_QuitOnClose, false);
+
     // The window itself is the surface. The first version put a bordered Card
     // inside it, which drew a second frame a pixel inside the compositor's own —
     // two nested boxes around six sliders.
