@@ -4,7 +4,6 @@
 
 # Sonero
 
-**The audio control center Linux never had.**
 
 Per-application mixing, routing, equalization and device control — for *any*
 sound hardware you own, built directly on PipeWire.
