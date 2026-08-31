@@ -213,11 +213,20 @@ jobs:
   # development branch has a permanent, public link — Actions artifacts expire and
   # need a GitHub login to download.
   #
-  # The release is deleted and recreated rather than edited: the tag has to move
-  # to the new commit, and recreating is the one operation that always leaves the
-  # tag, the target and the files agreeing. Creating it with GITHUB_TOKEN does not
+  # The release is deleted and recreated rather than edited: the tag has to move to
+  # the new commit, and recreating is the one operation that always leaves the tag,
+  # the target and the files agreeing. Creating it with GITHUB_TOKEN does not
   # re-trigger this workflow's `release` event, so it cannot loop.
-  nightly:
+  #
+  # Two repository settings have to allow this, and the job says so plainly when
+  # they do not:
+  #   * Immutable releases must be OFF. An immutable release owns its tag name for
+  #     good, which is the opposite of a tag that moves on every push. This is why
+  #     the tag is `dev` and not `nightly` — `nightly` was published immutably once
+  #     and can never be reused.
+  #   * The tag ruleset must not restrict creations for `dev` (exclude it, or give
+  #     the Actions bot a bypass), or the recreated tag is rejected.
+  dev-build:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build, rolling]
     runs-on: ubuntu-latest
@@ -235,12 +244,13 @@ jobs:
       - name: Collect the packages under names that do not collide
         run: ./packaging/collect-artifacts.sh artifacts dist
 
-      - name: Refresh the nightly prerelease
+      - name: Refresh the development prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: dev
         run: |
-          # Not a release: no tag was cut for it, and it is rebuilt from whatever
-          # main happens to hold. Say so where people will read it.
+          # Not a release: no version was cut for it, and it is rebuilt from
+          # whatever main happens to hold. Say so where people will read it.
           notes="$(printf '%s\n' \
             "Automatic build of \`main\`, replaced on every push. **Not a release** —" \
             "for a version that was actually cut, use the Releases page." \
@@ -252,8 +262,20 @@ jobs:
             "portable one — built on the oldest glibc, so it runs almost anywhere." \
             "The \`-arch\` and \`-fedora\` builds need a distribution at least as new.")"
 
-          gh release delete nightly --yes --cleanup-tag --repo "${GITHUB_REPOSITORY}" || true
-          gh release create nightly dist/* \
+          # Only delete what exists. The previous version swallowed every failure
+          # here with `|| true`, so a refused deletion surfaced later as a
+          # confusing "release already exists" from the create below.
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if ! gh release delete "${TAG}" --yes --cleanup-tag \
+                   --repo "${GITHUB_REPOSITORY}"; then
+              echo "::error::could not remove the previous ${TAG} release. If this" \
+                   "mentions an immutable release, turn Immutable releases off in" \
+                   "Settings → General; a moving tag cannot coexist with it."
+              exit 1
+            fi
+          fi
+
+          gh release create "${TAG}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Development build (main)" \
