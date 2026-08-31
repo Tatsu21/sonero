@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- Open Graph / Twitter card image, 1200x630 — the ratio Facebook, X, Discord,
+       Slack and LinkedIn all crop to. Regenerate with:
+         rsvg-convert -w 1200 -h 630 og.svg -o og.png -->
+  <defs>
+    <radialGradient id="g" cx="0.26" cy="0.30" r="0.85">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity=".28"/>
+      <stop offset="60%" stop-color="#6366f1" stop-opacity=".06"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="shot"><rect x="612" y="150" width="700" height="400" rx="14"/></clipPath>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0d0e14"/>
+  <rect width="1200" height="630" fill="url(#g)"/>
+
+  <!-- The product itself, bled off the right edge. -->
+  <g clip-path="url(#shot)">
+    <image xlink:href="mixer.png" x="612" y="150" width="1120" height="700"/>
+  </g>
+  <rect x="612" y="150" width="700" height="400" rx="14" fill="none"
+        stroke="#2a2f45" stroke-width="1.5"/>
+
+  <image xlink:href="sonero-128.png" x="80" y="132" width="86" height="86"/>
+
+  <text x="80" y="330" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="88" font-weight="900" fill="#ffffff" letter-spacing="-2.5">Sonero</text>
+
+  <text x="80" y="392" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="27" font-weight="600" fill="#c2c7de">Per-application audio mixer,</text>
+  <text x="80" y="428" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="27" font-weight="600" fill="#c2c7de">router and equalizer for Linux</text>
+
+  <text x="80" y="492" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="19" font-weight="700" fill="#8b90a8" letter-spacing="2.4">PIPEWIRE  ·  OPEN SOURCE  ·  MIT</text>
+</svg>

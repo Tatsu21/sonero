@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonero — per-application audio mixer, router and equalizer for Linux</title>
+<meta name="description" content="Free, open-source per-application audio mixer, router and equalizer for Linux, built on PipeWire. Give every app its own volume, equalizer and output device.">
+<meta name="author" content="Luci">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+<link rel="canonical" href="https://tatsu21.github.io/sonero/">
+<link rel="icon" href="assets/sonero-128.png">
+<meta name="theme-color" content="#0d0e14">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Sonero">
+<meta property="og:locale" content="en">
+<meta property="og:url" content="https://tatsu21.github.io/sonero/">
+<meta property="og:title" content="Sonero — per-application audio for Linux">
+<meta property="og:description" content="Every app on its own channel, every output device first-class. A mixer, router and equalizer built directly on PipeWire.">
+<meta property="og:image" content="https://tatsu21.github.io/sonero/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Sonero — per-application audio mixer, router and equalizer for Linux">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Sonero — per-application audio for Linux">
+<meta name="twitter:description" content="Every app on its own channel, every output device first-class. Built directly on PipeWire.">
+<meta name="twitter:image" content="https://tatsu21.github.io/sonero/assets/og.png">
+<meta name="twitter:image:alt" content="Sonero — per-application audio mixer for Linux">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Sonero",
+  "url": "https://tatsu21.github.io/sonero/",
+  "applicationCategory": "MultimediaApplication",
+  "applicationSubCategory": "Audio mixer",
+  "operatingSystem": "Linux",
+  "description": "Per-application audio mixer, router and equalizer for Linux, built directly on PipeWire. Every application gets its own volume, equalizer and output device.",
+  "softwareRequirements": "PipeWire 0.3 or newer with WirePlumber, Qt 6.2 or newer, x86-64",
+  "downloadUrl": "https://github.com/Tatsu21/sonero/releases",
+  "codeRepository": "https://github.com/Tatsu21/sonero",
+  "programmingLanguage": "C++",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Luci", "url": "https://github.com/Tatsu21" },
+  "screenshot": [
+    "https://tatsu21.github.io/sonero/assets/mixer.png",
+    "https://tatsu21.github.io/sonero/assets/channels.png"
+  ],
+  "featureList": [
+    "Six output channels with volume, mute, solo, balance and live meters",
+    "Per-application routing that persists across restarts",
+    "Per-channel equalizer with 10, 15 or 31 bands and 24 presets",
+    "Automatic per-channel gain",
+    "Routing to USB, Bluetooth, HDMI, S/PDIF and analog outputs",
+    "Per-device sample rate, bit depth and Bluetooth codec",
+    "Separate streaming mix for OBS",
+    "Headset battery over Bluetooth and USB HID"
+  ]
+}
+</script>
+<style>
+/* The app's own palette, so the site and the program read as one thing. */
+:root{
+  --bg:#0d0e14; --bg-soft:#101219; --surface:#171a24; --raised:#1f2230; --border:#252939;
+  --border-hi:#343a52;
+  --text:#e9ebf5; --dim:#9096ad; --faint:#6b7091;
+  --accent:#6366f1; --accent-hi:#8b8ff9; --ok:#4ade80; --warn:#ffb454;
+  --wrap:1120px; --nav:60px;
+  --shadow:0 24px 60px -24px rgba(0,0,0,.85);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth; scroll-padding-top:calc(var(--nav) + 20px)}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:"Inter","Segoe UI",Roboto,Cantarell,"Noto Sans",system-ui,sans-serif;
+  font-size:16.5px; line-height:1.65; -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+a{color:var(--accent-hi); text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent-hi); outline-offset:3px; border-radius:4px}
+img{max-width:100%; height:auto}
+.wrap{max-width:var(--wrap); margin:0 auto; padding:0 24px}
+.skip{position:absolute; left:-9999px}
+.skip:focus{left:12px; top:12px; z-index:100; background:var(--raised);
+  padding:10px 16px; border-radius:10px}
+
+/* ---- Nav ---- */
+nav{
+  position:sticky; top:0; z-index:50; height:var(--nav);
+  background:rgba(13,14,20,.78); backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--border);
+}
+nav .wrap{display:flex; align-items:center; gap:26px; height:100%}
+nav .brand{display:flex; align-items:center; gap:10px; font-weight:800; color:var(--text);
+  letter-spacing:-.3px}
+nav .brand:hover{text-decoration:none}
+nav .brand img{width:26px; height:26px; border-radius:7px}
+nav .links{display:flex; gap:24px; margin-left:auto; align-items:center}
+nav .links a{color:var(--dim); font-size:14.5px; font-weight:600}
+nav .links a:hover{color:var(--text); text-decoration:none}
+@media (max-width:720px){ nav .links a.hide-sm{display:none} }
+
+/* ---- Buttons ---- */
+.btn{display:inline-flex; align-items:center; gap:9px; padding:12px 22px; border-radius:11px;
+  font-weight:700; font-size:15px; border:1px solid var(--border-hi);
+  background:var(--raised); color:var(--text); transition:.16s ease}
+.btn:hover{background:#282d3f; border-color:#454c6b; text-decoration:none; transform:translateY(-1px)}
+.btn.primary{background:var(--accent); border-color:var(--accent); color:#fff;
+  box-shadow:0 10px 30px -12px rgba(99,102,241,.9)}
+.btn.primary:hover{background:var(--accent-hi); border-color:var(--accent-hi)}
+.btn.sm{padding:8px 15px; font-size:14px; border-radius:9px}
+.btn svg{width:17px; height:17px; flex:none}
+
+/* ---- Sections ---- */
+section{padding:96px 0; border-top:1px solid var(--border)}
+.eyebrow{color:var(--accent-hi); font-size:12.5px; font-weight:800; letter-spacing:1.6px;
+  text-transform:uppercase; margin:0 0 10px}
+h2{font-size:clamp(26px,3.6vw,34px); font-weight:800; margin:0 0 12px; letter-spacing:-.7px;
+  line-height:1.2}
+h3{font-size:16.5px; font-weight:700; margin:0 0 7px; letter-spacing:-.2px}
+.lead{color:var(--dim); margin:0 0 44px; max-width:64ch; font-size:17px}
+code,kbd{font-family:ui-monospace,"JetBrains Mono","Fira Code",monospace; font-size:.9em}
+:not(pre)>code{background:var(--raised); border:1px solid var(--border);
+  border-radius:6px; padding:1.5px 6px; color:#cbd0e8}
+
+/* ---- Hero ---- */
+header{
+  position:relative; overflow:hidden; text-align:center; padding:104px 0 92px;
+  background:
+    radial-gradient(1000px 520px at 50% -12%, rgba(99,102,241,.26), transparent 68%),
+    linear-gradient(180deg, var(--bg-soft), var(--bg) 60%);
+}
+header::after{content:""; position:absolute; inset:auto 0 0; height:1px;
+  background:linear-gradient(90deg,transparent,var(--border-hi),transparent)}
+.pill{display:inline-flex; align-items:center; gap:8px; font-size:13px; font-weight:700;
+  color:var(--dim); background:rgba(99,102,241,.09); border:1px solid rgba(99,102,241,.32);
+  border-radius:999px; padding:6px 15px; margin-bottom:26px}
+.pill .dot{width:7px; height:7px; border-radius:50%; background:var(--ok)}
+header h1{margin:0 0 14px; font-weight:400}
+header h1 .name{display:block; font-size:clamp(46px,8vw,80px); font-weight:900;
+  letter-spacing:-3px; line-height:.98; margin-bottom:16px;
+  background:linear-gradient(180deg,#fff 30%,#b9bfdd);
+  -webkit-background-clip:text; background-clip:text; color:transparent}
+header h1 .tag{display:block; font-size:clamp(18px,2.4vw,23px); color:#ccd1e6;
+  margin:0 auto; max-width:32ch; font-weight:500; line-height:1.4}
+header .sub{color:var(--faint); margin:0 auto 34px; max-width:58ch; font-size:15.5px}
+.cta{display:flex; gap:13px; justify-content:center; flex-wrap:wrap}
+.meta{margin-top:22px; color:var(--faint); font-size:13.5px}
+
+/* ---- Screenshot frame ---- */
+.frame{border-radius:16px; border:1px solid var(--border-hi); overflow:hidden;
+  box-shadow:var(--shadow); background:var(--surface); display:block}
+figure{margin:0}
+figcaption{color:var(--faint); font-size:14px; margin-top:16px; text-align:center}
+
+/* ---- Feature grid ---- */
+.grid{display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:linear-gradient(180deg,var(--surface),#14161f);
+  border:1px solid var(--border); border-radius:15px; padding:26px 24px;
+  transition:.18s ease}
+.card:hover{border-color:var(--border-hi); transform:translateY(-2px)}
+.card p{margin:0; color:var(--dim); font-size:15px}
+/* A card that is not all the way there says so where the eye lands, not in the
+   small print. It links to the section that explains what is missing. */
+.chead{display:flex; align-items:center; gap:10px; margin-bottom:7px}
+.chead h3{margin:0}
+.todo{margin-left:auto; flex:none; font-size:10.5px; font-weight:800; letter-spacing:1.1px;
+  text-transform:uppercase; color:var(--warn); background:rgba(255,180,84,.10);
+  border:1px solid rgba(255,180,84,.34); border-radius:999px; padding:3px 9px;
+  white-space:nowrap; transition:.15s}
+.todo:hover{background:rgba(255,180,84,.2); text-decoration:none}
+
+.card .ico{width:38px; height:38px; border-radius:11px; display:grid; place-items:center;
+  background:rgba(99,102,241,.13); border:1px solid rgba(99,102,241,.28); margin-bottom:15px}
+.card .ico svg{width:19px; height:19px; stroke:var(--accent-hi); fill:none;
+  stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round}
+
+/* ---- Split rows ---- */
+.split{display:grid; gap:44px; align-items:center; grid-template-columns:1fr 1fr}
+@media (max-width:880px){ .split{grid-template-columns:1fr} }
+
+/* ---- Install ---- */
+.steps{display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.snip{background:var(--surface); border:1px solid var(--border); border-radius:15px;
+  overflow:hidden; display:flex; flex-direction:column}
+.snip .head{display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:0 18px; min-height:54px; border-bottom:1px solid var(--border)}
+.snip .head b{font-size:15px}
+.snip .head span{color:var(--faint); font-size:12.5px}
+.snip pre{margin:0; flex:1}
+pre{background:#0b0d13; padding:16px 18px; overflow-x:auto; color:#cbd0e8;
+  line-height:1.6; font-size:13.5px; border:0}
+pre .c{color:#5f6480}
+.copy{background:var(--raised); border:1px solid var(--border-hi); color:var(--dim);
+  border-radius:8px; padding:5px 11px; font:inherit; font-size:12.5px; font-weight:700;
+  cursor:pointer; transition:.15s}
+.copy:hover{color:var(--text); border-color:#454c6b}
+.copy[data-done="1"]{color:var(--ok); border-color:rgba(74,222,128,.5)}
+
+/* ---- Tables ---- */
+.tablewrap{overflow-x:auto; border:1px solid var(--border); border-radius:15px;
+  background:var(--surface)}
+table{width:100%; border-collapse:collapse; font-size:15px; min-width:540px}
+th,td{text-align:left; padding:14px 18px; border-bottom:1px solid var(--border);
+  vertical-align:top}
+th{color:var(--faint); font-size:11.5px; text-transform:uppercase; letter-spacing:1.2px;
+  font-weight:800}
+tbody tr:last-child td{border-bottom:0}
+td:first-child{white-space:nowrap}
+.pick{color:var(--ok); font-weight:700}
+
+/* ---- Honest box ---- */
+.note{background:var(--surface); border:1px solid var(--border);
+  border-left:3px solid var(--warn); border-radius:14px; padding:24px 26px}
+.note ul{margin:0; padding-left:20px; color:var(--dim)}
+.note li{margin-bottom:11px}
+.note li:last-child{margin-bottom:0}
+.note strong{color:var(--text)}
+
+footer{border-top:1px solid var(--border); padding:52px 0 64px; color:var(--faint);
+  font-size:14.5px; background:var(--bg-soft)}
+footer p{margin:0 0 12px; max-width:76ch}
+footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:center}
+
+/* Reveal on scroll where supported, and never when motion is unwelcome. */
+@media (prefers-reduced-motion:no-preference){
+  @supports (animation-timeline:view()){
+    section > .wrap{animation:rise linear both; animation-timeline:view();
+      animation-range:entry 0% entry 42%}
+    @keyframes rise{from{opacity:0; transform:translateY(22px)} to{opacity:1; transform:none}}
+  }
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none !important; transition:none !important} }
+@media (max-width:640px){ section{padding:68px 0} }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="assets/sonero-128.png" alt="">Sonero</a>
+    <div class="links">
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#equalizer">Equalizer</a>
+      <a href="#install">Install</a>
+      <a class="btn sm" href="https://github.com/Tatsu21/sonero">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.7.5 12a11.5 11.5 0 0 0 7.9 10.9c.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.4-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.1.1 1.7 1.2 1.7 1.2 1 1.7 2.7 1.2 3.4.9.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 23.5 12C23.5 5.7 18.3.5 12 .5z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<header id="top">
+  <div class="wrap">
+    <span class="pill"><span class="dot"></span>Free and open source · MIT</span>
+    <h1><span class="name">Sonero</span>
+      <span class="tag">Per-application audio mixer, router and equalizer for Linux.</span></h1>
+    <p class="sub">Your game, your call, your music and your browser each get their own
+      volume, their own equalizer and their own output device — live, without restarting
+      anything. Built directly on PipeWire: no PulseAudio shims, no Wine, no vendor lock-in.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/Tatsu21/sonero/releases">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Download
+      </a>
+      <a class="btn" href="#install">Installation</a>
+    </div>
+    <p class="meta">Needs PipeWire 0.3+ · x86-64 · the AppImage carries its own Qt</p>
+  </div>
+</header>
+
+<main id="main">
+
+<section style="border-top:0; padding-top:64px">
+  <div class="wrap">
+    <figure>
+      <img class="frame" src="assets/mixer.png" width="1440" height="900"
+           alt="The Sonero mixer: one strip per channel with volume, mute, solo, balance and VU meters">
+      <figcaption>Six output channels, each with its own volume, mute, solo, balance and live meters.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <p class="eyebrow">What it does</p>
+    <h2>One mixer for every application you run</h2>
+    <p class="lead">Sonero creates a set of virtual sound cards on PipeWire and lets you
+      send each application to whichever one you like — then shapes each one separately.</p>
+    <div class="grid">
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6 3v18M12 3v18M18 3v18"/><circle cx="6" cy="9" r="2.2"/><circle cx="12" cy="15" r="2.2"/><circle cx="18" cy="7" r="2.2"/></svg></span>
+        <h3>Six output channels</h3>
+        <p>System (master), Game, Chat, Media, Browser and Aux — volume, mute, solo,
+        balance and live VU meters on each.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="6" rx="2"/><rect x="13" y="14" width="8" height="6" rx="2"/><path d="M7 10v5a2 2 0 0 0 2 2h4"/></svg></span>
+        <h3>App routing that sticks</h3>
+        <p>Every playing application shows up as a chip. Move it to a channel and it
+        stays there across restarts.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M3 15c3 0 4-8 7-8s4 10 7 10 3-4 4-4"/></svg></span>
+        <h3>Equalizer per channel</h3>
+        <p>10, 15 or 31 bands with 24 built-in presets, plus save, import and export of
+        your own curves.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v18M7 7v10M17 7v10M3 10v4M21 10v4"/></svg></span>
+        <h3>Automatic gain</h3>
+        <p>On request, it holds the highest gain — up to +6 dB — that keeps the channel
+        clear of full scale. Slow up, immediate down, so nothing breathes.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="2" y="14" width="5" height="7" rx="2"/><rect x="17" y="14" width="5" height="7" rx="2"/></svg></span>
+        <h3>Every output, equally</h3>
+        <p>USB, Bluetooth, HDMI, S/PDIF and onboard analog are all detected and routable —
+        and two channels can play to two different devices at once.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="16" height="10" rx="3"/><path d="M18 11h3v2h-3z"/><path d="M6 11v2M10 10v4"/></svg></span>
+        <h3>Battery where it exists</h3>
+        <p>Bluetooth headsets through BlueZ, and the SteelSeries Arctis Nova Pro Wireless
+        straight from its base station over USB HID — both shown in the tray.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M15 10l6-4v12l-6-4z"/><rect x="2" y="6" width="13" height="12" rx="3"/></svg></span>
+        <h3>Streaming mix for OBS</h3>
+        <p>A <code>Sonero Stream</code> source with an independent send level per channel,
+        so your viewers hear a different balance than you do.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 2a4 4 0 0 1 4 4v3a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg></span>
+        <div class="chead"><h3>Virtual microphone</h3>
+          <a class="todo" href="#honest" title="See what is not finished">Partial</a></div>
+        <p>A <code>Sonero Microphone</code> source your apps can select like any other.
+        Recording works today; the gain, mute and level controls are laid out but not yet
+        wired, and the app greys them out.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+        <h3>A real desktop app</h3>
+        <p>Tray icon with device battery and a compact volume window, notifications,
+        autostart at login, and background operation so channels stay alive.</p></div>
+
+    </div>
+  </div>
+</section>
+
+<section id="equalizer">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <p class="eyebrow">Equalizer</p>
+        <h2>It runs in software, so it works with any headset</h2>
+        <p class="lead" style="margin-bottom:20px">Every channel is a cascade of peaking
+          biquads — nothing has to be blessed by a hardware vendor. Drag the curve or the
+          per-band sliders; 10, 15 or 31 bands, with presets you can save and share.</p>
+        <p style="color:var(--dim); margin:0; font-size:15px">Gain staging is deliberate:
+          volume × channel gain × EQ headroom × a fixed filter reserve, so a boosted band
+          cannot clip on the way to the device.</p>
+      </div>
+      <figure>
+        <img class="frame" src="assets/channels.png" width="1440" height="900"
+             alt="The per-channel equalizer: a draggable response curve above per-band sliders">
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <p class="eyebrow">Install</p>
+    <h2>Pick the file for your distribution</h2>
+    <p class="lead">Every release carries all of these. Pushes to <code>main</code> also
+      refresh a <code>dev</code> prerelease, if you would rather run what is being worked on.</p>
+
+    <div class="tablewrap" style="margin-bottom:34px">
+      <table>
+        <thead><tr><th>File</th><th>For</th></tr></thead>
+        <tbody>
+        <tr><td><code>Sonero-&lt;version&gt;-x86_64.AppImage</code></td>
+            <td><span class="pick">Take this one.</span> Portable, carries its own Qt, built
+            on the oldest glibc so it runs almost anywhere.</td></tr>
+        <tr><td><code>sonero_&lt;version&gt;-ubuntu2204_amd64.deb</code></td>
+            <td>Ubuntu 22.04, Linux Mint 21.x</td></tr>
+        <tr><td><code>sonero_&lt;version&gt;-ubuntu2404_amd64.deb</code></td>
+            <td>Ubuntu 24.04, Linux Mint 22.x</td></tr>
+        <tr><td><code>Sonero-&lt;version&gt;-arch-x86_64.AppImage</code></td>
+            <td>Arch, or a distribution at least as new</td></tr>
+        <tr><td><code>Sonero-&lt;version&gt;-fedora-x86_64.AppImage</code></td>
+            <td>Fedora, or a distribution at least as new</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="steps">
+      <div class="snip">
+        <div class="head"><b>AppImage</b><button class="copy" type="button">Copy</button></div>
+<pre><span class="c"># needs FUSE 2, or --appimage-extract-and-run</span>
+chmod +x Sonero-*-x86_64.AppImage
+./Sonero-*-x86_64.AppImage</pre>
+      </div>
+      <div class="snip">
+        <div class="head"><b>Debian · Ubuntu · Mint</b><button class="copy" type="button">Copy</button></div>
+<pre><span class="c"># apt pulls in Qt and installs the udev rule</span>
+sudo apt install ./sonero_*-ubuntu2204_amd64.deb</pre>
+      </div>
+      <div class="snip">
+        <div class="head"><b>From source</b><button class="copy" type="button">Copy</button></div>
+<pre><span class="c"># the nicer route on Arch and Fedora</span>
+cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+./build/Sonero</pre>
+      </div>
+    </div>
+
+    <p style="color:var(--faint); font-size:14.5px; margin:26px 0 0">
+      The AppImage adds itself to your application menu on first run — and deletes the
+      bundle it replaces, so old versions do not pile up in your downloads folder. On
+      GNOME the tray icon needs the AppIndicator extension.</p>
+  </div>
+</section>
+
+<section id="honest">
+  <div class="wrap">
+    <p class="eyebrow">Honest status</p>
+    <h2>What is not finished</h2>
+    <p class="lead">These are visible in the app but greyed out and labelled, rather than
+      left looking clickable. Nothing here pretends to work.</p>
+    <div class="note">
+      <ul>
+        <li><strong>Profiles</strong> — saving whole configurations as named profiles is
+          not implemented.</li>
+        <li><strong>Microphone controls</strong> — the source is live and apps can record
+          from it, but gain, mute, level, noise suppression, gate and monitoring are inert.
+          The DSP behind them is not wired.</li>
+        <li><strong>SteelSeries hardware EQ</strong> — the dock accepts the HID writes and
+          nothing audible changes. Unsolved, so the card is disabled; the per-channel
+          equalizer runs in software and works with any headset.</li>
+        <li><strong>LDAC is untested.</strong> The codec picker ranks it highest, but none
+          of the headsets on hand offers it, so that path has never run on real hardware.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="requirements">
+  <div class="wrap">
+    <p class="eyebrow">Requirements</p>
+    <h2>Nothing exotic</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Component</th><th>Minimum</th><th>Notes</th></tr></thead>
+        <tbody>
+        <tr><td>PipeWire</td><td>0.3</td>
+            <td>Plus WirePlumber as the session manager. Already running on every current desktop.</td></tr>
+        <tr><td>Qt</td><td>6.2</td>
+            <td>Widgets, D-Bus and Network. The AppImage carries its own.</td></tr>
+        <tr><td>CPU</td><td>x86-64</td>
+            <td>The DSP is a handful of biquads per channel.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><strong style="color:var(--text)">Why this exists.</strong> A personal project,
+      built to learn and to use every day — not a commercial product. No telemetry, no
+      account, no "pro" tier: the app opens a single local socket so a second launch
+      reuses the running window, and that is the whole of its networking.</p>
+    <p>Written with AI assistance — Anthropic's Claude, used as a pair programmer. Every
+      feature started as something a person asked for, and the parts that matter were
+      checked against real hardware rather than a model's confidence.</p>
+    <p>Not affiliated with, endorsed by, or derived from SteelSeries. Sonar was the
+      inspiration, not the source.</p>
+    <div class="fl">
+      <a href="https://github.com/Tatsu21/sonero">GitHub</a>
+      <a href="https://github.com/Tatsu21/sonero/releases">Releases</a>
+      <a href="https://github.com/Tatsu21/sonero/issues">Issues</a>
+      <a href="https://github.com/Tatsu21/sonero/blob/main/LICENSE">MIT License</a>
+      <span style="margin-left:auto">© 2026 Luci</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Copy buttons are an enhancement: without JS, or without the clipboard API, the
+// commands are still there to select by hand.
+for (const btn of document.querySelectorAll(".copy")) {
+  if (!navigator.clipboard) { btn.remove(); continue; }
+  btn.addEventListener("click", async () => {
+    const pre = btn.closest(".snip").querySelector("pre");
+    // Drop the comment lines: pasting those into a shell is noise.
+    const text = [...pre.childNodes]
+      .filter(n => !(n.nodeType === 1 && n.classList.contains("c")))
+      .map(n => n.textContent).join("").trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = "Copied"; btn.dataset.done = "1";
+      setTimeout(() => { btn.textContent = "Copy"; delete btn.dataset.done; }, 1600);
+    } catch { btn.textContent = "Press ⌘/Ctrl+C"; }
+  });
+}
+</script>
+</body>
+</html>
