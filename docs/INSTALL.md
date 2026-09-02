@@ -53,11 +53,12 @@ you:
 ```sh
 ./packaging/deb/build-deb-docker.sh                 # Ubuntu 24.04 / Mint 22
 ./packaging/deb/build-deb-docker.sh ubuntu:22.04    # Ubuntu 22.04 / Mint 21
+./packaging/deb/build-deb-docker.sh debian:13       # Debian 13 (trixie)
 ```
 
 Packages land in `dist/<image-tag>/`, so builds for several targets coexist.
 
-CI builds the same two on every push (see `.github/workflows/ci.yml`); download
+CI builds all three on every push (see `.github/workflows/ci.yml`); download
 the artifact matching the target machine. To build for the distribution you are
 already on:
 

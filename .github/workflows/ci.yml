@@ -18,8 +18,9 @@ jobs:
     #   ubuntu-22.04  ->  Ubuntu 22.04, Linux Mint 21.x   (Qt 6.2)
     #   ubuntu-24.04  ->  Ubuntu 24.04, Linux Mint 22.x   (Qt 6.4)
     #
-    # Debian users build locally with packaging/deb/build-deb.sh. Anyone else uses
-    # the AppImage, which carries its own Qt.
+    # Debian 13 is built by the `debian` job below — GitHub offers no Debian
+    # runner, so it needs a container. Anyone else uses the AppImage, which
+    # carries its own Qt.
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +84,81 @@ jobs:
           path: |
             dist/*.deb
             dist/*.AppImage
+
+  # Debian 13 (trixie), the same .deb as the build job but for Debian's own Qt
+  # 6.8. It cannot join that matrix: GitHub hosts no Debian runner, so this runs
+  # in a container, which changes enough of the steps (no sudo, git has to be
+  # installed before the checkout, safe.directory) to be worth its own job.
+  debian:
+    runs-on: ubuntu-latest
+    container: debian:13
+    name: debian13
+
+    steps:
+      # Before the checkout: with git present it clones — and so can see the
+      # tags the version comes from — instead of downloading a tarball.
+      - name: Install build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config dpkg-dev \
+            git ca-certificates \
+            qt6-base-dev qt6-base-dev-tools libpipewire-0.3-dev file \
+            libgl-dev libegl-dev
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tags: see the build job
+
+      # The container is root while the checkout belongs to the runner user, and
+      # git refuses to read a repository it considers foreign — which is how a
+      # release once shipped 0.0.0 packages. See the rolling job.
+      - name: Let git read the checkout from inside the container
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+      - name: The version must be the tag's
+        if: github.event_name == 'release'
+        run: |
+          ./packaging/check-release-version.sh build/sonero-version.txt \
+            "${{ github.event.release.tag_name }}"
+
+      - name: Build Debian package
+        run: ./packaging/deb/build-deb.sh dist
+
+      - name: Show what the package requires
+        run: dpkg-deb -f dist/*.deb Package Version Depends Recommends
+
+      # The one thing inspecting the file cannot tell you: that apt resolves
+      # every dependency the package declares, from Debian's own archive. Not a
+      # pristine system — the build dependencies are already here — so it proves
+      # the declared dependencies exist and install, not that the list is
+      # complete. build-deb-docker.sh does the pristine-container check.
+      - name: The package must install and resolve its libraries
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get install -y ./dist/*.deb
+          # `... | grep && exit 1` would be the obvious spelling and is wrong:
+          # grep exits 1 when it finds nothing, and set -e then fails the step
+          # for a package that is perfectly fine.
+          if ldd /usr/bin/Sonero | grep "not found"; then
+            echo "::error::the package leaves libraries unresolved"
+            exit 1
+          fi
+          echo "installed $(dpkg-query -W -f='${Version}' sonero), libraries all resolved"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonero-debian13
+          path: dist/*.deb
+          if-no-files-found: error
 
   # Arch and Fedora ship no package of their own — their users build from source
   # or take the AppImage. They are in CI because rolling/fast-moving toolchains
@@ -162,7 +238,7 @@ jobs:
   # every other event.
   publish:
     if: github.event_name == 'release'
-    needs: [build, rolling]  # the release carries packages from both
+    needs: [build, debian, rolling]  # the release carries packages from all three
     runs-on: ubuntu-latest
     permissions:
       contents: write  # gh release upload writes to the repository
@@ -228,7 +304,7 @@ jobs:
   #     the Actions bot a bypass), or the recreated tag is rejected.
   dev-build:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, rolling]
+    needs: [build, debian, rolling]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -116,6 +116,7 @@ sudo apt install ./sonero_0.1.1-ubuntu2204_amd64.deb
 |---|---|
 | `sonero_<version>-ubuntu2204_amd64.deb` | Ubuntu 22.04, Linux Mint 21.x |
 | `sonero_<version>-ubuntu2404_amd64.deb` | Ubuntu 24.04, Linux Mint 22.x |
+| `sonero_<version>-debian13_amd64.deb` | Debian 13 (trixie) |
 
 > A `.deb` links against the distribution's own Qt, so one built on Ubuntu 24.04 will
 > not install on Mint 21. Build for another target with
