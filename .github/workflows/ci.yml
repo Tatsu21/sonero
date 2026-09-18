@@ -234,6 +234,77 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+  # The AUR is the one channel where a broken package is the user's problem and
+  # not a red CI run: `yay -S sonero` builds from the PKGBUILD as pushed, on the
+  # user's machine, with no binary in between. So the package is built here the
+  # same way makepkg will build it there.
+  aur:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    name: aur
+
+    steps:
+      - name: Install packaging tools and build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git namcap cmake ninja qt6-base libpipewire \
+            hicolor-icon-theme
+
+      - uses: actions/checkout@v4
+
+      # makepkg refuses to run as root, and the container is root. The checkout
+      # is root-owned too, so the build user needs it handed over.
+      - name: Create a build user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      # .SRCINFO is what the AUR itself reads — its search, its dependency
+      # solving, the web page. A PKGBUILD edit that forgets to regenerate it
+      # looks perfectly fine in review and wrong to everyone installing.
+      - name: .SRCINFO must match its PKGBUILD
+        run: |
+          for pkg in sonero sonero-git; do
+            dir="${GITHUB_WORKSPACE}/packaging/aur/${pkg}"
+            if ! diff -u "${dir}/.SRCINFO" \
+                 <(su builder -s /bin/bash -c "cd '${dir}' && makepkg --printsrcinfo"); then
+              echo "::error::${pkg}/.SRCINFO is stale — run ./packaging/aur/gen-srcinfo.sh"
+              exit 1
+            fi
+            echo "${pkg}: .SRCINFO matches"
+          done
+
+      - name: Lint both PKGBUILDs
+        run: |
+          namcap packaging/aur/sonero/PKGBUILD
+          namcap packaging/aur/sonero-git/PKGBUILD
+
+      # The release package, built from the tarball the AUR points at. Runs the
+      # test suite too — check() is part of makepkg's default run.
+      - name: Build the package
+        working-directory: packaging/aur/sonero
+        run: su builder -s /bin/bash -c "cd '${PWD}' && makepkg --noconfirm"
+
+      # The version is normally read from a git tag, and a release tarball has
+      # none: a packaging mistake here does not fail anything, it just ships a
+      # binary whose About box disagrees with pacman. Compare what the configure
+      # resolved against what the package is called.
+      - name: The binary must carry the version the package claims
+        working-directory: packaging/aur/sonero
+        run: |
+          pkgver="$(awk -F= '/^pkgver=/{print $2}' PKGBUILD)"
+          resolved="$(tr -d '[:space:]' < src/build/sonero-version.txt)"
+          echo "package ${pkgver}, binary ${resolved}"
+          if [ "${pkgver}" != "${resolved}" ]; then
+            echo "::error::the package is ${pkgver} but the build resolved ${resolved}"
+            exit 1
+          fi
+
+      - name: Lint the built package
+        working-directory: packaging/aur/sonero
+        run: namcap ./*.pkg.tar.zst || true  # advisory: namcap warns about plenty
+
   # Attaches the packages to the release that triggered this run. Skipped on
   # every other event.
   publish:
@@ -284,6 +355,174 @@ jobs:
           ls -l dist
           gh release upload "${{ github.event.release.tag_name }}" dist/* \
             --clobber --repo "${{ github.repository }}"
+
+  # --- Getting the release into the AUR ----------------------------------------
+  #
+  # The AUR never looks at GitHub: it serves the PKGBUILD that was pushed to it,
+  # and nothing else. These two jobs are what turns "a release exists" into "the
+  # AUR has it", and they are split on purpose.
+  #
+  # The first does the work and proves it — points the package at the new tag,
+  # regenerates .SRCINFO, then builds and tests it from the tarball that was
+  # actually published. The second is the only part that touches anything
+  # outside this repository, and it waits for a human. Approving a push that had
+  # not been built yet would be approving nothing.
+  aur-prepare:
+    if: github.event_name == 'release'
+    needs: [aur]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    name: aur-prepare
+
+    steps:
+      - name: Install packaging tools and build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git curl cmake ninja qt6-base libpipewire hicolor-icon-theme
+
+      # main rather than the tag: the version bump is a commit on the branch. The
+      # release's own code arrives as the source tarball the PKGBUILD downloads,
+      # which is the whole point — that tarball is what users will build.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Create a build user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      # Downloads the published tarball and derives its checksum — the one thing
+      # nobody should ever type by hand, since a wrong one breaks every install
+      # at once and the AUR keeps no copy of the source to check against.
+      - name: Point the package at the new release
+        run: |
+          su builder -s /bin/bash -c \
+            "cd '${GITHUB_WORKSPACE}' && ./packaging/aur/update-version.sh '${TAG}'"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+
+      - name: The package must be the version the release names
+        run: |
+          expected="${TAG#v}"
+          pkgver="$(awk -F= '/^pkgver=/{print $2}' packaging/aur/sonero/PKGBUILD)"
+          echo "package ${pkgver}, release ${expected}"
+          if [ "${pkgver}" != "${expected}" ]; then
+            echo "::error::the PKGBUILD says ${pkgver} but the release is ${expected}"
+            exit 1
+          fi
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+
+      # The real thing: makepkg from the published tarball, check() and all. If
+      # this fails, the AUR is better off still serving the previous release.
+      - name: Build the new package
+        working-directory: packaging/aur/sonero
+        run: su builder -s /bin/bash -c "cd '${PWD}' && makepkg --noconfirm"
+
+      - name: The binary must carry the release version
+        working-directory: packaging/aur/sonero
+        run: |
+          pkgver="$(awk -F= '/^pkgver=/{print $2}' PKGBUILD)"
+          resolved="$(tr -d '[:space:]' < src/build/sonero-version.txt)"
+          echo "package ${pkgver}, binary ${resolved}"
+          if [ "${pkgver}" != "${resolved}" ]; then
+            echo "::error::the package is ${pkgver} but the build resolved ${resolved}"
+            exit 1
+          fi
+
+      # include-hidden-files: .SRCINFO starts with a dot, and without this it is
+      # dropped silently — the publish job would then push a PKGBUILD with a
+      # stale .SRCINFO beside it, which is the one inconsistency the AUR shows
+      # to every user and to nobody in review.
+      - name: Hand the updated package to the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur-sonero
+          path: |
+            packaging/aur/sonero/PKGBUILD
+            packaging/aur/sonero/.SRCINFO
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # The gate. `environment: aur` is what makes a run stop here and wait for you —
+  # but only if that environment carries a required-reviewer rule. Create it at
+  # Settings -> Environments -> aur and add yourself; without the rule this job
+  # runs straight through and the split above buys nothing.
+  #
+  # Needs `publish` as well: the AUR should not start handing out a version whose
+  # packages never made it onto the release page.
+  aur-publish:
+    if: github.event_name == 'release'
+    needs: [aur-prepare, publish]
+    runs-on: ubuntu-latest
+    name: aur-publish
+    environment: aur
+    permissions:
+      contents: write  # the version bump is committed back to main
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: aur-sonero
+          path: packaging/aur/sonero
+
+      # main and the AUR carry the same PKGBUILD by definition, so the bump is
+      # committed here rather than left for someone to remember afterwards.
+      - name: Commit the bump to main
+        run: |
+          version="$(awk -F= '/^pkgver=/{print $2}' packaging/aur/sonero/PKGBUILD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packaging/aur/sonero
+          if git diff --cached --quiet; then
+            echo "main already carries ${version}"
+          else
+            # No [skip ci] on purpose: this commit is what CI's own .SRCINFO and
+            # namcap checks should see.
+            git commit -m "aur: ${version}"
+            git push origin HEAD:main
+          fi
+
+      - name: Trust the AUR's host key, and nothing else
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Pinned, not scanned: ssh-keyscan trusts whatever answers, and what
+          # this job pushes is what every `yay -S sonero` then compiles. Check it
+          # against the fingerprint the AUR publishes on its front page:
+          #   SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4
+          # If the AUR ever rotates its key, this line is what has to change.
+          printf '%s\n' \
+            'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' \
+            > ~/.ssh/known_hosts
+
+      - name: Load the AUR key
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          if [ -z "${AUR_SSH_KEY}" ]; then
+            echo "::error::the AUR_SSH_KEY secret is not set — add the private key" \
+                 "whose public half is registered on your AUR account"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "${AUR_SSH_KEY}" > ~/.ssh/aur
+          printf '%s\n' 'Host aur.archlinux.org' '  User aur' \
+                        '  IdentityFile ~/.ssh/aur' '  IdentitiesOnly yes' \
+            > ~/.ssh/config
+
+      # The same script a person would run by hand, with the same checks.
+      - name: Push to the AUR
+        run: |
+          git config --global user.name "Radu Cristian"
+          git config --global user.email "37669757+Tatsu21@users.noreply.github.com"
+          ./packaging/aur/sync-to-aur.sh sonero --push
 
   # Every push to main refreshes one prerelease, so the newest build of the
   # development branch has a permanent, public link — Actions artifacts expire and

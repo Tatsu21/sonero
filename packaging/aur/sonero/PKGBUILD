@@ -1,0 +1,75 @@
+# Maintainer: Radu Cristian <37669757+Tatsu21@users.noreply.github.com>
+
+pkgname=sonero
+pkgver=0.1.2
+pkgrel=1
+pkgdesc="Per-application audio mixer, router and equalizer for PipeWire"
+arch=('x86_64')
+url="https://github.com/Tatsu21/sonero"
+license=('MIT')
+# qt6-base carries Widgets, DBus, Network and Test; libpipewire is what the
+# backend links against. hicolor-icon-theme owns the directories the icons land
+# in. PipeWire itself is a running service rather than a library call, so it is
+# listed where the .deb lists it too — as something you want, not something
+# installing a mixer should drag in.
+depends=('qt6-base' 'libpipewire' 'hicolor-icon-theme')
+makedepends=('cmake' 'ninja')
+optdepends=('pipewire: the audio server Sonero drives — without it there is nothing to mix'
+            'wireplumber: session manager that exposes devices to PipeWire'
+            'qt6-wayland: native Wayland windowing instead of XWayland')
+install="${pkgname}.install"
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/${pkgver}.tar.gz")
+sha256sums=('76968dd65992b37cf8d2d7b50e6f03ca7c7eef2d171b7dd38a51969c26281946')
+
+prepare() {
+    cd "${pkgname}-${pkgver}"
+
+    # Releases from 0.1.3 on read the version from -DSONERO_FALLBACK_VERSION
+    # (see build()). In 0.1.2 and earlier that fallback is a plain set(), which
+    # overrides the cache entry, so the switch is silently ignored and the
+    # binary reports 0.0.0 while pacman calls it 0.1.2. Patch the literal for
+    # those, and check the edit landed rather than discovering it in About.
+    #
+    # Delete this once no packaged release predates the cache variable.
+    if ! grep -q 'SONERO_FALLBACK_VERSION .*CACHE' CMakeLists.txt; then
+        sed -i -E "s/(set\(SONERO_FALLBACK_VERSION )[0-9.]+\)/\1${pkgver})/" \
+            CMakeLists.txt
+        grep -q "set(SONERO_FALLBACK_VERSION ${pkgver})" CMakeLists.txt
+    fi
+}
+
+build() {
+    # -DSONERO_FALLBACK_VERSION: the version normally comes from the newest git
+    # tag, and a release tarball has no .git at all. Without this the binary
+    # would report 0.0.0 while pacman called it 0.1.2.
+    #
+    # -DSONAR_USE_SPDLOG=OFF for the reason the .deb turns it off: spdlog is
+    # optional, and picking it up only when it happens to sit on the build host
+    # makes the package's linkage depend on who built it. The built-in logger
+    # costs nothing.
+    #
+    # CMAKE_BUILD_TYPE=Release rather than None: CMake appends the Release flags
+    # after makepkg's CXXFLAGS/LDFLAGS, so the distribution's hardening survives
+    # and the build still gets -O3 and NDEBUG.
+    cmake -S "${pkgname}-${pkgver}" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DSONERO_FALLBACK_VERSION="${pkgver}" \
+        -DSONAR_USE_SPDLOG=OFF
+    cmake --build build
+}
+
+check() {
+    # Headless: the suite is QTest over the DSP, settings and setup helpers, and
+    # touches neither a display nor a running PipeWire.
+    ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build
+
+    # /usr/share/licenses/<pkg> is where an Arch user looks; the install rules
+    # also drop a copy under share/doc for the .deb's Debian convention.
+    install -Dm644 "${pkgname}-${pkgver}/LICENSE" \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

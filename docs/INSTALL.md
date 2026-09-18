@@ -1,17 +1,18 @@
 # Installing Sonero
 
-Two ways to install, depending on what you want:
+Three ways to install, depending on what you want:
 
-| | `.deb` | AppImage |
-|---|---|---|
-| Distributions | Debian / Ubuntu | any |
-| Needs root | yes (`apt`) | no |
-| Dependencies | installed by apt | bundled |
-| SteelSeries headset access | **works immediately** | needs one click in Settings |
-| Removing it | `sudo apt remove sonero` | delete the file |
+| | `.deb` | pacman package | AppImage |
+|---|---|---|---|
+| Distributions | Debian / Ubuntu | Arch and derivatives | any |
+| Needs root | yes (`apt`) | yes (`pacman`) | no |
+| Dependencies | installed by apt | installed by pacman | bundled |
+| SteelSeries headset access | **works immediately** | **works immediately** | needs one click in Settings |
+| Removing it | `sudo apt remove sonero` | `sudo pacman -R sonero` | delete the file |
 
-**Prefer the `.deb` on Debian or Ubuntu** — it sets everything up, including the
-udev rule that a portable bundle cannot install on its own.
+**Prefer your distribution's package** — the `.deb` on Debian or Ubuntu, the
+`PKGBUILD` in this repository on Arch. Both set everything up, including the udev
+rule that a portable bundle cannot install on its own.
 
 ## The Debian package
 
@@ -74,6 +75,49 @@ both its own and libfmt's ABI version (`libspdlog1.15-fmt10`), which exists on n
 other distribution. Sonero falls back to its built-in logger, leaving only Qt,
 PipeWire and libc as dependencies.
 
+# The pacman package (Arch and derivatives)
+
+The package is not on the AUR yet: registrations there are closed at the time of
+writing, so it cannot be uploaded. The `PKGBUILD` is finished, though, and builds
+the same package the AUR would serve — you just point your helper at this
+repository instead of at a package name:
+
+```sh
+git clone https://github.com/Tatsu21/sonero.git
+yay -B sonero/packaging/aur/sonero        # paru -B works the same way
+```
+
+`-B` builds a `PKGBUILD` from a directory: it fetches the release tarball, pulls
+in the build dependencies, compiles against your Qt and PipeWire, runs the test
+suite and hands the finished package to pacman. Afterwards it is an ordinary
+package — it shows up in `pacman -Qi sonero` and leaves with `pacman -R sonero`.
+
+Without a helper:
+
+```sh
+makepkg -si -D packaging/aur/sonero
+```
+
+Two directories to choose from:
+
+| Directory | Builds |
+|---|---|
+| `packaging/aur/sonero` | the newest release |
+| `packaging/aur/sonero-git` | `main` as it stands |
+
+To update, `git pull` and run the same command again. Once the AUR is open for
+registrations this becomes `yay -S sonero`, and upgrades come with the rest of
+your system.
+
+A headset that was already plugged in when you installed picks up the new udev
+permissions after a replug or a reboot; the package triggers udev, but an
+in-flight device keeps the access it was opened with.
+
+PipeWire and WirePlumber are `optdepends`, not `depends`: they are the audio
+server Sonero drives rather than libraries it links, and installing a mixer
+should not pull an audio server onto a machine running something else. Every
+current Arch desktop already has both.
+
 # The AppImage
 
 A single portable file. There is no installer, and nothing is written outside your
@@ -99,6 +143,32 @@ entry pointing at the right place.
 | FUSE 2 | how AppImages mount themselves | `sudo apt install libfuse2` (Debian/Ubuntu), or run with `--appimage-extract-and-run` |
 
 Both are already present on a normal desktop install.
+
+## Keeping Sonero up to date
+
+**Settings → Updates** holds one switch, off until you turn it on: *Check for
+updates automatically*. With it on, Sonero asks GitHub once a day whether a newer
+release exists and says so; **Check now** does the same on demand. Nothing is
+downloaded or installed until you press a button.
+
+What that button does depends on how Sonero got onto the machine — it works this
+out from where it is running, not from a setting:
+
+| Installed as | The button |
+|---|---|
+| pacman package | Copies `yay -Syu sonero`. Sonero does not touch files pacman owns. |
+| `.deb` | Copies the `apt install` line and links the release page. |
+| AppImage | Downloads the new bundle next to the current one, then restarts into it. |
+| Local build | Links the release page; updating is `git pull` and a rebuild. |
+
+For the AppImage this is a real self-update: the download lands beside the bundle
+you are running (never over it — the file is mounted for as long as the app is
+open), it has to be an AppImage or it is thrown away, and the old bundle is
+removed by the new one on its first start.
+
+The check is a single HTTPS request to `api.github.com` carrying no identity and
+no telemetry. [SECURITY.md](../SECURITY.md#the-update-check) spells out the trust
+model, including what it does *not* give you: releases are not signed.
 
 ## Optional: hardware features that need administrator rights
 

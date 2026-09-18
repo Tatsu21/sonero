@@ -28,6 +28,7 @@
 
 #include "audio/IAudioBackend.h"
 #include "app/SystemSetup.h"
+#include "app/Updater.h"
 #include "config/SettingsStore.h"
 #include "ui/DevicesPage.h"
 #include "ui/EqualizerPage.h"
@@ -171,6 +172,21 @@ void MainWindow::buildUi() {
     // ---- Settings persistence (auto-loaded here, saved on change by the pages) ----
     settings_ = new config::SettingsStore(this);
     notifier_ = new Notifier(settings_, this);  // desktop notifications
+    // Checks GitHub for a newer release — but only if the user switched that on,
+    // and it installs nothing by itself. See the Updates card in Settings.
+    updater_ = new update::Updater(settings_, this);
+    connect(updater_, &update::Updater::updateFound, this,
+            [this](const update::Release& release) {
+                if (notifier_ == nullptr) {
+                    return;
+                }
+                // Not clickable: clicking a notification restores the window,
+                // which says nothing about the update. The Settings page is
+                // where the decision is made, and it is already painted.
+                notifier_->notify(QStringLiteral("Sonero %1 is available").arg(release.version),
+                                  QStringLiteral("Open Settings → Updates to install it."),
+                                  Notifier::Low);
+            });
     // Clicking the "running in background" notification brings the window back.
     connect(notifier_, &Notifier::activated, this, [this] {
         showNormal();
@@ -224,7 +240,7 @@ void MainWindow::buildUi() {
                     &MainWindow::showBatteries);
             pages_->addWidget(devicesPage_);
         } else if (titleView == "Settings") {
-            pages_->addWidget(new SettingsPage(notifier_, settings_));
+            pages_->addWidget(new SettingsPage(notifier_, settings_, updater_));
         } else {
             pages_->addWidget(createPlaceholderPage(QString::fromUtf8(page.title),
                                                     QString::fromUtf8(page.subtitle)));
@@ -380,6 +396,11 @@ void MainWindow::buildUi() {
     if (devicesPage_ != nullptr) {
         showBatteries(devicesPage_->batteries());
     }
+
+    // The automatic update check, if the user asked for one — after a delay, so
+    // it never competes with the audio graph coming up, and throttled to once a
+    // day inside the updater itself. Does nothing at all when switched off.
+    QTimer::singleShot(8000, updater_, [this] { updater_->checkOnStartupIfDue(); });
 }
 
 void MainWindow::buildTrayIcon() {

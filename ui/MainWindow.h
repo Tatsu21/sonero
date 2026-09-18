@@ -21,6 +21,10 @@ namespace sonar::config {
 class SettingsStore;
 }
 
+namespace sonar::update {
+class Updater;
+}
+
 namespace sonar::ui {
 class Notifier;
 class MixerPage;
@@ -78,6 +82,7 @@ private:
     audio::IAudioDevices* audioDevices_ = nullptr;
     config::SettingsStore* settings_ = nullptr;  // owned via QObject parenting
     Notifier* notifier_ = nullptr;                // owned via QObject parenting
+    update::Updater* updater_ = nullptr;          // owned via QObject parenting
     MixerPage* mixerPage_ = nullptr;  // owns the per-channel gain / auto state
     QButtonGroup* navGroup_ = nullptr;
     QStackedWidget* pages_ = nullptr;

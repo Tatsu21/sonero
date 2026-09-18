@@ -374,7 +374,8 @@ footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:
     <p class="eyebrow">Install</p>
     <h2>Pick the file for your distribution</h2>
     <p class="lead">Every release carries all of these. Pushes to <code>main</code> also
-      refresh a <code>dev</code> prerelease, if you would rather run what is being worked on.</p>
+      refresh a <code>dev</code> prerelease, if you would rather run what is being worked on.
+      On Arch there is nothing to download — build the package from the repository instead.</p>
 
     <div class="tablewrap" style="margin-bottom:34px">
       <table>
@@ -388,7 +389,7 @@ footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:
         <tr><td><code>sonero_&lt;version&gt;-ubuntu2404_amd64.deb</code></td>
             <td>Ubuntu 24.04, Linux Mint 22.x</td></tr>
         <tr><td><code>Sonero-&lt;version&gt;-arch-x86_64.AppImage</code></td>
-            <td>Arch, or a distribution at least as new</td></tr>
+            <td>Arch, if you would rather not build — otherwise the package below</td></tr>
         <tr><td><code>Sonero-&lt;version&gt;-fedora-x86_64.AppImage</code></td>
             <td>Fedora, or a distribution at least as new</td></tr>
         </tbody>
@@ -408,8 +409,14 @@ chmod +x Sonero-*-x86_64.AppImage
 sudo apt install ./sonero_*-ubuntu2204_amd64.deb</pre>
       </div>
       <div class="snip">
+        <div class="head"><b>Arch · Manjaro · EndeavourOS</b><button class="copy" type="button">Copy</button></div>
+<pre><span class="c"># builds a real package and installs it with pacman</span>
+git clone https://github.com/Tatsu21/sonero.git
+yay -B sonero/packaging/aur/sonero</pre>
+      </div>
+      <div class="snip">
         <div class="head"><b>From source</b><button class="copy" type="button">Copy</button></div>
-<pre><span class="c"># the nicer route on Arch and Fedora</span>
+<pre><span class="c"># the nicer route on Fedora and anywhere without a package</span>
 cmake -S . -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel

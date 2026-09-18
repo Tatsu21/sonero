@@ -19,6 +19,31 @@ reporting if they can be abused:
 - Its own settings and equalizer presets read from disk — including a preset
   file someone imported from somewhere untrusted.
 - The autostart entry it writes into `~/.config/autostart`.
+- The optional update check, and the AppImage it can download. See below.
+
+## The update check
+
+Off unless you switch it on in **Settings → Updates**, because contacting a
+server is not something an audio mixer should do uninvited. With it on, Sonero
+asks `api.github.com` once a day which release is newest and tells you. It sends
+no identity, no settings and no telemetry — the request carries a user agent
+naming the version, and nothing else.
+
+Installing is always a separate click, and what it does depends on how Sonero
+was installed:
+
+- **Packaged installs (pacman, `.deb`, anything under `/usr`)** — Sonero writes
+  nothing. It shows the command for your package manager and that is all. Files
+  a package manager owns are its business.
+- **AppImage** — the only case where Sonero downloads anything. The bundle comes
+  over HTTPS from `github.com` (or its object storage; a redirect anywhere else
+  aborts the download), lands *next to* the running bundle rather than over it,
+  is rejected unless it is an AppImage-shaped ELF, and is only started when you
+  press the button. The old bundle is removed by the new one on its first run.
+
+There are no signatures on the releases yet, so the trust chain is TLS and
+GitHub's account security. If that is not good enough for your threat model,
+leave the check off and build the package from this repository instead.
 
 ## Supported Versions
 

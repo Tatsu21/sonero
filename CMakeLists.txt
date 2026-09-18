@@ -8,9 +8,19 @@ cmake_minimum_required(VERSION 3.21)
 # shallow CI clone (actions/checkout fetches no tags unless asked), or this
 # repository before its first release. Keep it at or below the newest tag.
 #
+# It is a cache variable so a packager building from a release tarball — which
+# carries no .git, and would otherwise ship a binary calling itself 0.0.0 — can
+# pass the version the package is named after:
+#
+#     cmake -S . -B build -DSONERO_FALLBACK_VERSION=0.1.2
+#
+# That is what packaging/aur does. It overrides nothing: a readable release tag
+# still wins, so this only fills in where the old hard-coded 0.0.0 would have.
+#
 # Plain `git` rather than find_package(Git): this has to run before project(),
 # and find_package before project() is not supported.
-set(SONERO_FALLBACK_VERSION 0.0.0)
+set(SONERO_FALLBACK_VERSION 0.0.0 CACHE STRING
+    "Version to build as when no release tag is readable (tarball builds)")
 set(SONERO_VERSION "${SONERO_FALLBACK_VERSION}")
 if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     # -c safe.directory: inside a container the checkout is owned by a different
@@ -201,6 +211,8 @@ qt_add_executable(Sonero
     app/AutoStart.cpp
     app/SystemSetup.h
     app/SystemSetup.cpp
+    app/Updater.h
+    app/Updater.cpp
     config/SettingsStore.h
     config/SettingsStore.cpp
     ui/Theme.h

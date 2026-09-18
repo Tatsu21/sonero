@@ -122,7 +122,34 @@ sudo apt install ./sonero_0.1.1-ubuntu2204_amd64.deb
 > not install on Mint 21. Build for another target with
 > `./packaging/deb/build-deb-docker.sh ubuntu:22.04` — see [docs/INSTALL.md](docs/INSTALL.md).
 
-### Arch, Fedora, openSUSE, anything else — the AppImage
+### Arch, Manjaro, EndeavourOS — a package built from this repo
+
+```sh
+git clone https://github.com/Tatsu21/sonero.git
+yay -B sonero/packaging/aur/sonero
+```
+
+`yay -B` builds a `PKGBUILD` straight from a directory: it fetches the release
+tarball, pulls in the build dependencies, compiles against *your* Qt and PipeWire,
+runs the test suite, and hands the result to pacman. What you get is an ordinary
+package — `pacman -Qi sonero`, `pacman -R sonero` — including the udev rule that
+makes SteelSeries headset battery work.
+
+| Directory | Builds |
+|---|---|
+| `packaging/aur/sonero` | the newest release |
+| `packaging/aur/sonero-git` | `main` as it stands |
+
+Without an AUR helper, the same thing: `makepkg -si -D packaging/aur/sonero`.
+To update, `git pull` and run the command again.
+
+> **Why not `yay -S sonero`?** Because it is not on the AUR yet — registrations
+> there are closed at the time of writing, so it cannot be uploaded. The
+> `PKGBUILD`s are finished and CI builds them on every push; the day registrations
+> reopen, publishing is one approved release away. See
+> [packaging/aur/README.md](packaging/aur/README.md).
+
+### Fedora, openSUSE, anything else — the AppImage
 
 One portable file that carries its own Qt. Nothing is written outside your home
 directory unless you explicitly approve it.
@@ -135,7 +162,7 @@ chmod +x Sonero-*-x86_64.AppImage
 | File | For |
 |---|---|
 | `Sonero-<version>-x86_64.AppImage` | **take this one** — built on the oldest glibc, so it runs almost anywhere |
-| `Sonero-<version>-arch-x86_64.AppImage` | Arch, or a distribution at least as new |
+| `Sonero-<version>-arch-x86_64.AppImage` | Arch, if you would rather not build — otherwise the package above |
 | `Sonero-<version>-fedora-x86_64.AppImage` | Fedora, or a distribution at least as new |
 
 The last two exist because CI builds on those distributions to catch bundling
@@ -155,11 +182,28 @@ Or build one yourself:
 ./packaging/appimage/build-appimage.sh dist
 ```
 
+### Staying up to date
+
+**Settings → Updates** has a switch — off until you turn it on — that asks GitHub
+once a day whether a newer release exists, and tells you when there is one. Nothing
+is ever installed behind your back, and what the button does depends on how you
+installed Sonero:
+
+| Installed as | What Sonero does |
+|---|---|
+| pacman, `.deb`, anything under `/usr` | Shows the command for your package manager. It writes nothing — those files belong to pacman or dpkg. |
+| AppImage | Downloads the new bundle next to the current one and restarts into it when you say so. The old bundle removes itself on the new one's first run. |
+
+The check sends no identity and no telemetry — it is one HTTPS request to
+`api.github.com`. See [SECURITY.md](SECURITY.md#the-update-check) for what is and is
+not trusted.
+
 ### Or build from source
 
-See [Building](#building) below — the recommended route on Arch and Fedora, where
-compiling against the system Qt is quick and leaves you with a small binary that
-follows your distribution's own Qt updates instead of freezing a copy of them.
+See [Building](#building) below — the recommended route on Fedora and anywhere
+else without a package, where compiling against the system Qt is quick and leaves
+you with a small binary that follows your distribution's own Qt updates instead of
+freezing a copy of them. On Arch the `PKGBUILD` above does exactly this for you.
 
 ---
 
@@ -270,6 +314,10 @@ sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-wayland pipewire
 Arch ships headers in the main packages, so there is no `-dev` split — `pipewire`
 already provides `libpipewire-0.3.pc`. Add `spdlog` for richer logs.
 
+To build a package instead of a loose binary, the `PKGBUILD` that does all of this
+is in [packaging/aur/sonero/](packaging/aur/sonero/): `makepkg -si` there, or
+`yay -B packaging/aur/sonero`.
+
 #### Fedora · RHEL · Nobara
 
 ```sh
@@ -330,14 +378,18 @@ you the exact commands before running them.
 `x.y.z` (a leading `v` is fine), so cutting a release is one tag and not a tag plus an
 edit somewhere. A build with no readable tag — a source tarball, a clone without tags —
 falls back to `SONERO_FALLBACK_VERSION` in `CMakeLists.txt` and says so loudly in the
-configure output. The app shows the exact commit too: **Settings → About** reads
+configure output. That fallback is a cache variable, so a packager building a tarball can
+pass the version the package is named after: `-DSONERO_FALLBACK_VERSION=0.1.3`, which is
+what the `PKGBUILD` does. The app shows the exact commit too: **Settings → About** reads
 `0.1.1 (main@1a2b3c)`, or the tag alone on a release build.
 
 </details>
 
 > **A note on CI coverage:** the pipeline builds and tests on Ubuntu 22.04 and 24.04,
 > and in Arch and Fedora containers — rolling distributions carry the newest toolchains,
-> so they break a build long before an LTS runner notices. The openSUSE list is the
+> so they break a build long before an LTS runner notices. It also builds the pacman
+> package with `makepkg`, since that one is compiled on the user's machine rather than
+> shipped. The openSUSE list is the
 > standard equivalent but is not built by CI; open an issue if a package name drifts.
 
 ---
@@ -364,6 +416,9 @@ Both are reversible by deleting a single file. Details in [docs/INSTALL.md](docs
 ~/.config/Sonero/Sonero/settings.json   mixer, EQ, routing, preferences
 ~/.config/Sonero/Sonero/presets/        saved equalizer presets
 ```
+
+The update check keeps its switch and the time of the last check in the same file,
+under `updates`. Removing that section turns it back off.
 
 Delete that directory to return to factory defaults.
 

@@ -1,0 +1,20 @@
+pkgbase = sonero
+	pkgdesc = Per-application audio mixer, router and equalizer for PipeWire
+	pkgver = 0.1.2
+	pkgrel = 1
+	url = https://github.com/Tatsu21/sonero
+	install = sonero.install
+	arch = x86_64
+	license = MIT
+	makedepends = cmake
+	makedepends = ninja
+	depends = qt6-base
+	depends = libpipewire
+	depends = hicolor-icon-theme
+	optdepends = pipewire: the audio server Sonero drives — without it there is nothing to mix
+	optdepends = wireplumber: session manager that exposes devices to PipeWire
+	optdepends = qt6-wayland: native Wayland windowing instead of XWayland
+	source = sonero-0.1.2.tar.gz::https://github.com/Tatsu21/sonero/archive/refs/tags/0.1.2.tar.gz
+	sha256sums = 76968dd65992b37cf8d2d7b50e6f03ca7c7eef2d171b7dd38a51969c26281946
+
+pkgname = sonero

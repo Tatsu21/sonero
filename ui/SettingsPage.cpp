@@ -10,13 +10,20 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMessageBox>
+#include <QClipboard>
+#include <QDesktopServices>
+#include <QGuiApplication>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include "app/AutoStart.h"
 #include "app/SystemSetup.h"
+#include "app/Updater.h"
 #include "config/SettingsStore.h"
 #include "ui/Notifier.h"
 
@@ -46,8 +53,9 @@ QVBoxLayout* makeCard(QVBoxLayout* root, const QString& title, const QString& su
 }
 }  // namespace
 
-SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, QWidget* parent)
-    : QWidget(parent), notifier_(notifier), settings_(settings) {
+SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings,
+                           update::Updater* updater, QWidget* parent)
+    : QWidget(parent), notifier_(notifier), settings_(settings), updater_(updater) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     auto* scroll = new QScrollArea(this);
@@ -162,10 +170,226 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings, 
     quitRow->addWidget(quit);
     bg->addLayout(quitRow);
 
+    buildUpdatesCard(root);
     buildSystemCard(root);
     buildAboutCard(root);
 
     root->addStretch(1);
+}
+
+void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
+    const update::Channel channel =
+        updater_ != nullptr ? updater_->channel() : update::currentChannel();
+    const QString version = updater_ != nullptr
+                                ? updater_->runningVersion()
+                                : QString::fromStdString(versionString());
+
+    QVBoxLayout* body =
+        makeCard(root, QStringLiteral("Updates"),
+                 QStringLiteral("You are running Sonero %1, installed as %2.")
+                     .arg(version, update::channelName(channel)));
+
+    auto* autoCheck = new QCheckBox(QStringLiteral("Check for updates automatically"));
+    autoCheck->setChecked(updater_ != nullptr && updater_->autoCheckEnabled());
+    autoCheck->setEnabled(updater_ != nullptr);
+    connect(autoCheck, &QCheckBox::toggled, this, [this](bool on) {
+        if (updater_ == nullptr) {
+            return;
+        }
+        updater_->setAutoCheckEnabled(on);
+        // Switching it on is the user asking the question, so answer it now
+        // rather than at some point over the next day.
+        if (on) {
+            updater_->checkForUpdates(/*userInitiated=*/true);
+        }
+    });
+    body->addWidget(autoCheck);
+
+    // Say plainly what switching it on does — it is the only thing in Sonero
+    // that talks to a server, and the only reason it is off until asked.
+    auto* hint = new QLabel(
+        channel == update::Channel::AppImage
+            ? QStringLiteral("Asks github.com once a day whether a newer release exists. "
+                             "Nothing is downloaded, and nothing replaces this bundle, "
+                             "until you press the button yourself.")
+            : QStringLiteral("Asks github.com once a day whether a newer release exists, "
+                             "and tells you. Installing it stays your package manager's "
+                             "job — Sonero never touches files it does not own."));
+    hint->setObjectName(QStringLiteral("Hint"));
+    hint->setWordWrap(true);
+    body->addWidget(hint);
+
+    updateStatus_ = new QLabel;
+    updateStatus_->setObjectName(QStringLiteral("Hint"));
+    updateStatus_->setWordWrap(true);
+    updateStatus_->setTextFormat(Qt::RichText);
+    updateStatus_->setOpenExternalLinks(true);
+
+    // Monospace and selectable: a command is meant to be read carefully and
+    // copied, and a user who distrusts the Copy button can highlight it instead.
+    updateCommand_ = new QLabel;
+    updateCommand_->setStyleSheet(
+        QStringLiteral("font-family:monospace; background:#12131b; border-radius:6px; "
+                       "padding:8px 10px;"));
+    updateCommand_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    updateCommand_->setVisible(false);
+
+    updateProgress_ = new QProgressBar;
+    updateProgress_->setRange(0, 100);
+    updateProgress_->setTextVisible(true);
+    updateProgress_->setVisible(false);
+
+    auto* row = new QHBoxLayout;
+    updateCheck_ = new QPushButton(QStringLiteral("Check now"));
+    updateCheck_->setCursor(Qt::PointingHandCursor);
+    updateCheck_->setEnabled(updater_ != nullptr);
+    connect(updateCheck_, &QPushButton::clicked, this, [this] {
+        if (updater_ != nullptr) {
+            updater_->checkForUpdates(/*userInitiated=*/true);
+        }
+    });
+
+    updateAction_ = new QPushButton;
+    updateAction_->setCursor(Qt::PointingHandCursor);
+    updateAction_->setVisible(false);
+    connect(updateAction_, &QPushButton::clicked, this, [this] {
+        if (updater_ == nullptr) {
+            return;
+        }
+        // One handler, three jobs, because which one applies is a property of
+        // the updater's state rather than of the button.
+        if (!updater_->downloadedBundlePath().isEmpty()) {
+            if (!updater_->restartIntoDownloadedUpdate()) {
+                updateStatus_->setText(
+                    QStringLiteral("The downloaded bundle could not be started. It is at "
+                                   "%1 — try running it yourself.")
+                        .arg(updater_->downloadedBundlePath().toHtmlEscaped()));
+            }
+            return;
+        }
+        if (updater_->channel() == update::Channel::AppImage) {
+            updateAction_->setEnabled(false);
+            updateProgress_->setValue(0);
+            updateProgress_->setVisible(true);
+            updateStatus_->setText(QStringLiteral("Downloading…"));
+            updater_->downloadUpdate();
+            return;
+        }
+        const QString command = update::upgradeCommand(updater_->channel());
+        if (!command.isEmpty()) {
+            QGuiApplication::clipboard()->setText(command);
+            updateAction_->setText(QStringLiteral("Copied"));
+            // Back to a button that says what it does: a label stuck on "Copied"
+            // tells the next person nothing about what pressing it would do.
+            QTimer::singleShot(2000, this, [this] { showUpdateFound(); });
+            return;
+        }
+        QDesktopServices::openUrl(QUrl(updater_->availableRelease().pageUrl));
+    });
+
+    row->addWidget(updateCheck_);
+    row->addWidget(updateAction_);
+    row->addStretch(1);
+    body->addLayout(row);
+    body->addWidget(updateStatus_);
+    body->addWidget(updateCommand_);
+    body->addWidget(updateProgress_);
+
+    if (updater_ == nullptr) {
+        updateStatus_->setText(QStringLiteral("Update checks are unavailable in this build."));
+        return;
+    }
+
+    connect(updater_, &update::Updater::checkStarted, this, [this] {
+        updateCheck_->setEnabled(false);
+        updateStatus_->setText(QStringLiteral("Asking github.com…"));
+    });
+    connect(updater_, &update::Updater::upToDate, this, [this] {
+        updateCheck_->setEnabled(true);
+        updateAction_->setVisible(false);
+        updateCommand_->setVisible(false);
+        updateStatus_->setText(QStringLiteral("Sonero %1 is the latest release.")
+                                   .arg(updater_->runningVersion()));
+    });
+    connect(updater_, &update::Updater::checkFailed, this, [this](const QString& reason) {
+        updateCheck_->setEnabled(true);
+        updateStatus_->setText(QStringLiteral("Could not check: %1").arg(reason.toHtmlEscaped()));
+    });
+    connect(updater_, &update::Updater::updateFound, this,
+            [this](const update::Release&) { showUpdateFound(); });
+    connect(updater_, &update::Updater::downloadProgress, this,
+            [this](qint64 received, qint64 total) {
+                if (total <= 0) {
+                    updateProgress_->setRange(0, 0);  // unknown length: keep it moving
+                    return;
+                }
+                updateProgress_->setRange(0, 100);
+                updateProgress_->setValue(static_cast<int>(received * 100 / total));
+            });
+    connect(updater_, &update::Updater::downloadFinished, this, [this](const QString& path) {
+        updateProgress_->setVisible(false);
+        updateAction_->setEnabled(true);
+        updateAction_->setText(QStringLiteral("Restart into %1")
+                                   .arg(updater_->availableRelease().version));
+        updateStatus_->setText(
+            QStringLiteral("Downloaded to %1. Restarting starts the new bundle; the old one "
+                           "is removed on its first run.")
+                .arg(path.toHtmlEscaped()));
+    });
+    connect(updater_, &update::Updater::downloadFailed, this, [this](const QString& reason) {
+        updateProgress_->setVisible(false);
+        updateAction_->setEnabled(true);
+        updateStatus_->setText(QStringLiteral("Download failed: %1").arg(reason.toHtmlEscaped()));
+    });
+
+    showUpdateIdle();
+}
+
+void SettingsPage::showUpdateIdle() {
+    if (updater_ == nullptr) {
+        return;
+    }
+    // A check that already ran (the automatic one, at startup) should not be
+    // hidden just because the page is only being looked at now.
+    if (updater_->updateAvailable()) {
+        showUpdateFound();
+        return;
+    }
+    const QString last = updater_->lastCheckedText();
+    updateStatus_->setText(last.isEmpty()
+                               ? QStringLiteral("Not checked yet.")
+                               : QStringLiteral("Last checked %1.").arg(last));
+}
+
+void SettingsPage::showUpdateFound() {
+    if (updater_ == nullptr || !updater_->updateAvailable()) {
+        return;
+    }
+    const update::Release release = updater_->availableRelease();
+    const update::Channel channel = updater_->channel();
+
+    updateCheck_->setEnabled(true);
+    updateStatus_->setText(
+        QStringLiteral("<b>Sonero %1 is available</b> — you have %2. "
+                       "<a style='color:#7c83ff; text-decoration:none' href='%3'>What changed</a>")
+            .arg(release.version.toHtmlEscaped(), updater_->runningVersion().toHtmlEscaped(),
+                 release.pageUrl.toHtmlEscaped()));
+
+    const QString command = update::upgradeCommand(channel);
+    updateCommand_->setVisible(channel != update::Channel::AppImage && !command.isEmpty());
+    updateCommand_->setText(command);
+
+    updateAction_->setVisible(true);
+    updateAction_->setEnabled(true);
+    if (!updater_->downloadedBundlePath().isEmpty()) {
+        updateAction_->setText(QStringLiteral("Restart into %1").arg(release.version));
+    } else if (channel == update::Channel::AppImage) {
+        updateAction_->setText(QStringLiteral("Download %1").arg(release.version));
+    } else if (!command.isEmpty()) {
+        updateAction_->setText(QStringLiteral("Copy command"));
+    } else {
+        updateAction_->setText(QStringLiteral("Open release page"));
+    }
 }
 
 void SettingsPage::buildAboutCard(QVBoxLayout* root) {

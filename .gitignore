@@ -8,6 +8,13 @@ cmake-build-*/
 /dist/
 packaging/appimage/.tools/
 
+# makepkg working directories, left behind by building an AUR package in place.
+# The PKGBUILDs themselves are tracked; everything makepkg produces is not.
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+packaging/aur/*/*.pkg.tar.*
+packaging/aur/*/*.tar.gz
+
 # Never commit private key material.
 *.key
 *.pem

@@ -1,0 +1,71 @@
+# Maintainer: Radu Cristian <37669757+Tatsu21@users.noreply.github.com>
+
+pkgname=sonero-git
+_pkgname=sonero
+pkgver=0.1.2.r7.gc159385
+pkgrel=1
+pkgdesc="Per-application audio mixer, router and equalizer for PipeWire (development version)"
+arch=('x86_64')
+url="https://github.com/Tatsu21/sonero"
+license=('MIT')
+depends=('qt6-base' 'libpipewire' 'hicolor-icon-theme')
+makedepends=('cmake' 'ninja' 'git')
+optdepends=('pipewire: the audio server Sonero drives — without it there is nothing to mix'
+            'wireplumber: session manager that exposes devices to PipeWire'
+            'qt6-wayland: native Wayland windowing instead of XWayland')
+# Installing both would mean two binaries, two menu entries and two copies of
+# the same udev rule.
+provides=("${_pkgname}")
+conflicts=("${_pkgname}")
+install="${_pkgname}.install"
+source=("${pkgname}::git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${srcdir}/${pkgname}"
+    # --match: the repository also carries a moving `dev` tag, and a bare
+    # `git describe` would happily name the package after it. Only x.y.z and
+    # vx.y.z count as releases, which is the same rule the build uses.
+    local _desc
+    _desc=$(git describe --long --tags --abbrev=7 \
+                --match='[0-9]*.[0-9]*.[0-9]*' \
+                --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null) || _desc=
+
+    if [[ -n ${_desc} ]]; then
+        # 0.1.2-3-gc159385 -> 0.1.2.r3.gc159385
+        printf '%s' "${_desc#v}" | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+    else
+        # Before the first release tag, or a clone shallow enough to have lost
+        # it. The commit count still sorts, so upgrades keep working.
+        printf '0.0.0.r%s.g%s' "$(git rev-list --count HEAD)" \
+                               "$(git rev-parse --short=7 HEAD)"
+    fi
+}
+
+build() {
+    # The checkout is a real git repository, so the build resolves its own
+    # version — except when the newest reachable tag is the moving `dev` one,
+    # which is not x.y.z and sends it to the fallback. Hand it the release this
+    # snapshot descends from, taken from the pkgver above, so a development
+    # build still reports the version it came after instead of 0.0.0.
+    local _relver=${pkgver%%.r*}
+
+    # See the release PKGBUILD for why spdlog is off and the build type is
+    # Release.
+    cmake -S "${pkgname}" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DSONERO_FALLBACK_VERSION="${_relver}" \
+        -DSONAR_USE_SPDLOG=OFF
+    cmake --build build
+}
+
+check() {
+    ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build
+    install -Dm644 "${pkgname}/LICENSE" \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

@@ -48,3 +48,12 @@ add_test(NAME AutoGainTest COMMAND AutoGainTest)
 add_executable(FormatTest FormatTest.cpp)
 target_link_libraries(FormatTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME FormatTest COMMAND FormatTest)
+
+# Update logic: version comparison, the GitHub payload, which bundle is offered
+# and — the one that decides whether the app may write anything at all — which
+# kind of install this is. All pure; the network path is not exercised here.
+add_executable(UpdaterTest UpdaterTest.cpp
+    ${CMAKE_SOURCE_DIR}/app/Updater.cpp
+    ${CMAKE_SOURCE_DIR}/config/SettingsStore.cpp)
+target_link_libraries(UpdaterTest PRIVATE sonero_core Qt6::Test Qt6::Network)
+add_test(NAME UpdaterTest COMMAND UpdaterTest)
