@@ -329,8 +329,11 @@ foreach(icon_size 16 22 24 32 48)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
 endforeach()
 
-# The GitHub mark shown in the footer.
+# The GitHub mark shown in the footer, and the combo box arrow the stylesheet
+# points at — Qt draws no arrow of its own once a stylesheet touches the widget.
 install(FILES packaging/icons/github.png
+              packaging/icons/combo-arrow.png
+              packaging/icons/combo-arrow-disabled.png
     DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/icons)
 
 # Licensing, in the two places a user looks for it: the Debian convention

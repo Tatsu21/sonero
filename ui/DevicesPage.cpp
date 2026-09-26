@@ -24,6 +24,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include "app/SystemSetup.h"
 #include "audio/IAudioDevices.h"
 #include "audio/IDeviceFormats.h"
 #include "config/SettingsStore.h"
@@ -268,12 +269,33 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     body->addWidget(statusLabel_);
 
     if (!probe.accessible) {
-        auto* hint = new QLabel(QStringLiteral(
-            "No permission to talk to the base station. Install the udev rule:\n"
-            "  sudo cp packaging/udev/70-sonero-steelseries.rules /etc/udev/rules.d/\n"
-            "  sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw"));
+        // The commands come from the same place the Settings page's one-click fix
+        // runs, so the path in them is the rule's real location — under the
+        // AppImage mount, in the system prefix, or in the source tree. It used to
+        // be spelled out relative to the repository, which is a command that
+        // works for whoever wrote it and for nobody who installed Sonero.
+        QString text =
+            QStringLiteral("No permission to talk to the base station. "
+                           "Settings → System integration can install the udev rule "
+                           "for you, or run it yourself:");
+        const QString script = setup::privilegedFixScript(setup::CheckId::UdevRule);
+        if (script.isEmpty()) {
+            text += QStringLiteral("\n  (the rule file is missing from this build)");
+        } else {
+            for (const QString& line : script.split(QLatin1Char('\n'))) {
+                // Drop the shell preamble: it belongs to the script that pkexec
+                // runs, not to a line someone is meant to paste.
+                if (line.isEmpty() || line.startsWith(QLatin1String("#!")) ||
+                    line == QLatin1String("set -e")) {
+                    continue;
+                }
+                text += QStringLiteral("\n  sudo ") + line;
+            }
+        }
+        auto* hint = new QLabel(text);
         hint->setObjectName(QStringLiteral("Hint"));
         hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        hint->setWordWrap(true);
         body->addWidget(hint);
     }
     body->addSpacing(6);

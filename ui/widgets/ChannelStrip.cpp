@@ -35,7 +35,12 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     setObjectName(QStringLiteral("ChannelStrip"));
     setAttribute(Qt::WA_StyledBackground, true);  // let the QSS card style paint
     setAcceptDrops(true);                         // app chips can be dropped here
-    setFixedWidth(kStripWidth);
+    // A floor, not a fixed size. Six strips at a fixed width left a third of a
+    // 1440-pixel window empty to their right, which reads as a layout that gave
+    // up rather than one that was designed. The ceiling keeps a very wide window
+    // from stretching six channels into six billboards.
+    setMinimumWidth(kStripWidth);
+    setMaximumWidth(kStripWidth * 3 / 2);
 
     const QString accent = accentFor(id);
 
@@ -46,6 +51,15 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
             "silences the whole mix."));
     }
     glyph->setStyleSheet(QStringLiteral("font-size:17px;"));
+    // A fixed height, because the glyphs are not all the same kind of character:
+    // some channels use a colour emoji and some a plain text symbol, and the two
+    // have different ascents. Left to themselves the labels size to their own
+    // glyph, the header row grows for some strips and not others, and everything
+    // below — fader, percentage, Mute and Solo — sits a few pixels lower on
+    // Master and Aux than on the rest.
+    constexpr int kHeaderHeight = 22;
+    glyph->setFixedHeight(kHeaderHeight);
+    glyph->setAlignment(Qt::AlignCenter);
     // System doubles as the master fader, so it is labelled for what it does
     // rather than for the streams it happens to carry.
     const bool isMaster = id == ChannelId::System;
@@ -53,6 +67,8 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     title->setObjectName(QStringLiteral("ChannelName"));
     title->setStyleSheet(
         QStringLiteral("color:%1; font-weight:800; letter-spacing:1px;").arg(accent));
+    title->setFixedHeight(kHeaderHeight);
+    title->setAlignment(Qt::AlignCenter);
     auto* titleRow = new QHBoxLayout;
     titleRow->setSpacing(7);
     titleRow->addStretch(1);

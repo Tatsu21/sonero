@@ -55,6 +55,10 @@ to two different devices at once.
 | 💾 | **Everything persists** — first launch gives you sane defaults; every change you make is remembered for the next session. |
 | 🖥️ | **A real desktop app** — tray icon, desktop notifications, autostart at login and background operation so your channels stay alive when the window is closed. The tray menu shows the battery of every connected device and opens a compact volume window for the channels. |
 
+<div align="center">
+<img src="docs/images/microphone.png" alt="The microphone page: input levels, the voice equalizer and noise suppression" width="860">
+</div>
+
 <details>
 <summary><b>Not there yet</b></summary>
 

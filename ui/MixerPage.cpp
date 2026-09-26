@@ -182,9 +182,11 @@ MixerPage::MixerPage(audio::IMixer& mixer, audio::IAppRouter* router,
 
         strips_.push_back(strip);
         stripByChannel_[static_cast<int>(id)] = strip;
-        stripRow->addWidget(strip);
+        stripRow->addWidget(strip, 1);  // share the row; the strip caps its own width
     }
-    stripRow->addStretch(1);
+    // No trailing stretch: the strips themselves take the space now, and a
+    // stretch here would hand it all back to the right-hand margin.
+
     root->addLayout(stripRow, 1);
 
     if (settings_ != nullptr) {

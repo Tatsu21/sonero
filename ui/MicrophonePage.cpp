@@ -161,11 +161,16 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
                               static_cast<int>(preset));
     }
     chainPreset_->setCurrentIndex(1);  // Podcast, which is what the chain starts on
-    presetRow->addWidget(chainPreset_, 1);
+    // Sized to its contents rather than stretched: a four-item list spread across
+    // the whole window reads as a text field, and the room belongs to the
+    // sentence explaining it.
+    chainPreset_->setMinimumWidth(180);
+    presetRow->addWidget(chainPreset_);
     auto* presetHint = new QLabel(
         QStringLiteral("Raw = every stage off, the microphone as the device delivers it."));
     presetHint->setObjectName(QStringLiteral("Hint"));
-    presetRow->addWidget(presetHint);
+    presetHint->setWordWrap(true);
+    presetRow->addWidget(presetHint, 1);
     root->addLayout(presetRow);
 
     // --- Input (live) ---
@@ -198,13 +203,7 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     outputGain_ = sliderRow(input, QStringLiteral("Output level"), -12, 12,
                             static_cast<int>(mic_.outputGainDb), QStringLiteral(" dB"), true);
 
-    auto* gainHint = new QLabel(
-        QStringLiteral("Input gain sets how hard the processing is driven; the compressor "
-                       "evens out whatever you feed it, so this changes the character more "
-                       "than the volume. Output level is the loudness applications hear."));
-    gainHint->setObjectName(QStringLiteral("Hint"));
-    gainHint->setWordWrap(true);
-    input->addWidget(gainHint);
+
     gainValue_ = nullptr;  // handled inside sliderRow
 
     auto* levelRow = new QHBoxLayout;
@@ -222,6 +221,18 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     muteRow->addWidget(mute_);
     muteRow->addStretch(1);
     input->addLayout(muteRow);
+
+    // Below the controls it describes, not between two of them: a paragraph in
+    // the middle of a column of key/value rows breaks the rhythm that makes them
+    // scannable.
+    auto* gainHint = new QLabel(
+        QStringLiteral("Input gain sets how hard the processing is driven; the compressor "
+                       "evens out whatever you feed it, so this changes the character more "
+                       "than the volume. Output level is the loudness applications hear."));
+    gainHint->setObjectName(QStringLiteral("Hint"));
+    gainHint->setWordWrap(true);
+    input->addSpacing(4);
+    input->addWidget(gainHint);
 
     buildEqualizerCard(root);
 
@@ -361,7 +372,9 @@ void MicrophonePage::buildEqualizerCard(QVBoxLayout* root) {
                                            static_cast<qsizetype>(dsp::presetName(preset).size())),
                          static_cast<int>(preset));
     }
-    topRow->addWidget(preset_, 1);
+    preset_->setMinimumWidth(150);
+    topRow->addWidget(preset_);
+    topRow->addStretch(1);
 
     auto* reset = new QPushButton(QStringLiteral("Flat"));
     reset->setCursor(Qt::PointingHandCursor);
@@ -459,10 +472,19 @@ void MicrophonePage::buildNoiseCard(QVBoxLayout* root) {
     noiseMeter_->setObjectName(QStringLiteral("MicLevel"));
     noiseMeter_->setRange(0, 100);
     noiseMeter_->setValue(0);
-    noiseMeter_->setTextVisible(true);
-    noiseMeter_->setFormat(QStringLiteral("%v%"));
+    // The number goes in a label beside the bar, not inside it: the styled bar
+    // draws its text hard against the left edge, while every other row on this
+    // page puts its value in a right-aligned label. One of them had to give.
+    noiseMeter_->setTextVisible(false);
     noiseMeter_->setEnabled(available);
     meterRow->addWidget(noiseMeter_, 1);
+
+    noiseValue_ = new QLabel(QStringLiteral("0%"));
+    noiseValue_->setObjectName(QStringLiteral("VolumeValue"));
+    noiseValue_->setMinimumWidth(52);
+    noiseValue_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    noiseValue_->setEnabled(available);
+    meterRow->addWidget(noiseValue_);
     body->addLayout(meterRow);
 }
 
@@ -529,7 +551,11 @@ void MicrophonePage::refresh() {
         // model is willing to take out. Beyond that the scale stops meaning
         // anything to a person watching a bar.
         const float removed = std::clamp(-levels.noiseReductionDb / 24.0f, 0.0f, 1.0f);
-        noiseMeter_->setValue(static_cast<int>(removed * 100.0f));
+        const int percent = static_cast<int>(removed * 100.0f);
+        noiseMeter_->setValue(percent);
+        if (noiseValue_ != nullptr) {
+            noiseValue_->setText(QStringLiteral("%1%").arg(percent));
+        }
     }
 }
 

@@ -4,7 +4,10 @@
 #include <QColor>
 #include <QFont>
 #include <QPalette>
+#include <QRegularExpression>
 #include <QStyleFactory>
+
+#include "app/SystemSetup.h"
 
 namespace sonar::ui {
 
@@ -155,11 +158,16 @@ QComboBox {
 }
 QComboBox:hover { border-color: #6366f1; }
 QComboBox::drop-down { border: none; width: 24px; }
+/* An image, because Qt leaves nothing else. The usual CSS triangle — zero size
+   plus transparent side borders — is a web trick Qt does not implement: it draws
+   the sub-control's box, so all that appeared was the top border, a small solid
+   dash where the arrow should be. Dropping the rule does not help either: once a
+   stylesheet touches a combo box, the stylesheet draws it, and with no image
+   there is simply no arrow. The paths are filled in by applyTheme(). */
 QComboBox::down-arrow {
-    image: none; width: 0; height: 0;
-    border-left: 4px solid transparent; border-right: 4px solid transparent;
-    border-top: 5px solid #8b90a8; margin-right: 10px;
+    image: url("@ARROW@"); width: 12px; height: 12px; margin-right: 8px;
 }
+QComboBox::down-arrow:disabled { image: url("@ARROW_DISABLED@"); }
 QComboBox QAbstractItemView {
     background: #191b26; border: 1px solid #2a2e3f; border-radius: 10px;
     selection-background-color: #262a3a; color: #e7e9f2; padding: 6px;
@@ -189,7 +197,6 @@ QSlider::add-page:vertical:disabled { background: #23262f; }
 QSlider::handle:horizontal:disabled,
 QSlider::handle:vertical:disabled { background: #3a3e4e; border-color: #23262f; }
 QComboBox:disabled { background: #171922; color: #4a4e63; border-color: #23262f; }
-QComboBox::down-arrow:disabled { border-top: 5px solid #4a4e63; }
 QCheckBox:disabled { color: #4a4e63; }
 QCheckBox::indicator:disabled { background: #171922; border-color: #23262f; }
 #MicLevel::chunk:disabled { background: #2f333f; }
@@ -233,7 +240,23 @@ void applyTheme(QApplication& app) {
     p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0x56, 0x5b, 0x74));
     app.setPalette(p);
 
-    app.setStyleSheet(QString::fromUtf8(kStyleSheet));
+    // The combo box arrow is a file, and where that file lives depends on how
+    // Sonero was installed — an AppImage mount, a system prefix, or the source
+    // tree. resourcePath() knows all three. If it is missing, the placeholders
+    // are dropped rather than left in the sheet: a url() pointing at "@ARROW@"
+    // makes Qt log a warning for every combo box on every repaint.
+    QString sheet = QString::fromUtf8(kStyleSheet);
+    const QString arrow = setup::resourcePath(QStringLiteral("icons/combo-arrow.png"));
+    const QString arrowOff =
+        setup::resourcePath(QStringLiteral("icons/combo-arrow-disabled.png"));
+    if (arrow.isEmpty() || arrowOff.isEmpty()) {
+        sheet.remove(QRegularExpression(
+            QStringLiteral("QComboBox::down-arrow[^}]*\\}")));
+    } else {
+        sheet.replace(QStringLiteral("@ARROW@"), arrow);
+        sheet.replace(QStringLiteral("@ARROW_DISABLED@"), arrowOff);
+    }
+    app.setStyleSheet(sheet);
 }
 
 }  // namespace sonar::ui

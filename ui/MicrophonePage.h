@@ -80,6 +80,7 @@ private:
     QCheckBox* noiseEnable_ = nullptr;
     QLabel* noiseState_ = nullptr;
     QProgressBar* noiseMeter_ = nullptr;
+    QLabel* noiseValue_ = nullptr;
 };
 
 }  // namespace sonar::ui
