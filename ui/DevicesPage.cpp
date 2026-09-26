@@ -104,6 +104,10 @@ TypeStyle typeStyle(audio::DeviceType t) {
         case DeviceType::Hdmi:      return {"HDMI", "#a855f7"};
         case DeviceType::Spdif:     return {"S/PDIF", "#14b8a6"};
         case DeviceType::Analog:    return {"Analog", "#64748b"};
+        // Nothing classifies a device as System today; it is handled so that
+        // -Wswitch keeps warning when a new class is added, rather than letting
+        // the new one fall through to the generic badge unnoticed.
+        case DeviceType::System:
         case DeviceType::Other:     return {"Audio", "#64748b"};
     }
     return {"Audio", "#64748b"};

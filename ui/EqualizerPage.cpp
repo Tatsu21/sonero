@@ -307,14 +307,14 @@ void EqualizerPage::rebuildPresetCombo() {
 }
 
 void EqualizerPage::onPresetSelected() {
-    const QVariant data = presetCombo_->currentData();
-    if (data.typeId() == QMetaType::QString) {
-        if (const auto loaded = presets::load(data.toString())) {
+    const QVariant chosen = presetCombo_->currentData();
+    if (chosen.typeId() == QMetaType::QString) {
+        if (const auto loaded = presets::load(chosen.toString())) {
             current() = *loaded;
         }
         reflectControls(false);  // keep the user preset shown in the combo
     } else {
-        dsp::applyPreset(current(), static_cast<dsp::EqPreset>(data.toInt()));
+        dsp::applyPreset(current(), static_cast<dsp::EqPreset>(chosen.toInt()));
         reflectControls(false);
     }
     pushEq();

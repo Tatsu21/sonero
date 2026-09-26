@@ -71,18 +71,21 @@ QRectF EqCurve::plotRect() const {
 float EqCurve::freqToX(float freq) const {
     const QRectF r = plotRect();
     const float t = (std::log10(freq) - kLogMin) / (kLogMax - kLogMin);
-    return r.left() + t * r.width();
+    // The rectangle is in qreal; the curve is drawn in float. The cast is
+    // here so the narrowing is a decision rather than something the compiler
+    // does quietly.
+    return static_cast<float>(r.left() + t * r.width());
 }
 
 float EqCurve::gainToY(float gainDb) const {
     const QRectF r = plotRect();
     const float t = (gainDb - kMinGainDb) / (kMaxGainDb - kMinGainDb);
-    return r.bottom() - t * r.height();
+    return static_cast<float>(r.bottom() - t * r.height());
 }
 
 float EqCurve::yToGain(float y) const {
     const QRectF r = plotRect();
-    const float t = (r.bottom() - y) / r.height();
+    const float t = static_cast<float>((r.bottom() - y) / r.height());
     return kMinGainDb + t * (kMaxGainDb - kMinGainDb);
 }
 
@@ -187,7 +190,7 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     QPainterPath curve;
     const int steps = static_cast<int>(r.width());
     for (int i = 0; i <= steps; ++i) {
-        const float x = r.left() + static_cast<float>(i);
+        const float x = static_cast<float>(r.left()) + static_cast<float>(i);
         const float t = static_cast<float>(i) / static_cast<float>(steps);
         const float freq = std::pow(10.0f, kLogMin + t * (kLogMax - kLogMin));
         const float g = std::clamp(dsp::responseDbAt(settings_, freq), kMinGainDb, kMaxGainDb);

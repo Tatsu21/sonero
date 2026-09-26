@@ -18,7 +18,7 @@ struct AudioDevice {
     std::uint64_t serial = 0;      // object.serial of the sink node (routing target)
     std::string name;              // node.name (stable identifier)
     std::string description;       // human-friendly label
-    DeviceType type = DeviceType::System;  // inferred from node.name
+    DeviceType type = DeviceType::Other;  // inferred from node.name
 };
 
 // One selectable A2DP codec, exposed by a Bluetooth device as a card profile.

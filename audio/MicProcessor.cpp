@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include <pipewire/pipewire.h>
+#include <pipewire/version.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/latency-utils.h>
 
@@ -416,15 +417,25 @@ void MicProcessor::processPlayback() {
 
     spa_data& d = buffer->buffer->datas[0];
     auto* out = static_cast<float*>(d.data);
-    if (out != nullptr) {
+    // chunk is checked on the capture side too. A buffer without one is not
+    // something PipeWire hands over in practice, but writing through it is the
+    // difference between silence and a crash inside the audio thread.
+    if (out != nullptr && d.chunk != nullptr) {
         constexpr std::uint32_t kStride = sizeof(float) * 2;
         // maxsize is the size of the shared buffer, which can be far larger than
         // one graph quantum. Filling all of it every cycle is work nobody asked
         // for, on the one thread that must never run long.
         std::uint32_t frames = std::min<std::uint32_t>(d.maxsize / kStride, kMaxBlock);
+#if PW_CHECK_VERSION(0, 3, 49)
+        // pw_buffer::requested says how much the consumer actually wants, which
+        // is less than the buffer can hold for most of a graph cycle. It arrived
+        // in 0.3.49, and Ubuntu 22.04 — a target, because its glibc is what the
+        // portable AppImage is built against — ships 0.3.48. Without it the block
+        // above is the bound: more work than needed, never a wrong result.
         if (buffer->requested != 0) {
             frames = std::min<std::uint32_t>(frames, static_cast<std::uint32_t>(buffer->requested));
         }
+#endif
 
         const std::uint32_t read = ringRead_.load(std::memory_order_relaxed);
         const std::uint32_t write = ringWrite_.load(std::memory_order_acquire);
