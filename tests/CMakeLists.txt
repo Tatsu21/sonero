@@ -57,3 +57,16 @@ add_executable(UpdaterTest UpdaterTest.cpp
     ${CMAKE_SOURCE_DIR}/config/SettingsStore.cpp)
 target_link_libraries(UpdaterTest PRIVATE sonero_core Qt6::Test Qt6::Network)
 add_test(NAME UpdaterTest COMMAND UpdaterTest)
+
+# The microphone chain: gate, de-esser, compressor and limiter, each checked
+# against a signal whose right answer is known before the code runs.
+add_executable(MicChainTest MicChainTest.cpp)
+target_link_libraries(MicChainTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME MicChainTest COMMAND MicChainTest)
+
+# The noise model's wrapper. The interesting half of this suite only runs where
+# RNNoise is installed (CI builds it); everywhere else it checks the one thing
+# that matters without a model — that the microphone still comes out the far end.
+add_executable(NoiseSuppressorTest NoiseSuppressorTest.cpp)
+target_link_libraries(NoiseSuppressorTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME NoiseSuppressorTest COMMAND NoiseSuppressorTest)

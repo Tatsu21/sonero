@@ -12,7 +12,10 @@ license=('MIT')
 # in. PipeWire itself is a running service rather than a library call, so it is
 # listed where the .deb lists it too — as something you want, not something
 # installing a mixer should drag in.
-depends=('qt6-base' 'libpipewire' 'hicolor-icon-theme')
+# rnnoise is what the microphone's noise suppression actually runs. It is in
+# extra, it is small, and without it that switch in Settings cannot be turned on
+# — so it is a hard dependency rather than something the build picks up by luck.
+depends=('qt6-base' 'libpipewire' 'rnnoise' 'hicolor-icon-theme')
 makedepends=('cmake' 'ninja')
 optdepends=('pipewire: the audio server Sonero drives — without it there is nothing to mix'
             'wireplumber: session manager that exposes devices to PipeWire'

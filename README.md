@@ -47,7 +47,7 @@ to two different devices at once.
 | 🎛️ | **Equalizer per channel** in 10, 15 or 31 bands, with 24 built-in presets (music, gaming, voice, movie) plus save / import / export of your own. |
 | 🔊 | **Per-channel gain, set automatically on request** — it holds the highest gain (up to +6 dB) that keeps the channel's real output clear of full scale: quiet material climbs, a peak that overshoots is taken back by exactly what it overshot. Slow up, immediate down, so nothing breathes. |
 | 🎥 | **Streaming mix for OBS** — a `Sonero Stream` input source with an independent send level per channel, so your viewers hear a different balance than you do. |
-| 🎤 | **Virtual microphone** — a `Sonero Microphone` source your apps can select like any other. Its gain, mute and level controls are laid out but not yet wired, and the page says so. |
+| 🎤 | **A microphone chain, not just a level** — the `Sonero Microphone` source your apps select runs a full voice chain: high-pass, learned noise suppression (RNNoise), gate, de-esser, 10-band voice equalizer, compressor and a brick-wall limiter, with presets for podcasting, streaming and meetings. Every application recording from Sonero hears the processed voice. |
 | 🎧 | **Any output device** — USB, Bluetooth, HDMI, S/PDIF and analog, each detected and badged automatically, each with its own output selection per channel. |
 | 💿 | **Per-device transmission format** — sample rate and bit depth up to 24-bit / 96 kHz, written as a per-device WirePlumber drop-in, so changing one device never disturbs the others. |
 | 📶 | **Bluetooth done properly** — automatic switch to the best A2DP codec the headset offers, ranked from LDAC (untested — see below) and aptX down to SBC, plus battery level through BlueZ. |
@@ -63,9 +63,12 @@ clickable, so nothing pretends to work:
 
 - **Profiles** — saving whole configurations as named profiles is not implemented; the
   tab is disabled.
-- **Microphone page** — the virtual source is live and apps can record from it, but every
-  control on that page (gain, mute, level, noise suppression, gate, monitoring) is inert
-  and marked `PREPARED`. The DSP behind them is not wired.
+- **Microphone gate, compressor and de-esser have no controls yet.** The whole chain
+  runs — it is what the microphone already sounds like — but only the chain preset, input
+  gain, output level, mute, noise suppression and the voice equalizer are adjustable. The
+  gate, de-esser, compressor and limiter run at the preset's values, and their cards stay
+  marked `PREPARED` until each gets its own controls. Monitoring ("hear myself") is not
+  implemented.
 - **SteelSeries hardware EQ** — the HID writes are accepted by the dock and change nothing
   audible; unsolved, so the card is disabled. Use the per-channel equalizer instead, which
   runs in software and works with any headset.
@@ -213,6 +216,7 @@ freezing a copy of them. On Arch the `PKGBUILD` above does exactly this for you.
 |---|---|---|
 | **PipeWire** | 0.3 | Plus WirePlumber as the session manager. Already running on every current desktop. |
 | **Qt** | 6.2 | Widgets, D-Bus and Network modules. |
+| **RNNoise** | 0.2 | Optional, and only for the microphone's noise suppression. Packaged on Arch; built by `packaging/build-rnnoise.sh` everywhere else. Without it that one stage reports itself unavailable. |
 | **CPU** | x86-64 | Nothing exotic; the DSP is a handful of biquads per channel. |
 
 PipeWire is a *recommended*, not a hard, dependency of the `.deb` — installing Sonero
@@ -305,14 +309,31 @@ sudo apt install build-essential cmake ninja-build pkg-config dpkg-dev \
 `libgl-dev` and `libegl-dev` matter: Qt6's CMake config needs them, and
 `--no-install-recommends` will otherwise skip them. `libspdlog-dev` is optional.
 
+**Noise suppression needs RNNoise, and Debian and Ubuntu do not package it** (it is
+in Debian sid and forky, not in trixie; Ubuntu has none). Without it the microphone's
+noise suppression reports itself unavailable and the audio passes through untouched.
+To build it:
+
+```sh
+sudo apt install autoconf automake libtool
+./packaging/build-rnnoise.sh
+```
+
+It installs a static library under `/usr/local`, so nothing links against a shared
+library the distribution cannot supply. CI runs the same script.
+
 #### Arch · Manjaro · EndeavourOS
 
 ```sh
-sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-wayland pipewire
+sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-wayland pipewire rnnoise
 ```
 
 Arch ships headers in the main packages, so there is no `-dev` split — `pipewire`
 already provides `libpipewire-0.3.pc`. Add `spdlog` for richer logs.
+
+Arch is the one distribution that packages RNNoise, so `rnnoise` above is all the
+microphone's noise suppression needs — everywhere else it has to be built, see the
+Debian section.
 
 To build a package instead of a loose binary, the `PKGBUILD` that does all of this
 is in [packaging/aur/sonero/](packaging/aur/sonero/): `makepkg -si` there, or
@@ -327,6 +348,10 @@ sudo dnf install gcc-c++ cmake ninja-build pkgconf-pkg-config \
 
 `qt6-qtbase-devel` pulls in the Mesa GL/EGL development packages Qt6 needs.
 Add `spdlog-devel` for richer logs.
+
+Fedora packages no RNNoise in any release, so the microphone's noise suppression
+needs `sudo dnf install autoconf automake libtool` and then
+`./packaging/build-rnnoise.sh`, exactly as on Debian.
 
 #### openSUSE Tumbleweed · Leap
 

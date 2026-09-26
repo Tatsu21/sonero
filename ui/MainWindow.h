@@ -15,6 +15,7 @@ class IChannelController;
 class IEqualizerController;
 class IDeviceFormats;
 class IAudioDevices;
+class IMicrophoneController;
 }
 
 namespace sonar::config {
@@ -53,7 +54,9 @@ public:
                audio::IAppRouter* router, audio::IChannelController* controller,
                audio::IEqualizerController* eqController,
                audio::IDeviceFormats* deviceFormats = nullptr,
-               audio::IAudioDevices* audioDevices = nullptr, QWidget* parent = nullptr);
+               audio::IAudioDevices* audioDevices = nullptr,
+               audio::IMicrophoneController* micController = nullptr,
+               QWidget* parent = nullptr);
     ~MainWindow() override;
 
 protected:
@@ -80,6 +83,7 @@ private:
     audio::IEqualizerController* eqController_ = nullptr;
     audio::IDeviceFormats* deviceFormats_ = nullptr;
     audio::IAudioDevices* audioDevices_ = nullptr;
+    audio::IMicrophoneController* micController_ = nullptr;
     config::SettingsStore* settings_ = nullptr;  // owned via QObject parenting
     Notifier* notifier_ = nullptr;                // owned via QObject parenting
     update::Updater* updater_ = nullptr;          // owned via QObject parenting

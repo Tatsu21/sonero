@@ -18,6 +18,8 @@
 #include "audio/IChannelController.h"
 #include "audio/IDeviceFormats.h"
 #include "audio/IEqualizerController.h"
+#include "audio/IMicrophoneController.h"
+#include "audio/MicProcessor.h"
 
 // Opaque libpipewire types — forward declared so this header stays lightweight.
 struct pw_thread_loop;
@@ -52,6 +54,7 @@ class PipeWireManager final : public IAudioBackend,
                               public IAppRouter,
                               public IChannelController,
                               public IEqualizerController,
+                              public IMicrophoneController,
                               public IDeviceFormats,
                               public IAudioDevices {
 public:
@@ -91,6 +94,18 @@ public:
 
     // --- IEqualizerController ---
     void applyEqualizer(ChannelId id, const dsp::EqSettings& settings) override;
+
+    // --- IMicrophoneController ---
+    void setMicSettings(const dsp::MicSettings& settings) override;
+    [[nodiscard]] dsp::MicSettings micSettings() const override;
+    [[nodiscard]] MicLevels micLevels() override;
+    void setMicNoiseSuppression(bool on) override;
+    [[nodiscard]] bool micNoiseSuppression() const override;
+    [[nodiscard]] bool micNoiseSuppressionAvailable() const override;
+    [[nodiscard]] std::string_view micNoiseSuppressionBackend() const override;
+    bool setMicCaptureDevice(const std::string& nodeName) override;
+    [[nodiscard]] std::string micCaptureDevice() const override;
+    [[nodiscard]] float micLatencyMs() const override;
 
     // --- IDeviceFormats ---
     [[nodiscard]] DeviceFormats supportedFormats(const std::string& nameContains) override;
@@ -162,6 +177,10 @@ private:
     void bumpRevision() noexcept { revision_.fetch_add(1, std::memory_order_relaxed); }
 
     // PipeWire connection.
+    // The microphone's own node pair and DSP. Not a filter-chain module like the
+    // other channels: the chain it runs is ours, and the meters come out of it.
+    MicProcessor mic_;
+
     pw_thread_loop* loop_ = nullptr;
     pw_context* context_ = nullptr;
     pw_core* core_ = nullptr;

@@ -10,6 +10,7 @@ pkgbase = sonero
 	makedepends = ninja
 	depends = qt6-base
 	depends = libpipewire
+	depends = rnnoise
 	depends = hicolor-icon-theme
 	optdepends = pipewire: the audio server Sonero drives — without it there is nothing to mix
 	optdepends = wireplumber: session manager that exposes devices to PipeWire

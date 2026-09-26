@@ -149,7 +149,8 @@ MainWindow::MainWindow(const audio::IAudioBackend& backend, audio::IMixer& mixer
                        audio::IAppRouter* router, audio::IChannelController* controller,
                        audio::IEqualizerController* eqController,
                        audio::IDeviceFormats* deviceFormats,
-                       audio::IAudioDevices* audioDevices, QWidget* parent)
+                       audio::IAudioDevices* audioDevices,
+                       audio::IMicrophoneController* micController, QWidget* parent)
     : QMainWindow(parent),
       backend_(backend),
       mixer_(mixer),
@@ -157,7 +158,8 @@ MainWindow::MainWindow(const audio::IAudioBackend& backend, audio::IMixer& mixer
       controller_(controller),
       eqController_(eqController),
       deviceFormats_(deviceFormats),
-      audioDevices_(audioDevices) {
+      audioDevices_(audioDevices),
+      micController_(micController) {
     buildUi();
 }
 
@@ -231,7 +233,8 @@ void MainWindow::buildUi() {
             }
             pages_->addWidget(channels);
         } else if (titleView == "Microphone") {
-            pages_->addWidget(new MicrophonePage(controller_, settings_));
+            pages_->addWidget(
+                new MicrophonePage(controller_, eqController_, micController_, settings_));
         } else if (titleView == "Devices") {
             devicesPage_ = new DevicesPage(audioDevices_, deviceFormats_, settings_, notifier_);
             // The page already polls both battery sources (USB HID and BlueZ);

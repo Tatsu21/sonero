@@ -8,7 +8,10 @@ pkgdesc="Per-application audio mixer, router and equalizer for PipeWire (develop
 arch=('x86_64')
 url="https://github.com/Tatsu21/sonero"
 license=('MIT')
-depends=('qt6-base' 'libpipewire' 'hicolor-icon-theme')
+# rnnoise is what the microphone's noise suppression actually runs. It is in
+# extra, it is small, and without it that switch in Settings cannot be turned on
+# — so it is a hard dependency rather than something the build picks up by luck.
+depends=('qt6-base' 'libpipewire' 'rnnoise' 'hicolor-icon-theme')
 makedepends=('cmake' 'ninja' 'git')
 optdepends=('pipewire: the audio server Sonero drives — without it there is nothing to mix'
             'wireplumber: session manager that exposes devices to PipeWire'

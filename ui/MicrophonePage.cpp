@@ -11,13 +11,17 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include "audio/Channel.h"
 #include "audio/IChannelController.h"
+#include "audio/IEqualizerController.h"
+#include "audio/IMicrophoneController.h"
 #include "config/SettingsStore.h"
+#include "ui/widgets/EqCurve.h"
 
 namespace sonar::ui {
 
@@ -83,6 +87,10 @@ QSlider* sliderRow(QVBoxLayout* body, const QString& label, int min, int max, in
     // beside a dead slider is the one thing that would still read as usable.
     key->setEnabled(enabled);
     val->setEnabled(enabled);
+    // The readout lives on this signal, so wrapping the slider in a
+    // QSignalBlocker to set it silently desynchronises the two: the handle moves
+    // and the number does not. Use showMicSettings(), which guards the handlers
+    // with syncing_ instead of silencing the slider.
     QObject::connect(slider, &QSlider::valueChanged, val,
                      [val, suffix](int v) { val->setText(QStringLiteral("%1%2").arg(v).arg(suffix)); });
     row->addWidget(slider, 1);
@@ -100,8 +108,18 @@ QCheckBox* preparedCheck(const QString& text) {
 }  // namespace
 
 MicrophonePage::MicrophonePage(audio::IChannelController* controller,
+                               audio::IEqualizerController* eqController,
+                               audio::IMicrophoneController* micController,
                                config::SettingsStore* settings, QWidget* parent)
-    : QWidget(parent), controller_(controller), settings_(settings) {
+    : QWidget(parent),
+      controller_(controller),
+      eqController_(eqController),
+      micController_(micController),
+      settings_(settings) {
+    // Start from whatever the chain is already running, so the page reflects the
+    // audio rather than resetting it on every visit.
+    mic_ = micController_ != nullptr ? micController_->micSettings()
+                                     : dsp::presetSettings(dsp::MicPreset::Podcast);
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
 
@@ -119,8 +137,8 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     auto* title = new QLabel(QStringLiteral("Microphone"), page);
     title->setObjectName(QStringLiteral("PageTitle"));
     auto* subtitle = new QLabel(
-        QStringLiteral("Your mic is a virtual source apps can select — shaping it arrives "
-                       "in a later stage"), page);
+        QStringLiteral("Your mic is a virtual source apps can select. Level and the voice "
+                       "equalizer are live; the processing chain is on its way"), page);
     subtitle->setObjectName(QStringLiteral("PageSubtitle"));
     auto* head = new QVBoxLayout;
     head->setSpacing(4);
@@ -128,36 +146,70 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     head->addWidget(subtitle);
     root->addLayout(head);
 
-    // --- Input (prepared) ---
-    // The wiring below is real — gain and mute reach the virtual mic and the
-    // meter polls it — but nothing of it takes effect yet, so the card is inert
-    // like the three below it. Re-enabling is a matter of flipping the
-    // setEnabled(false) calls and starting timer_ again.
+    // --- Chain preset ---
+    // First, because it is the control that answers "what is this doing to my
+    // voice" fastest: Raw switches every stage off, which is the A/B that makes
+    // the rest of the page audible.
+    auto* presetRow = new QHBoxLayout;
+    presetRow->addWidget(caption(QStringLiteral("Chain preset")));
+    chainPreset_ = new QComboBox;
+    for (const dsp::MicPreset preset :
+         {dsp::MicPreset::Raw, dsp::MicPreset::Podcast, dsp::MicPreset::Streaming,
+          dsp::MicPreset::Meeting}) {
+        const std::string_view name = dsp::micPresetName(preset);
+        chainPreset_->addItem(QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size())),
+                              static_cast<int>(preset));
+    }
+    chainPreset_->setCurrentIndex(1);  // Podcast, which is what the chain starts on
+    presetRow->addWidget(chainPreset_, 1);
+    auto* presetHint = new QLabel(
+        QStringLiteral("Raw = every stage off, the microphone as the device delivers it."));
+    presetHint->setObjectName(QStringLiteral("Hint"));
+    presetRow->addWidget(presetHint);
+    root->addLayout(presetRow);
+
+    // --- Input (live) ---
     QVBoxLayout* input = makeCard(root, QStringLiteral("Input"),
                                   QStringLiteral("Gain, mute and level of the virtual mic."),
-                                  true);
+                                  false);
 
     auto* deviceRow = new QHBoxLayout;
-    auto* deviceKey = caption(QStringLiteral("Device"));
-    deviceKey->setEnabled(false);
-    deviceRow->addWidget(deviceKey);
-    auto* device = new QComboBox;
-    device->addItem(QStringLiteral("System default microphone"));
-    // Nothing reads this yet — the mic is always the system default. A disabled
-    // widget shows no tooltip, so the note that would explain it lives here.
-    device->setEnabled(false);
+    deviceRow->addWidget(caption(QStringLiteral("Device")));
+    // A label rather than a disabled combo box: the microphone follows the
+    // system default, and a dropdown that cannot be dropped down is a promise
+    // the page does not keep. Choosing a device arrives with the input node.
+    auto* device = new QLabel(QStringLiteral("System default microphone"));
+    device->setObjectName(QStringLiteral("Hint"));
     deviceRow->addWidget(device, 1);
     input->addLayout(deviceRow);
 
-    gain_ = sliderRow(input, QStringLiteral("Input gain"), 0, 100, 100, QStringLiteral("%"), false);
+    // Decibels, not per cent: this is a trim on the way into the chain, and the
+    // gate and the compressor below it have thresholds in decibels. A per-cent
+    // fader would leave the user converting in their head.
+    gain_ = sliderRow(input, QStringLiteral("Input gain"), -12, 24,
+                      static_cast<int>(mic_.inputGainDb), QStringLiteral(" dB"), true);
+
+    // Two gains, because they do different things and conflating them is why the
+    // input fader felt broken. Input gain decides how hard the chain is driven —
+    // raise it and the compressor simply works harder, so the result barely gets
+    // louder, which is exactly what a compressor is for. Output level sits after
+    // the compressor and before the limiter, and is the one that changes how loud
+    // the other end hears you.
+    outputGain_ = sliderRow(input, QStringLiteral("Output level"), -12, 12,
+                            static_cast<int>(mic_.outputGainDb), QStringLiteral(" dB"), true);
+
+    auto* gainHint = new QLabel(
+        QStringLiteral("Input gain sets how hard the processing is driven; the compressor "
+                       "evens out whatever you feed it, so this changes the character more "
+                       "than the volume. Output level is the loudness applications hear."));
+    gainHint->setObjectName(QStringLiteral("Hint"));
+    gainHint->setWordWrap(true);
+    input->addWidget(gainHint);
     gainValue_ = nullptr;  // handled inside sliderRow
 
     auto* levelRow = new QHBoxLayout;
-    auto* levelKey = caption(QStringLiteral("Input level"));
-    levelKey->setEnabled(false);
-    levelRow->addWidget(levelKey);
+    levelRow->addWidget(caption(QStringLiteral("Input level")));
     level_ = new QProgressBar;
-    level_->setEnabled(false);
     level_->setObjectName(QStringLiteral("MicLevel"));
     level_->setRange(0, 100);
     level_->setValue(0);
@@ -166,22 +218,22 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     input->addLayout(levelRow);
 
     auto* muteRow = new QHBoxLayout;
-    mute_ = preparedCheck(QStringLiteral("Mute microphone"));
+    mute_ = new QCheckBox(QStringLiteral("Mute microphone"));
     muteRow->addWidget(mute_);
     muteRow->addStretch(1);
     input->addLayout(muteRow);
 
+    buildEqualizerCard(root);
+
     // --- Noise suppression (prepared) ---
-    QVBoxLayout* ns = makeCard(
-        root, QStringLiteral("Noise Suppression"),
-        QStringLiteral("Removes background noise (RNNoise). DSP is wired in a later stage."), true);
-    ns->addWidget(preparedCheck(QStringLiteral("Enable noise suppression")));
-    sliderRow(ns, QStringLiteral("Strength"), 0, 100, 70, QStringLiteral("%"), false);
+    buildNoiseCard(root);
 
     // --- Noise gate (prepared) ---
     QVBoxLayout* gate = makeCard(
         root, QStringLiteral("Noise Gate"),
-        QStringLiteral("Silences the mic below a threshold — great for keyboards/fans."), true);
+        QStringLiteral("Fades the microphone down between sentences instead of cutting it "
+                       "off. Written and tested (dsp/MicChain), waiting on the same node."),
+        true);
     gate->addWidget(preparedCheck(QStringLiteral("Enable noise gate")));
     sliderRow(gate, QStringLiteral("Threshold"), -80, 0, -45, QStringLiteral(" dB"), false);
     sliderRow(gate, QStringLiteral("Attack"), 0, 200, 10, QStringLiteral(" ms"), false);
@@ -196,49 +248,289 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
 
     root->addStretch(1);
 
-    // Restore persisted gain + mute before wiring, so setting them fires no signal.
+    // Restore what was persisted before wiring, so setting a control fires no
+    // signal and nothing is written back the moment the page opens.
     if (settings_ != nullptr) {
         const QJsonObject m = settings_->section(QStringLiteral("microphone"));
         if (!m.isEmpty()) {
-            gain_->setValue(
-                std::clamp(m.value(QStringLiteral("gain")).toInt(gain_->value()), 0, 100));
-            mute_->setChecked(m.value(QStringLiteral("muted")).toBool(false));
+            // The preset first, because it sets the stages the controls below do
+            // not cover — the gate, the de-esser, the compressor. Without it a
+            // restart quietly put everyone back on Podcast, whatever they chose.
+            const int storedPreset = m.value(QStringLiteral("preset"))
+                                         .toInt(static_cast<int>(dsp::MicPreset::Podcast));
+            const int index = chainPreset_->findData(storedPreset);
+            if (index >= 0) {
+                mic_ = dsp::presetSettings(static_cast<dsp::MicPreset>(storedPreset));
+                const QSignalBlocker block(chainPreset_);
+                chainPreset_->setCurrentIndex(index);
+            }
+
+            mic_.inputGainDb = static_cast<float>(
+                std::clamp(m.value(QStringLiteral("inputGainDb")).toInt(0), -12, 24));
+            mic_.outputGainDb = static_cast<float>(
+                std::clamp(m.value(QStringLiteral("outputGainDb")).toInt(0), -12, 12));
+            mic_.muted = m.value(QStringLiteral("muted")).toBool(false);
+            mic_.noiseSuppression = m.value(QStringLiteral("noiseSuppression")).toBool(true);
         }
+        showMicSettings();
     }
 
-    // Wire the functional controls to the real mic.
     connect(gain_, &QSlider::valueChanged, this, [this](int v) {
-        if (controller_ != nullptr) {
-            controller_->setChannelVolume(kMic, static_cast<float>(v) / 100.0f);
+        if (syncing_) {
+            return;
         }
-        saveMic();
+        mic_.inputGainDb = static_cast<float>(v);
+        pushMicSettings();
+    });
+    connect(outputGain_, &QSlider::valueChanged, this, [this](int v) {
+        if (syncing_) {
+            return;
+        }
+        mic_.outputGainDb = static_cast<float>(v);
+        pushMicSettings();
     });
     connect(mute_, &QCheckBox::toggled, this, [this](bool on) {
-        if (controller_ != nullptr) {
-            controller_->setChannelMute(kMic, on);
+        if (syncing_) {
+            return;
         }
-        saveMic();
+        mic_.muted = on;
+        pushMicSettings();
     });
-    if (controller_ != nullptr) {  // apply the restored state to the real mic
-        controller_->setChannelVolume(kMic, static_cast<float>(gain_->value()) / 100.0f);
-        controller_->setChannelMute(kMic, mute_->isChecked());
-    }
+    connect(chainPreset_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (syncing_) {
+            return;
+        }
+        const auto preset = static_cast<dsp::MicPreset>(chainPreset_->itemData(index).toInt());
+        // The preset owns the processing, not the levels: someone who set their
+        // trim and their output does not expect a preset to move them, and being
+        // muted is a state, not a sound.
+        const float in = mic_.inputGainDb;
+        const float out = mic_.outputGainDb;
+        const bool muted = mic_.muted;
+        mic_ = dsp::presetSettings(preset);
+        mic_.inputGainDb = in;
+        mic_.outputGainDb = out;
+        mic_.muted = muted;
+        showMicSettings();
+        pushMicSettings();
+    });
 
-    // Left unstarted on purpose: it only drives the level meter, which is
-    // disabled. Starting it would poll the controller 22 times a second to paint
-    // a bar nobody can read. Start it again when the card goes live.
+    pushMicSettings();
+
     timer_ = new QTimer(this);
     timer_->setInterval(45);
     connect(timer_, &QTimer::timeout, this, &MicrophonePage::refresh);
+    timer_->start();
+}
+
+void MicrophonePage::buildEqualizerCard(QVBoxLayout* root) {
+    QVBoxLayout* body = makeCard(
+        root, QStringLiteral("Voice equalizer"),
+        QStringLiteral("Shapes the microphone before anything else hears it — every "
+                       "application recording from Sonero gets this curve, not just one."),
+        false);
+
+    // Ten bands rather than the thirty-one a channel gets. A voice is one source
+    // in a narrow range, and thirty-one handles on a microphone is a way to make
+    // it sound worse with more effort.
+    dsp::resetBands(eq_, dsp::BandCount::Bands10);
+    eq_.enabled = false;
+    eq_.preset = dsp::EqPreset::Flat;
+
+    if (settings_ != nullptr) {
+        const QJsonObject stored = settings_->section(QStringLiteral("microphoneEq"));
+        if (!stored.isEmpty()) {
+            eq_ = config::eqFromJson(stored, eq_);
+        }
+    }
+
+    auto* topRow = new QHBoxLayout;
+    auto* enable = new QCheckBox(QStringLiteral("Enable"));
+    enable->setChecked(eq_.enabled);
+    topRow->addWidget(enable);
+    topRow->addSpacing(12);
+    topRow->addWidget(caption(QStringLiteral("Preset")));
+
+    preset_ = new QComboBox;
+    // Only the presets that mean something for a voice. A microphone has no use
+    // for Bass Boost, and offering it is how someone ends up sounding muddy.
+    for (const dsp::EqPreset preset :
+         {dsp::EqPreset::Flat, dsp::EqPreset::Voice, dsp::EqPreset::Podcast,
+          dsp::EqPreset::Warm, dsp::EqPreset::Bright, dsp::EqPreset::Custom}) {
+        preset_->addItem(QString::fromUtf8(dsp::presetName(preset).data(),
+                                           static_cast<qsizetype>(dsp::presetName(preset).size())),
+                         static_cast<int>(preset));
+    }
+    topRow->addWidget(preset_, 1);
+
+    auto* reset = new QPushButton(QStringLiteral("Flat"));
+    reset->setCursor(Qt::PointingHandCursor);
+    topRow->addWidget(reset);
+    body->addLayout(topRow);
+
+    curve_ = new EqCurve;
+    body->addWidget(curve_, 1);
+
+    connect(enable, &QCheckBox::toggled, this, [this](bool on) {
+        eq_.enabled = on;
+        applyEq();
+    });
+    connect(preset_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        const auto preset = static_cast<dsp::EqPreset>(preset_->itemData(index).toInt());
+        if (preset == dsp::EqPreset::Custom) {
+            return;  // "Custom" describes what the user did, it does not set anything
+        }
+        dsp::applyPreset(eq_, preset);
+        showEq();
+        applyEq();
+    });
+    connect(reset, &QPushButton::clicked, this, [this] {
+        dsp::applyPreset(eq_, dsp::EqPreset::Flat);
+        showEq();
+        applyEq();
+    });
+    // Dragging a band is what makes a curve the user's rather than a preset's, so
+    // the preset name follows the curve instead of contradicting it.
+    connect(curve_, &EqCurve::bandChanged, this, [this](int index, float gainDb) {
+        if (index < 0 || index >= static_cast<int>(eq_.bands.size())) {
+            return;
+        }
+        eq_.bands[static_cast<std::size_t>(index)].gainDb = gainDb;
+        eq_.preset = dsp::EqPreset::Custom;
+        showEq();
+        applyEq();
+    });
+
+    showEq();
+    applyEq();
+}
+
+
+void MicrophonePage::buildNoiseCard(QVBoxLayout* root) {
+    const bool available =
+        micController_ != nullptr && micController_->micNoiseSuppressionAvailable();
+
+    QVBoxLayout* body = makeCard(
+        root, QStringLiteral("Noise suppression"),
+        QStringLiteral("Removes keyboards, fans and the room with a trained model, "
+                       "before the gate and the compressor ever see the signal — so "
+                       "their thresholds sit against silence rather than against noise."),
+        !available);
+
+    noiseEnable_ = new QCheckBox(QStringLiteral("Enable noise suppression"));
+    noiseEnable_->setChecked(available && mic_.noiseSuppression);
+    noiseEnable_->setEnabled(available);
+    connect(noiseEnable_, &QCheckBox::toggled, this, [this](bool on) {
+        if (syncing_) {
+            return;
+        }
+        mic_.noiseSuppression = on;
+        pushMicSettings();
+    });
+    body->addWidget(noiseEnable_);
+
+    // There is no "strength" slider, and that is deliberate: the model decides per
+    // frequency band how much of each frame is voice. A percentage on top of it
+    // would be a second guess layered over a trained one.
+    noiseState_ = new QLabel;
+    noiseState_->setObjectName(QStringLiteral("Hint"));
+    noiseState_->setWordWrap(true);
+    if (available) {
+        noiseState_->setText(
+            QStringLiteral("Model: %1 · adds 10 ms of latency while it is on.")
+                .arg(QString::fromUtf8(micController_->micNoiseSuppressionBackend().data(),
+                                       static_cast<qsizetype>(
+                                           micController_->micNoiseSuppressionBackend().size()))));
+    } else {
+        // Say which package and why, rather than greying a switch out and leaving
+        // the user to wonder whether their microphone is at fault.
+        noiseState_->setText(
+            QStringLiteral("Not in this build: RNNoise was not found when Sonero was "
+                           "compiled. Install it (<code>rnnoise</code> on Arch, "
+                           "<code>librnnoise-dev</code> on Debian) and rebuild, and this "
+                           "switch turns on."));
+        noiseState_->setTextFormat(Qt::RichText);
+    }
+    body->addWidget(noiseState_);
+
+    auto* meterRow = new QHBoxLayout;
+    meterRow->addWidget(caption(QStringLiteral("Removing")));
+    noiseMeter_ = new QProgressBar;
+    noiseMeter_->setObjectName(QStringLiteral("MicLevel"));
+    noiseMeter_->setRange(0, 100);
+    noiseMeter_->setValue(0);
+    noiseMeter_->setTextVisible(true);
+    noiseMeter_->setFormat(QStringLiteral("%v%"));
+    noiseMeter_->setEnabled(available);
+    meterRow->addWidget(noiseMeter_, 1);
+    body->addLayout(meterRow);
+}
+
+void MicrophonePage::showMicSettings() {
+    // The signals are left alone on purpose. Each slider's readout is kept in
+    // step by a connection of its own, so silencing the slider would move it
+    // without moving the number beside it; `syncing_` stops only the handlers
+    // that would push these values straight back to the audio thread.
+    syncing_ = true;
+    if (gain_ != nullptr) {
+        gain_->setValue(static_cast<int>(mic_.inputGainDb));
+    }
+    if (outputGain_ != nullptr) {
+        outputGain_->setValue(static_cast<int>(mic_.outputGainDb));
+    }
+    if (mute_ != nullptr) {
+        mute_->setChecked(mic_.muted);
+    }
+    if (noiseEnable_ != nullptr) {
+        noiseEnable_->setChecked(noiseEnable_->isEnabled() && mic_.noiseSuppression);
+    }
+    syncing_ = false;
+}
+
+void MicrophonePage::pushMicSettings() {
+    if (micController_ != nullptr) {
+        micController_->setMicSettings(mic_);
+    }
+    saveMic();
+}
+void MicrophonePage::showEq() {
+    if (curve_ != nullptr) {
+        curve_->setSettings(eq_);
+    }
+    if (preset_ != nullptr) {
+        const int index = preset_->findData(static_cast<int>(eq_.preset));
+        if (index >= 0 && index != preset_->currentIndex()) {
+            const QSignalBlocker block(preset_);
+            preset_->setCurrentIndex(index);
+        }
+    }
+}
+
+void MicrophonePage::applyEq() {
+    if (eqController_ != nullptr) {
+        eqController_->applyEqualizer(kMic, eq_);
+    }
+    if (settings_ != nullptr) {
+        settings_->putSection(QStringLiteral("microphoneEq"), config::eqToJson(eq_));
+    }
 }
 
 void MicrophonePage::refresh() {
-    if (controller_ == nullptr) {
+    if (micController_ == nullptr) {
         return;
     }
-    const auto lvl = controller_->channelLevel(kMic);
-    const float peak = std::max(lvl.peakLeft, lvl.peakRight);
-    level_->setValue(std::clamp(static_cast<int>(peak * 140.0f), 0, 100));
+    // One reader, because reading clears the peak holds: a second poller
+    // elsewhere would see half the transients and so would this one.
+    const audio::MicLevels levels = micController_->micLevels();
+    level_->setValue(std::clamp(static_cast<int>(levels.inputPeak * 140.0f), 0, 100));
+
+    if (noiseMeter_ != nullptr) {
+        // 0 dB of reduction reads as nothing removed, 24 dB as everything the
+        // model is willing to take out. Beyond that the scale stops meaning
+        // anything to a person watching a bar.
+        const float removed = std::clamp(-levels.noiseReductionDb / 24.0f, 0.0f, 1.0f);
+        noiseMeter_->setValue(static_cast<int>(removed * 100.0f));
+    }
 }
 
 void MicrophonePage::saveMic() {
@@ -246,8 +538,13 @@ void MicrophonePage::saveMic() {
         return;
     }
     QJsonObject m;
-    m[QStringLiteral("gain")] = gain_->value();
-    m[QStringLiteral("muted")] = mute_->isChecked();
+    m[QStringLiteral("inputGainDb")] = static_cast<int>(mic_.inputGainDb);
+    m[QStringLiteral("outputGainDb")] = static_cast<int>(mic_.outputGainDb);
+    m[QStringLiteral("muted")] = mic_.muted;
+    m[QStringLiteral("noiseSuppression")] = mic_.noiseSuppression;
+    if (chainPreset_ != nullptr) {
+        m[QStringLiteral("preset")] = chainPreset_->currentData().toInt();
+    }
     settings_->putSection(QStringLiteral("microphone"), m);
 }
 

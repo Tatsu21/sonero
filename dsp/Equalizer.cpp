@@ -97,6 +97,15 @@ float presetGain(EqPreset preset, float freq) {
 
 }  // namespace
 
+const std::vector<float>& standardFrequenciesRef(BandCount count) {
+    switch (count) {
+        case BandCount::Bands10: return kFreq10;
+        case BandCount::Bands15: return kFreq15;
+        case BandCount::Bands31: return kFreq31;
+    }
+    return kFreq10;
+}
+
 std::vector<float> standardFrequencies(BandCount count) {
     switch (count) {
         case BandCount::Bands10: return kFreq10;
@@ -104,6 +113,17 @@ std::vector<float> standardFrequencies(BandCount count) {
         case BandCount::Bands31: return kFreq31;
     }
     return kFreq10;
+}
+
+float bandQ(BandCount count) {
+    // Q = 2^(N/2) / (2^N - 1) for a bandwidth of N octaves — the textbook
+    // constant-Q graphic equaliser relation.
+    switch (count) {
+        case BandCount::Bands10: return 1.414f;  // one octave
+        case BandCount::Bands15: return 2.145f;  // two thirds of an octave
+        case BandCount::Bands31: return 4.318f;  // one third of an octave
+    }
+    return 1.414f;
 }
 
 void resetBands(EqSettings& settings, BandCount count) {

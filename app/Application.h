@@ -13,6 +13,7 @@ class IChannelController;
 class IEqualizerController;
 class IDeviceFormats;
 class IAudioDevices;
+class IMicrophoneController;
 }
 
 namespace sonar::ui {
@@ -51,6 +52,7 @@ private:
     audio::IEqualizerController* eqController_ = nullptr;
     audio::IDeviceFormats* deviceFormats_ = nullptr;
     audio::IAudioDevices* audioDevices_ = nullptr;
+    audio::IMicrophoneController* micController_ = nullptr;
     std::unique_ptr<ui::MainWindow> window_;
 };
 

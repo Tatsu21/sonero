@@ -121,9 +121,18 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     head->addWidget(subtitle);
     root->addLayout(head);
 
+    // Output channels only. The microphone used to be here, and it did not belong:
+    // it is an input, it has no output device to pick and no place in the stream
+    // mix, and its equalizer already lives on its own page — which meant one
+    // signal with two equalizers, and this page overwriting the other one on every
+    // launch.
     QStringList channelLabels;
-    for (const ChannelId id : audio::kAllChannels) {
-        channelLabels << toQString(audio::channelName(id));
+    for (std::size_t i = 0; i < audio::kAllChannels.size(); ++i) {
+        if (audio::kAllChannels[i] == ChannelId::Microphone) {
+            continue;
+        }
+        channelLabels << toQString(audio::channelName(audio::kAllChannels[i]));
+        buttonChannel_.push_back(static_cast<int>(i));
     }
     root->addWidget(makeSegmented(channelLabels, channelGroup_, this));
 
@@ -210,7 +219,10 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     rebuildPresetCombo();
 
     connect(channelGroup_, &QButtonGroup::idClicked, this, [this](int id) {
-        channel_ = id;
+        if (id < 0 || id >= static_cast<int>(buttonChannel_.size())) {
+            return;
+        }
+        channel_ = buttonChannel_[static_cast<std::size_t>(id)];
         loadChannel();
         emit channelSelected(audio::kAllChannels[static_cast<std::size_t>(channel_)]);
     });
@@ -264,6 +276,12 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     // the visible one — so saved settings take effect immediately on launch.
     if (controller_ != nullptr) {
         for (std::size_t i = 0; i < eq_.size(); ++i) {
+            // Not the microphone. Its equalizer is owned by the microphone page
+            // and runs inside the microphone's own chain; applying this page's
+            // copy here would overwrite it every time Sonero started.
+            if (audio::kAllChannels[i] == ChannelId::Microphone) {
+                continue;
+            }
             controller_->applyEqualizer(audio::kAllChannels[i], eq_[i]);
         }
     }
@@ -401,6 +419,9 @@ void EqualizerPage::restoreEq() {
         return;  // first run — keep the flat defaults
     }
     for (std::size_t i = 0; i < eq_.size(); ++i) {
+        if (audio::kAllChannels[i] == ChannelId::Microphone) {
+            continue;  // stored under "microphoneEq" by the microphone page
+        }
         const QString key = toQString(audio::channelName(audio::kAllChannels[i]));
         if (channels.contains(key)) {
             eq_[i] = config::eqFromJson(channels.value(key).toObject(), eq_[i]);
@@ -414,6 +435,9 @@ void EqualizerPage::saveEq() {
     }
     QJsonObject channels;
     for (std::size_t i = 0; i < eq_.size(); ++i) {
+        if (audio::kAllChannels[i] == ChannelId::Microphone) {
+            continue;
+        }
         channels[toQString(audio::channelName(audio::kAllChannels[i]))] =
             config::eqToJson(eq_[i]);
     }

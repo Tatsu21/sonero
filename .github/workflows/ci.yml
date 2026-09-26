@@ -50,7 +50,16 @@ jobs:
             build-essential cmake ninja-build pkg-config dpkg-dev \
             qt6-base-dev qt6-base-dev-tools qt6-wayland qt6-wayland-dev \
             libpipewire-0.3-dev desktop-file-utils file \
-            libgl-dev libegl-dev
+            libgl-dev libegl-dev \
+            autoconf automake libtool
+
+      # Only Arch packages RNNoise. Debian has it in sid and forky but not in
+      # trixie, Ubuntu has none in 22.04 or 24.04, and Fedora has none at all —
+      # so on every target but Arch the microphone's noise suppression has to be
+      # built, or it silently ships switched off. Static, so nothing here becomes
+      # a dependency the user's distribution cannot satisfy.
+      - name: Build RNNoise (no distribution package on this target)
+        run: ./packaging/build-rnnoise.sh
 
       - name: Build and test
         run: |
@@ -105,7 +114,8 @@ jobs:
             build-essential cmake ninja-build pkg-config dpkg-dev \
             git ca-certificates \
             qt6-base-dev qt6-base-dev-tools libpipewire-0.3-dev file \
-            libgl-dev libegl-dev
+            libgl-dev libegl-dev \
+            autoconf automake libtool curl
 
       - uses: actions/checkout@v4
         with:
@@ -116,6 +126,12 @@ jobs:
       # release once shipped 0.0.0 packages. See the rolling job.
       - name: Let git read the checkout from inside the container
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      # Debian carries RNNoise in sid and forky, but not in trixie — so the
+      # package this job builds would ship with the microphone's noise
+      # suppression switched off. Built here, statically, for that reason.
+      - name: Build RNNoise (not in trixie)
+        run: ./packaging/build-rnnoise.sh
 
       - name: Build and test
         run: |
@@ -186,7 +202,7 @@ jobs:
         if: matrix.name == 'arch'
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel cmake ninja git qt6-base qt6-wayland libpipewire \
+            base-devel cmake ninja git qt6-base qt6-wayland libpipewire rnnoise \
             desktop-file-utils file curl
 
       - name: Install build dependencies (Fedora)
@@ -195,7 +211,8 @@ jobs:
           dnf -y install \
             gcc-c++ cmake ninja-build pkgconf-pkg-config git \
             qt6-qtbase-devel qt6-qtwayland-devel pipewire-devel \
-            desktop-file-utils file curl
+            desktop-file-utils file curl \
+            autoconf automake libtool make
 
       - uses: actions/checkout@v4
         with:
@@ -208,6 +225,12 @@ jobs:
       # with 0.0.0 Arch and Fedora packages.
       - name: Let git read the checkout from inside the container
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      # Fedora has no RNNoise package at all, in any release. Arch does, and the
+      # step above installed it, so this is the Fedora half only.
+      - name: Build RNNoise (no Fedora package)
+        if: matrix.name == 'fedora'
+        run: ./packaging/build-rnnoise.sh
 
       - name: Build and test
         run: |
@@ -247,7 +270,7 @@ jobs:
       - name: Install packaging tools and build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel git namcap cmake ninja qt6-base libpipewire \
+            base-devel git namcap cmake ninja qt6-base libpipewire rnnoise \
             hicolor-icon-theme
 
       - uses: actions/checkout@v4
@@ -378,7 +401,8 @@ jobs:
       - name: Install packaging tools and build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel git curl cmake ninja qt6-base libpipewire hicolor-icon-theme
+            base-devel git curl cmake ninja qt6-base libpipewire rnnoise \
+            hicolor-icon-theme
 
       # main rather than the tag: the version bump is a commit on the branch. The
       # release's own code arrives as the source tarball the PKGBUILD downloads,

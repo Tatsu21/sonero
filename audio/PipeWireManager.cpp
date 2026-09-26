@@ -106,41 +106,6 @@ std::string filterChainArgs(const std::string& node, const std::string& desc,
         desc, nodes, links, node);
 }
 
-// Like filterChainArgs but exposes a virtual Audio/Source: the capture side
-// pulls from the real microphone, the graph applies the EQ, and the playback
-// side is the source apps select as their input.
-std::string filterChainSourceArgs(const std::string& node, const std::string& desc,
-                                  const std::vector<float>& freqs,
-                                  const std::vector<float>& gains, float q,
-                                  const std::string& captureTarget) {
-    std::string nodes;
-    std::string links;
-    for (std::size_t i = 0; i < freqs.size(); ++i) {
-        nodes += fmt::format(
-            R"({{ type = builtin name = "{}_eq{}" label = bq_peaking )"
-            R"(control = {{ "Freq" = {:.4f} "Q" = {:.4f} "Gain" = {:.4f} }} }} )",
-            node, i, freqs[i], q, gains[i]);
-        if (i + 1 < freqs.size()) {
-            links += fmt::format(R"({{ output = "{}_eq{}:Out" input = "{}_eq{}:In" }} )",
-                                 node, i, node, i + 1);
-        }
-    }
-    // With no explicit target, disable autoconnect: otherwise the capture grabs
-    // the default source, and if that is a Bluetooth headset it forces the card
-    // into HFP (mono headset mode), collapsing A2DP music quality.
-    const std::string target =
-        captureTarget.empty() ? std::string("node.autoconnect = false ")
-                              : fmt::format(R"(target.object = "{}" )", captureTarget);
-    return fmt::format(
-        R"({{ node.description = "{0}" )"
-        R"(filter.graph = {{ nodes = [ {1} ] links = [ {2} ] }} )"
-        R"(capture.props = {{ node.name = "{3}.input" node.passive = true {4})"
-        R"(audio.position = [ FL FR ] }} )"
-        R"(playback.props = {{ node.name = "{3}" media.class = Audio/Source )"
-        R"(priority.session = 100 audio.position = [ FL FR ] }} }})",
-        desc, nodes, links, node, target);
-}
-
 // The stream mix is a sink whose monitor is what a capture application (OBS,
 // Discord) selects as its input. Everything sent there is heard by the stream but
 // not by the user — the whole point of a second mix.
@@ -305,11 +270,26 @@ void PipeWireManager::createVirtualSinks() {
         // playback cannot coexist, so we keep A2DP and leave the capture idle.
         const std::string micTarget =
             startsWith(realDefaultSource_, "bluez") ? std::string() : realDefaultSource_;
-        const std::string args =
-            id == ChannelId::Microphone
-                ? filterChainSourceArgs(node, desc, dspFreqs(), gains, kEqQ, micTarget)
-                : filterChainArgs(node, desc, dspFreqs(), gains, kEqQ);
+        // The microphone is the one channel whose processing is ours rather than
+        // a graph of PipeWire's builtin biquads: it needs a gate, a compressor
+        // and a noise model, none of which exist as builtin filter nodes. The
+        // node pair MicProcessor builds is the same shape filter-chain would
+        // have produced — an input stream and an Audio/Source — with our chain
+        // in between.
+        // The microphone is the one channel whose processing is ours rather than a
+        // graph of PipeWire's builtin biquads: it needs a gate, a compressor and a
+        // noise model, and none of those exist as builtin filter nodes. The node
+        // pair MicProcessor builds is the same shape filter-chain would have
+        // produced — an input stream and an Audio/Source, in one scheduling group
+        // — with dsp/MicChain running in between.
+        if (id == ChannelId::Microphone) {
+            if (!mic_.start(core_, node, desc, micTarget)) {
+                log::warn("PipeWire: the microphone node could not be created");
+            }
+            continue;
+        }
 
+        const std::string args = filterChainArgs(node, desc, dspFreqs(), gains, kEqQ);
         pw_impl_module* module = pw_context_load_module(
             context_, "libpipewire-module-filter-chain", args.c_str(), nullptr);
         if (module != nullptr) {
@@ -395,6 +375,13 @@ void PipeWireManager::teardown() noexcept {
     if (loop_ != nullptr) {
         pw_thread_loop_stop(loop_);  // join the thread; no callbacks run after this
     }
+
+    // The microphone's streams go first, and here rather than in MicProcessor's
+    // own destructor: members are destroyed after this body has run, by which
+    // point the core and the loop they belong to are already gone, and
+    // pw_stream_destroy on a freed core is a crash — which is exactly how this
+    // was found, in PipeWireManagerTest.
+    mic_.stop();
 
     for (ChannelIO& io : io_) {
         if (io.meter != nullptr) {
@@ -525,6 +512,21 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
                 sinkSerials_[nodeName] = serialOf(props);
             }
             if (const auto channel = channelForNodeName(nodeName)) {
+                // The microphone, when MicProcessor owns it, is not a channel sink
+                // and must not be treated as one. Binding it would apply the
+                // channel's volume, mute and — worse — the filter-chain equalizer
+                // control ports ("<node>_eq0:Gain") to a plain pw_stream that has
+                // no such params. The audioadapter answers by enumerating its
+                // properties again, which produces another info event, which
+                // applies them again: a loop that spins our PipeWire thread loop
+                // forever, so we stop answering the daemon and every other client
+                // on the machine hangs with us.
+                //
+                // Gain, mute and the equalizer for this node all live in
+                // MicChain, set through IMicrophoneController instead.
+                if (*channel == ChannelId::Microphone && mic_.running()) {
+                    return;
+                }
                 bindChannelSink(*channel, id, nodeName);
             }
         } else if (std::strcmp(mediaClass, "Audio/Sink") == 0 && !nodeName.empty()) {
@@ -712,6 +714,14 @@ void PipeWireManager::onNodeInfo(void* data, const pw_node_info* /*info*/) {
 }
 
 void PipeWireManager::createMeterStream(ChannelId channel, const std::string& sinkName) {
+    // With the microphone running through MicProcessor there is nothing here to
+    // meter: the chain reports its own levels, per stage, from the code that
+    // produced them. A second capture stream on the same source would only add
+    // another node to schedule.
+    if (channel == ChannelId::Microphone && mic_.running()) {
+        return;
+    }
+
     ChannelIO& io = io_[channelIndex(channel)];
     const std::string meterName = sinkName + ".meter";
 
@@ -830,6 +840,13 @@ void PipeWireManager::applyEq(ChannelIO& io) {
 
 void PipeWireManager::applyEqualizer(ChannelId id, const dsp::EqSettings& settings) {
     if (loop_ == nullptr) {
+        return;
+    }
+    // With the experimental node in use the microphone's equalizer is a stage of
+    // MicChain, which takes the whole curve at once and hands it to the audio
+    // thread itself — no filter-graph control ports, no thread loop to lock.
+    if (id == ChannelId::Microphone && mic_.running()) {
+        mic_.setEqualizer(settings);
         return;
     }
     pw_thread_loop_lock(loop_);
@@ -1460,5 +1477,50 @@ void PipeWireManager::onRegistryGlobal(void* data, std::uint32_t id, std::uint32
 void PipeWireManager::onRegistryGlobalRemove(void* data, std::uint32_t id) {
     static_cast<PipeWireManager*>(data)->onGlobalRemove(id);
 }
+
+
+// --- IMicrophoneController ----------------------------------------------------
+//
+// Thin by design: MicProcessor already does its own thread handoff, so there is
+// nothing here to lock and nothing to translate.
+
+void PipeWireManager::setMicSettings(const dsp::MicSettings& settings) {
+    mic_.setSettings(settings);
+}
+
+dsp::MicSettings PipeWireManager::micSettings() const { return mic_.settings(); }
+
+MicLevels PipeWireManager::micLevels() { return mic_.takeLevels(); }
+
+void PipeWireManager::setMicNoiseSuppression(bool on) { mic_.setNoiseSuppressionEnabled(on); }
+
+bool PipeWireManager::micNoiseSuppression() const { return mic_.noiseSuppressionEnabled(); }
+
+bool PipeWireManager::micNoiseSuppressionAvailable() const {
+    return MicProcessor::noiseSuppressionAvailable();
+}
+
+std::string_view PipeWireManager::micNoiseSuppressionBackend() const {
+    return MicProcessor::noiseSuppressionBackend();
+}
+
+bool PipeWireManager::setMicCaptureDevice(const std::string& nodeName) {
+    if (loop_ == nullptr || core_ == nullptr) {
+        return false;
+    }
+    // Rebuilding a stream touches the graph, so it happens with the loop held —
+    // the same rule every other node change in this file follows.
+    pw_thread_loop_lock(loop_);
+    const bool ok = mic_.setCaptureTarget(core_, nodeName);
+    pw_thread_loop_unlock(loop_);
+    if (!ok) {
+        log::warn("PipeWire: the microphone could not attach to '{}'", nodeName);
+    }
+    return ok;
+}
+
+std::string PipeWireManager::micCaptureDevice() const { return mic_.captureTarget(); }
+
+float PipeWireManager::micLatencyMs() const { return mic_.latencyMs(); }
 
 }  // namespace sonar::audio

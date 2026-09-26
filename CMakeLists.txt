@@ -148,6 +148,38 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets DBus Network)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
+# RNNoise is optional, and the microphone's noise suppression is the only thing
+# that needs it. Without it the stage reports itself unavailable and the audio
+# passes through untouched — a packaged build on a distribution that does not
+# carry rnnoise still works, it just cannot remove a keyboard.
+#
+# pkg-config first (which is how Arch and Debian ship it); the manual search is
+# for a build against a copy that was installed by hand.
+option(SONAR_USE_RNNOISE "Use RNNoise for microphone noise suppression when available" ON)
+set(SONERO_HAVE_RNNOISE OFF)
+if(SONAR_USE_RNNOISE)
+    pkg_check_modules(RNNOISE IMPORTED_TARGET rnnoise)
+    if(NOT RNNOISE_FOUND)
+        find_path(RNNOISE_INCLUDE_DIR rnnoise.h)
+        find_library(RNNOISE_LIBRARY rnnoise)
+        if(RNNOISE_INCLUDE_DIR AND RNNOISE_LIBRARY)
+            add_library(sonero_rnnoise INTERFACE)
+            target_include_directories(sonero_rnnoise INTERFACE ${RNNOISE_INCLUDE_DIR})
+            target_link_libraries(sonero_rnnoise INTERFACE ${RNNOISE_LIBRARY})
+            set(SONERO_HAVE_RNNOISE ON)
+        endif()
+    else()
+        add_library(sonero_rnnoise INTERFACE)
+        target_link_libraries(sonero_rnnoise INTERFACE PkgConfig::RNNOISE)
+        set(SONERO_HAVE_RNNOISE ON)
+    endif()
+endif()
+if(SONERO_HAVE_RNNOISE)
+    message(STATUS "Sonero: microphone noise suppression via RNNoise")
+else()
+    message(STATUS "Sonero: no RNNoise — the microphone's noise suppression is off")
+endif()
+
 # spdlog is optional: when present we use it, otherwise the logging facade falls
 # back to a small stderr/stdout writer (see core/Log.cpp).
 #
@@ -172,6 +204,8 @@ add_library(sonero_core STATIC
     audio/IEqualizerController.h
     audio/PipeWireManager.h
     audio/PipeWireManager.cpp
+    audio/MicProcessor.h
+    audio/MicProcessor.cpp
     audio/DeviceFormat.h
     audio/DeviceFormat.cpp
     audio/Channel.h
@@ -182,6 +216,10 @@ add_library(sonero_core STATIC
     dsp/Equalizer.cpp
     dsp/AutoGain.h
     dsp/AutoGain.cpp
+    dsp/MicChain.h
+    dsp/MicChain.cpp
+    dsp/NoiseSuppressor.h
+    dsp/NoiseSuppressor.cpp
     hid/SteelSeriesDevice.h
     hid/SteelSeriesDevice.cpp)
 
@@ -191,6 +229,11 @@ target_compile_definitions(sonero_core PUBLIC
     SONAR_VERSION="${PROJECT_VERSION}"
     SONERO_BUILD_ID="${SONERO_BUILD_ID}")
 target_compile_features(sonero_core PUBLIC cxx_std_20)
+
+if(SONERO_HAVE_RNNOISE)
+    target_link_libraries(sonero_core PRIVATE sonero_rnnoise)
+    target_compile_definitions(sonero_core PRIVATE SONAR_HAVE_RNNOISE=1)
+endif()
 
 if(SONAR_USE_SPDLOG AND spdlog_FOUND)
     target_link_libraries(sonero_core PRIVATE spdlog::spdlog)

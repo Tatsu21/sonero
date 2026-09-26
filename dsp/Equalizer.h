@@ -58,6 +58,18 @@ struct EqSettings {
 // Standard ISO centre frequencies for each band configuration.
 std::vector<float> standardFrequencies(BandCount count);
 
+// The same table without the copy. Callers that rebuild filter coefficients do
+// it on the audio thread, where allocating — which is what returning a vector by
+// value does — can block on the allocator's lock and cost a buffer.
+[[nodiscard]] const std::vector<float>& standardFrequenciesRef(BandCount count);
+
+// The Q a peaking filter needs so that neighbouring bands of this configuration
+// meet instead of leaving holes between them. It follows the spacing: 10 bands
+// sit an octave apart, 31 a third of an octave, so the same Q cannot be right for
+// both — a third-octave Q on octave-spaced bands gives ten narrow spikes, and
+// dragging one of them barely changes what a voice sounds like.
+[[nodiscard]] float bandQ(BandCount count);
+
 // Rebuild `bands` for the requested count, keeping every gain at 0 dB.
 void resetBands(EqSettings& settings, BandCount count);
 

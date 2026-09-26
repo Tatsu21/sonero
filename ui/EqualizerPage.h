@@ -5,6 +5,8 @@
 
 #include <QWidget>
 
+#include <vector>
+
 #include "audio/Channel.h"
 #include "dsp/Equalizer.h"
 
@@ -76,7 +78,10 @@ private:
     void onExportPreset();
 
     std::array<dsp::EqSettings, sonar::audio::kAllChannels.size()> eq_;
-    int channel_ = 0;
+    int channel_ = 0;  // index into audio::kAllChannels, not into the buttons
+    // Button id -> kAllChannels index. The page shows output channels only, so
+    // the two stopped being the same thing once the microphone left.
+    std::vector<int> buttonChannel_;
     audio::IEqualizerController* controller_ = nullptr;
     audio::IAudioDevices* devices_ = nullptr;
     class QSlider* gain_ = nullptr;
