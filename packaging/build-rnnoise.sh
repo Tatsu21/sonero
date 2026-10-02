@@ -6,8 +6,9 @@
 #
 # Sonero's microphone noise suppression needs this library, and only Arch ships a
 # package of it. Debian has one in sid and forky but not in trixie, Ubuntu has
-# none in 22.04 or 24.04, and Fedora has none at all — so on every target except
-# Arch, "install the package" is not an option and the library has to be built.
+# none in 22.04, 24.04 or 26.04, and Fedora has none at all — so on every target
+# except Arch, "install the package" is not an option and the library has to be
+# built.
 #
 # Static on purpose. A .deb cannot depend on a library its distribution does not
 # carry, and an AppImage that expects one on the host is an AppImage that fails on

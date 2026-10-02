@@ -23,9 +23,9 @@ mkdir -p "${OUT}"
 # Every deb-producing job emits sonero_<version>_amd64.deb. Fold the target into
 # the version part rather than the middle of the name, so the file keeps the
 # name_version_arch shape Debian tooling expects.
-for dir in "${ARTIFACTS}"/Sonero-mint* "${ARTIFACTS}"/Sonero-debian*; do
+for dir in "${ARTIFACTS}"/Sonero-mint* "${ARTIFACTS}"/Sonero-debian* "${ARTIFACTS}"/Sonero-ubuntu*; do
     [[ -d "${dir}" ]] || continue
-    target="${dir##*-}"  # Sonero-mint21-ubuntu2204 -> ubuntu2204; Sonero-debian13 -> debian13
+    target="${dir##*-}"  # Sonero-mint21-ubuntu2204 -> ubuntu2204; Sonero-ubuntu2604 -> ubuntu2604
     for f in "${dir}"/*.deb; do
         [[ -f "${f}" ]] || continue
         cp "${f}" "${OUT}/$(basename "${f}" _amd64.deb)-${target}_amd64.deb"

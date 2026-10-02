@@ -18,9 +18,10 @@ jobs:
     #   ubuntu-22.04  ->  Ubuntu 22.04, Linux Mint 21.x   (Qt 6.2)
     #   ubuntu-24.04  ->  Ubuntu 24.04, Linux Mint 22.x   (Qt 6.4)
     #
-    # Debian 13 is built by the `debian` job below — GitHub offers no Debian
-    # runner, so it needs a container. Anyone else uses the AppImage, which
-    # carries its own Qt.
+    # Debian 13 and Ubuntu 26.04 are built by the `debian` job below, in
+    # containers — GitHub offers no Debian runner, and the Ubuntu one is used as
+    # an image rather than waiting on a hosted 26.04 runner. Anyone else uses the
+    # AppImage, which carries its own Qt.
     strategy:
       fail-fast: false
       matrix:
@@ -94,14 +95,27 @@ jobs:
             dist/*.deb
             dist/*.AppImage
 
-  # Debian 13 (trixie), the same .deb as the build job but for Debian's own Qt
-  # 6.8. It cannot join that matrix: GitHub hosts no Debian runner, so this runs
-  # in a container, which changes enough of the steps (no sudo, git has to be
-  # installed before the checkout, safe.directory) to be worth its own job.
+  # The same .deb as the build job, for distributions built in a container:
+  #
+  #   debian:13     ->  Debian 13 (trixie)                  (Qt 6.8)
+  #   ubuntu:26.04  ->  Ubuntu 26.04, Linux Mint 23.x       (Qt 6.10)
+  #
+  # It cannot join that matrix: GitHub hosts no Debian runner, and a container
+  # changes enough of the steps (no sudo, git has to be installed before the
+  # checkout, safe.directory) to be worth its own job.
   debian:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:13
+            target: debian13
+          - image: ubuntu:26.04
+            target: ubuntu2604
+
     runs-on: ubuntu-latest
-    container: debian:13
-    name: debian13
+    container: ${{ matrix.image }}
+    name: ${{ matrix.target }}
 
     steps:
       # Before the checkout: with git present it clones — and so can see the
@@ -127,10 +141,10 @@ jobs:
       - name: Let git read the checkout from inside the container
         run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
-      # Debian carries RNNoise in sid and forky, but not in trixie — so the
-      # package this job builds would ship with the microphone's noise
-      # suppression switched off. Built here, statically, for that reason.
-      - name: Build RNNoise (not in trixie)
+      # Neither trixie nor Ubuntu 26.04 carries RNNoise — so the package this
+      # job builds would ship with the microphone's noise suppression switched
+      # off. Built here, statically, for that reason.
+      - name: Build RNNoise (not in trixie or 26.04)
         run: ./packaging/build-rnnoise.sh
 
       - name: Build and test
@@ -152,10 +166,11 @@ jobs:
         run: dpkg-deb -f dist/*.deb Package Version Depends Recommends
 
       # The one thing inspecting the file cannot tell you: that apt resolves
-      # every dependency the package declares, from Debian's own archive. Not a
-      # pristine system — the build dependencies are already here — so it proves
-      # the declared dependencies exist and install, not that the list is
-      # complete. build-deb-docker.sh does the pristine-container check.
+      # every dependency the package declares, from the distribution's own
+      # archive. Not a pristine system — the build dependencies are already
+      # here — so it proves the declared dependencies exist and install, not that
+      # the list is complete. build-deb-docker.sh does the pristine-container
+      # check.
       - name: The package must install and resolve its libraries
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -172,7 +187,7 @@ jobs:
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: Sonero-debian13
+          name: Sonero-${{ matrix.target }}
           path: dist/*.deb
           if-no-files-found: error
 

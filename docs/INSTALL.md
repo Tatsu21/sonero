@@ -45,6 +45,7 @@ target:
 |---|---|---|
 | Linux Mint 21.x, Ubuntu 22.04 | Ubuntu 22.04 | 6.2 |
 | Linux Mint 22.x, Ubuntu 24.04 | Ubuntu 24.04 | 6.4 |
+| Linux Mint 23.x, Ubuntu 26.04 | Ubuntu 26.04 | 6.10 |
 | Debian 13 | Debian 13 | 6.8 |
 
 Build for another distribution with Docker — this also **installs the result in a
@@ -54,6 +55,7 @@ you:
 ```sh
 ./packaging/deb/build-deb-docker.sh                 # Ubuntu 24.04 / Mint 22
 ./packaging/deb/build-deb-docker.sh ubuntu:22.04    # Ubuntu 22.04 / Mint 21
+./packaging/deb/build-deb-docker.sh ubuntu:26.04    # Ubuntu 26.04 / Mint 23
 ./packaging/deb/build-deb-docker.sh debian:13       # Debian 13 (trixie)
 ```
 

@@ -6,6 +6,7 @@
 #
 #   ./packaging/deb/build-deb-docker.sh                    # Ubuntu 24.04 / Mint 22
 #   ./packaging/deb/build-deb-docker.sh ubuntu:22.04       # Ubuntu 22.04 / Mint 21
+#   ./packaging/deb/build-deb-docker.sh ubuntu:26.04       # Ubuntu 26.04 / Mint 23
 #   ./packaging/deb/build-deb-docker.sh debian:13
 #
 # A .deb links against the distribution's own Qt, so it installs only on the
