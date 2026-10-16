@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "audio/Channel.h"
+#include "dsp/BassStage.h"
 #include "dsp/Equalizer.h"
 
 class QButtonGroup;
@@ -16,6 +17,7 @@ class QComboBox;
 class QLabel;
 class QSlider;
 class QTimer;
+class QVBoxLayout;
 
 namespace sonar::audio {
 class IEqualizerController;
@@ -71,6 +73,12 @@ private:
     void restoreEq();       // load persisted per-channel EQ into the model
     void saveEq();          // snapshot every channel's EQ into the settings store
 
+    void buildBassCard(QVBoxLayout* root);
+    void reflectBass();   // model -> bass controls
+    void pushBass();      // bass model -> real audio
+    void saveBass();      // snapshot every channel's bass stage
+    void restoreBass();   // load it back
+
     void rebuildPresetCombo();
     void onPresetSelected();
     void onSavePreset();
@@ -78,6 +86,10 @@ private:
     void onExportPreset();
 
     std::array<dsp::EqSettings, sonar::audio::kAllChannels.size()> eq_;
+    // The harmonic bass stage of each channel's filter graph. Per channel for
+    // the same reason the equalizer is: a game wants its low end rebuilt and a
+    // voice chat emphatically does not.
+    std::array<dsp::BassStageSettings, sonar::audio::kAllChannels.size()> bass_;
     int channel_ = 0;  // index into audio::kAllChannels, not into the buttons
     // Button id -> kAllChannels index. The page shows output channels only, so
     // the two stopped being the same thing once the microphone left.
@@ -97,8 +109,23 @@ private:
     QButtonGroup* channelGroup_ = nullptr;
     QButtonGroup* bandGroup_ = nullptr;
 
+    QCheckBox* bassOn_ = nullptr;
+    QSlider* bassCrossover_ = nullptr;
+    QLabel* bassCrossoverHint_ = nullptr;
+    QSlider* bassAmount_ = nullptr;
+    QSlider* bassHarmonics_ = nullptr;
+    QSlider* bassEvenWeight_ = nullptr;
+    QSlider* bassAttack_ = nullptr;
+    QSlider* bassRelease_ = nullptr;
+    QCheckBox* bassReplaceLows_ = nullptr;
+    QCheckBox* bassLimiter_ = nullptr;
+
     QTimer* eqFlush_ = nullptr;  // throttles audio updates while dragging
     bool eqDirty_ = false;
+    bool bassDirty_ = false;
+    // Set while reflectBass() writes the controls, so the handlers it trips do
+    // not read half-updated widgets back into the model.
+    bool bassSyncing_ = false;
 };
 
 }  // namespace sonar::ui

@@ -1,6 +1,7 @@
 #include "ui/EqualizerPage.h"
 
 #include <cmath>
+#include <functional>
 #include <cstdlib>
 
 #include <QButtonGroup>
@@ -8,6 +9,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QJsonObject>
@@ -31,6 +33,7 @@ namespace sonar::ui {
 using audio::ChannelId;
 
 namespace {
+
 QString toQString(std::string_view sv) {
     return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size()));
 }
@@ -216,6 +219,10 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     curve_ = new EqCurve(this);
     root->addWidget(curve_, 1);
 
+    // Below the curve, because it works on what the curve produces: the bass
+    // stage sits at the end of the same filter graph, after the biquads.
+    buildBassCard(root);
+
     rebuildPresetCombo();
 
     connect(channelGroup_, &QButtonGroup::idClicked, this, [this](int id) {
@@ -256,6 +263,10 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
             eqDirty_ = false;
             pushEq();
         }
+        if (bassDirty_) {
+            bassDirty_ = false;
+            pushBass();
+        }
     });
     eqFlush_->start();
 
@@ -269,7 +280,8 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
         }
     }
 
-    restoreEq();  // persisted per-channel EQ overrides the defaults above
+    restoreEq();    // persisted per-channel EQ overrides the defaults above
+    restoreBass();  // and the persisted harmonic bass stage of each channel
 
     loadChannel();
     // Apply every channel's (possibly restored) EQ to the audio path — not just
@@ -283,12 +295,256 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
                 continue;
             }
             controller_->applyEqualizer(audio::kAllChannels[i], eq_[i]);
+            // The bass stage too, and for the same reason: a restored setting
+            // that only takes effect once its channel is selected is a setting
+            // the user has to go and find before their audio sounds right.
+            controller_->applyBassStage(audio::kAllChannels[i], bass_[i]);
         }
     }
 }
 
 dsp::EqSettings& EqualizerPage::current() {
     return eq_[static_cast<std::size_t>(channel_)];
+}
+
+// --- Harmonic bass ----------------------------------------------------------
+
+void EqualizerPage::buildBassCard(QVBoxLayout* root) {
+    auto* frame = new QFrame(this);
+    frame->setObjectName(QStringLiteral("Card"));
+    auto* body = new QVBoxLayout(frame);
+    body->setContentsMargins(18, 14, 18, 14);
+    body->setSpacing(8);
+
+    // A small driver cannot move enough air to reproduce 40 Hz, and boosting
+    // 40 Hz with the curve above only spends excursion distorting everything
+    // else. This stage synthesises the harmonics of the bass instead, in the
+    // range the driver does reproduce, and hearing supplies the fundamental.
+    bassOn_ = new QCheckBox(QStringLiteral("Harmonic bass"), this);
+    bassOn_->setToolTip(QStringLiteral(
+        "Rebuild the low end the driver cannot reproduce, by synthesising the "
+        "harmonics of the bass rather than asking for the fundamental."));
+    bassReplaceLows_ = new QCheckBox(QStringLiteral("Replace lows"), this);
+    bassReplaceLows_->setToolTip(QStringLiteral(
+        "Filter the original below the crossover, so the driver stops being asked "
+        "for what it cannot produce and the headroom goes to the harmonics that "
+        "are audible. On anything with a real low end, leave this off."));
+    bassLimiter_ = new QCheckBox(QStringLiteral("Limiter"), this);
+    bassLimiter_->setToolTip(QStringLiteral(
+        "Brick wall at -1 dBFS on this channel's output. Not a gain limit: it "
+        "bounds what leaves the channel, never what the equalizer may do."));
+
+    auto* head = new QHBoxLayout;
+    head->setSpacing(10);
+    auto* title = new QLabel(QStringLiteral("Harmonic bass"), this);
+    title->setObjectName(QStringLiteral("SectionTitle"));
+    head->addWidget(title);
+    head->addSpacing(8);
+    head->addWidget(bassOn_);
+    head->addStretch(1);
+    head->addWidget(bassReplaceLows_);
+    head->addWidget(bassLimiter_);
+    body->addLayout(head);
+
+    bassCrossoverHint_ = new QLabel(this);
+    bassCrossoverHint_->setObjectName(QStringLiteral("Hint"));
+    bassCrossoverHint_->setWordWrap(true);
+
+    // Two columns: the three settings that shape the effect on the left, the
+    // three that shape its timing and balance on the right.
+    auto* grid = new QGridLayout;
+    grid->setHorizontalSpacing(14);
+    grid->setVerticalSpacing(6);
+    const auto row = [this, grid](int r, int col, const QString& label, int lo, int hi,
+                                  const std::function<QString(int)>& fmt,
+                                  const QString& tip) {
+        auto* key = caption(label, this);
+        key->setMinimumWidth(78);
+        auto* slider = new QSlider(Qt::Horizontal, this);
+        slider->setRange(lo, hi);
+        auto* value = new QLabel(this);
+        value->setObjectName(QStringLiteral("VolumeValue"));
+        value->setMinimumWidth(58);
+        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        if (!tip.isEmpty()) {
+            key->setToolTip(tip);
+            slider->setToolTip(tip);
+        }
+        // The readout rides this signal, so reflectBass() must not silence the
+        // slider to set it — it guards the handlers with bassSyncing_ instead.
+        connect(slider, &QSlider::valueChanged, value,
+                [value, fmt](int v) { value->setText(fmt(v)); });
+        grid->addWidget(key, r, col * 3);
+        grid->addWidget(slider, r, col * 3 + 1);
+        grid->addWidget(value, r, col * 3 + 2);
+        return slider;
+    };
+
+    bassCrossover_ = row(0, 0, QStringLiteral("Crossover"), 30, 300,
+                         [](int v) { return QStringLiteral("%1 Hz").arg(v); },
+                         QStringLiteral("Where this channel's transducer stops "
+                                        "delivering. Below it the driver wastes "
+                                        "excursion; above it the harmonics live.\n"
+                                        "The setting that matters most."));
+    bassAmount_ = row(1, 0, QStringLiteral("Amount"), -12, 24,
+                      [](int v) {
+                          return QStringLiteral("%1%2 dB")
+                              .arg(v > 0 ? QStringLiteral("+") : QString())
+                              .arg(v);
+                      },
+                      QStringLiteral("Level of the synthesised harmonics. Past about "
+                                     "+12 dB they stop reading as the fundamental "
+                                     "and start reading as their own pitch."));
+    bassHarmonics_ = row(2, 0, QStringLiteral("Harmonics"), dsp::HarmonicBass::kMinHarmonics,
+                         dsp::HarmonicBass::kMaxHarmonics,
+                         [](int v) {
+                             const char* suffix = v == 2 ? "nd" : (v == 3 ? "rd" : "th");
+                             return QStringLiteral("up to %1%2").arg(v).arg(
+                                 QLatin1String(suffix));
+                         },
+                         QStringLiteral("How many orders above the fundamental to "
+                                        "generate. Fewer is cleaner and reads more as "
+                                        "the fundamental; more is louder and buzzier."));
+    bassEvenWeight_ = row(0, 1, QStringLiteral("Even / odd"), 0, 100,
+                          [](int v) {
+                              if (v == 0) return QStringLiteral("odd only");
+                              if (v == 100) return QStringLiteral("even only");
+                              return QStringLiteral("%1% even").arg(v);
+                          },
+                          QStringLiteral("Even orders read as fuller; odd orders read "
+                                         "as growl and carry the pitch more strongly."));
+    bassAttack_ = row(1, 1, QStringLiteral("Attack"), 1, 50,
+                      [](int v) { return QStringLiteral("%1 ms").arg(v); },
+                      QStringLiteral("How fast the harmonics follow the bass into a "
+                                     "transient."));
+    bassRelease_ = row(2, 1, QStringLiteral("Release"), 10, 400,
+                       [](int v) { return QStringLiteral("%1 ms").arg(v); },
+                       QStringLiteral("How long they hang on after it. Short is tight, "
+                                      "long is smeared."));
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(4, 1);
+    body->addLayout(grid);
+    body->addWidget(bassCrossoverHint_);
+
+    root->addWidget(frame);
+
+    const auto onEdit = [this] {
+        if (!bassSyncing_) {
+            bassDirty_ = true;  // flushed by eqFlush_, like a curve drag
+            saveBass();
+        }
+    };
+    connect(bassOn_, &QCheckBox::toggled, this, onEdit);
+    connect(bassReplaceLows_, &QCheckBox::toggled, this, onEdit);
+    connect(bassLimiter_, &QCheckBox::toggled, this, onEdit);
+    for (QSlider* slider : {bassCrossover_, bassAmount_, bassHarmonics_, bassEvenWeight_,
+                            bassAttack_, bassRelease_}) {
+        connect(slider, &QSlider::valueChanged, this, onEdit);
+    }
+}
+
+void EqualizerPage::reflectBass() {
+    if (bassOn_ == nullptr) {
+        return;
+    }
+    const dsp::BassStageSettings& b = bass_[static_cast<std::size_t>(channel_)];
+    bassSyncing_ = true;
+    bassOn_->setChecked(b.bass.enabled);
+    bassCrossover_->setValue(static_cast<int>(std::lround(b.bass.crossoverHz)));
+    bassAmount_->setValue(static_cast<int>(std::lround(b.bass.amountDb)));
+    bassHarmonics_->setValue(b.bass.harmonics);
+    bassEvenWeight_->setValue(static_cast<int>(std::lround(b.bass.evenWeight * 100.0f)));
+    bassAttack_->setValue(static_cast<int>(std::lround(b.bass.attackMs)));
+    bassRelease_->setValue(static_cast<int>(std::lround(b.bass.releaseMs)));
+    bassReplaceLows_->setChecked(b.bass.replaceLows);
+    bassLimiter_->setChecked(b.limiterEnabled);
+    bassSyncing_ = false;
+
+    const std::string_view hint = dsp::harmonicBassCrossoverHint(b.bass.crossoverHz);
+    bassCrossoverHint_->setText(QStringLiteral("Crossover suits: %1").arg(toQString(hint)));
+}
+
+void EqualizerPage::pushBass() {
+    if (bassOn_ == nullptr) {
+        return;
+    }
+    dsp::BassStageSettings& b = bass_[static_cast<std::size_t>(channel_)];
+    b.bass.enabled = bassOn_->isChecked();
+    b.bass.crossoverHz = static_cast<float>(bassCrossover_->value());
+    b.bass.amountDb = static_cast<float>(bassAmount_->value());
+    b.bass.harmonics = bassHarmonics_->value();
+    b.bass.evenWeight = static_cast<float>(bassEvenWeight_->value()) / 100.0f;
+    b.bass.attackMs = static_cast<float>(bassAttack_->value());
+    b.bass.releaseMs = static_cast<float>(bassRelease_->value());
+    b.bass.replaceLows = bassReplaceLows_->isChecked();
+    b.limiterEnabled = bassLimiter_->isChecked();
+
+    const std::string_view hint = dsp::harmonicBassCrossoverHint(b.bass.crossoverHz);
+    bassCrossoverHint_->setText(QStringLiteral("Crossover suits: %1").arg(toQString(hint)));
+    if (controller_ != nullptr) {
+        controller_->applyBassStage(audio::kAllChannels[static_cast<std::size_t>(channel_)], b);
+    }
+}
+
+void EqualizerPage::saveBass() {
+    if (settings_ == nullptr) {
+        return;
+    }
+    QJsonObject channels;
+    for (std::size_t i = 0; i < audio::kAllChannels.size(); ++i) {
+        const dsp::BassStageSettings& b = bass_[i];
+        QJsonObject o;
+        o[QStringLiteral("enabled")] = b.bass.enabled;
+        o[QStringLiteral("crossoverHz")] = b.bass.crossoverHz;
+        o[QStringLiteral("amountDb")] = b.bass.amountDb;
+        o[QStringLiteral("harmonics")] = b.bass.harmonics;
+        o[QStringLiteral("evenWeight")] = b.bass.evenWeight;
+        o[QStringLiteral("attackMs")] = b.bass.attackMs;
+        o[QStringLiteral("releaseMs")] = b.bass.releaseMs;
+        o[QStringLiteral("replaceLows")] = b.bass.replaceLows;
+        o[QStringLiteral("limiterEnabled")] = b.limiterEnabled;
+        o[QStringLiteral("limiterCeilingDb")] = b.limiterCeilingDb;
+        channels[toQString(audio::channelName(audio::kAllChannels[i]))] = o;
+    }
+    QJsonObject section;
+    section[QStringLiteral("channels")] = channels;
+    settings_->putSection(QStringLiteral("harmonicBass"), section);
+}
+
+void EqualizerPage::restoreBass() {
+    if (settings_ == nullptr) {
+        return;
+    }
+    const QJsonObject channels = settings_->section(QStringLiteral("harmonicBass"))
+                                     .value(QStringLiteral("channels"))
+                                     .toObject();
+    if (channels.isEmpty()) {
+        return;  // first run — keep the defaults
+    }
+    for (std::size_t i = 0; i < audio::kAllChannels.size(); ++i) {
+        const QJsonObject o =
+            channels.value(toQString(audio::channelName(audio::kAllChannels[i]))).toObject();
+        if (o.isEmpty()) {
+            continue;
+        }
+        dsp::BassStageSettings& b = bass_[i];
+        const auto num = [&o](const QString& key, float fallback) {
+            return o.contains(key) ? static_cast<float>(o.value(key).toDouble(fallback))
+                                   : fallback;
+        };
+        b.bass.enabled = o.value(QStringLiteral("enabled")).toBool(b.bass.enabled);
+        b.bass.crossoverHz = num(QStringLiteral("crossoverHz"), b.bass.crossoverHz);
+        b.bass.amountDb = num(QStringLiteral("amountDb"), b.bass.amountDb);
+        b.bass.harmonics = o.value(QStringLiteral("harmonics")).toInt(b.bass.harmonics);
+        b.bass.evenWeight = num(QStringLiteral("evenWeight"), b.bass.evenWeight);
+        b.bass.attackMs = num(QStringLiteral("attackMs"), b.bass.attackMs);
+        b.bass.releaseMs = num(QStringLiteral("releaseMs"), b.bass.releaseMs);
+        b.bass.replaceLows =
+            o.value(QStringLiteral("replaceLows")).toBool(b.bass.replaceLows);
+        b.limiterEnabled =
+            o.value(QStringLiteral("limiterEnabled")).toBool(b.limiterEnabled);
+        b.limiterCeilingDb = num(QStringLiteral("limiterCeilingDb"), b.limiterCeilingDb);
+    }
 }
 
 void EqualizerPage::rebuildPresetCombo() {
@@ -343,6 +599,7 @@ void EqualizerPage::reflectControls(bool includeCombo) {
 void EqualizerPage::loadChannel() {
     reflectControls(true);
     refreshOutputs();
+    reflectBass();
 }
 
 void EqualizerPage::refreshOutputs() {

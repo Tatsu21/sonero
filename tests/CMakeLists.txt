@@ -70,3 +70,28 @@ add_test(NAME MicChainTest COMMAND MicChainTest)
 add_executable(NoiseSuppressorTest NoiseSuppressorTest.cpp)
 target_link_libraries(NoiseSuppressorTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME NoiseSuppressorTest COMMAND NoiseSuppressorTest)
+
+# Harmonic bass synthesis. Each case is a signal whose right answer is known
+# before the code runs: a pure sine has no harmonics, so anything measured at
+# 2f or 3f was synthesised, and halving the input must halve them.
+add_executable(HarmonicBassTest HarmonicBassTest.cpp)
+target_link_libraries(HarmonicBassTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME HarmonicBassTest COMMAND HarmonicBassTest)
+
+# The brick-wall limiter that follows the bass stage, and the only thing standing
+# between the Lab channel's unbounded equalizer and a driver.
+add_executable(LimiterTest LimiterTest.cpp)
+target_link_libraries(LimiterTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME LimiterTest COMMAND LimiterTest)
+
+
+
+
+# One output channel's whole signal path: trim, equalizer, harmonic bass, limiter
+# and fader. The cases that matter are the invariants the old split arrangement
+# got for free from PipeWire and this chain now has to keep itself — headroom
+# compensation, a balance control that only ever attenuates, and output that does
+# not depend on the block size PipeWire happens to hand over.
+add_executable(ChannelChainTest ChannelChainTest.cpp)
+target_link_libraries(ChannelChainTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME ChannelChainTest COMMAND ChannelChainTest)

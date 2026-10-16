@@ -206,6 +206,8 @@ add_library(sonero_core STATIC
     audio/PipeWireManager.cpp
     audio/MicProcessor.h
     audio/MicProcessor.cpp
+    audio/ChannelProcessor.h
+    audio/ChannelProcessor.cpp
     audio/DeviceFormat.h
     audio/DeviceFormat.cpp
     audio/Channel.h
@@ -216,8 +218,16 @@ add_library(sonero_core STATIC
     dsp/Equalizer.cpp
     dsp/AutoGain.h
     dsp/AutoGain.cpp
+    dsp/Biquad.h
     dsp/MicChain.h
     dsp/MicChain.cpp
+    dsp/BassStage.h
+    dsp/HarmonicBass.h
+    dsp/HarmonicBass.cpp
+    dsp/Limiter.h
+    dsp/Limiter.cpp
+    dsp/ChannelChain.h
+    dsp/ChannelChain.cpp
     dsp/NoiseSuppressor.h
     dsp/NoiseSuppressor.cpp
     hid/SteelSeriesDevice.h
@@ -288,6 +298,7 @@ qt_add_executable(Sonero
     ui/widgets/AppChip.cpp
     ui/widgets/FlowLayout.h
     ui/widgets/FlowLayout.cpp)
+
 
 target_link_libraries(Sonero PRIVATE sonero_core Qt6::Widgets Qt6::DBus Qt6::Network)
 

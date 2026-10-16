@@ -19,7 +19,9 @@
 #include "audio/IDeviceFormats.h"
 #include "audio/IEqualizerController.h"
 #include "audio/IMicrophoneController.h"
+#include "audio/ChannelProcessor.h"
 #include "audio/MicProcessor.h"
+#include "dsp/BassStage.h"
 
 // Opaque libpipewire types — forward declared so this header stays lightweight.
 struct pw_thread_loop;
@@ -94,6 +96,7 @@ public:
 
     // --- IEqualizerController ---
     void applyEqualizer(ChannelId id, const dsp::EqSettings& settings) override;
+    void applyBassStage(ChannelId id, const dsp::BassStageSettings& settings) override;
 
     // --- IMicrophoneController ---
     void setMicSettings(const dsp::MicSettings& settings) override;
@@ -148,12 +151,9 @@ private:
                                   const char* type, const char* value);
     void onMetaProperty(std::uint32_t subject, const char* key, const char* value);
 
-    struct ChannelIO;  // defined below; referenced by the helpers here
 
     // Metering stream process callback (real-time thread).
-    static void onMeterProcess(void* data);
     // Sink-node ready callback; applies the desired volume/mute once (loop thread).
-    static void onNodeInfo(void* data, const pw_node_info* info);
 
     bool doRoundtrip();       // blocks (with timeout) until the server answers
     void setupGraph();        // registry listener + virtual sinks (lock held)
@@ -162,12 +162,6 @@ private:
 
     // Channel sink wiring (loop thread; caller holds the loop lock).
     static std::optional<ChannelId> channelForNodeName(std::string_view nodeName);
-    void bindChannelSink(ChannelId channel, std::uint32_t nodeId,
-                         const std::string& nodeName);
-    void createMeterStream(ChannelId channel, const std::string& sinkName);
-    static void applyVolume(ChannelIO& io);
-    static void applyMute(ChannelIO& io);
-    static void applyEq(ChannelIO& io);
 
     // Push a channel's pinned output target onto its `.out` stream via metadata.
     // Must be called with the thread loop held (registry callbacks already are).
@@ -180,6 +174,12 @@ private:
     // The microphone's own node pair and DSP. Not a filter-chain module like the
     // other channels: the chain it runs is ours, and the meters come out of it.
     MicProcessor mic_;
+
+    // One per channel, indexed by channelIndex(). The Microphone slot is unused —
+    // that channel is a source and runs through mic_ instead — and is left in
+    // place so every other index still matches channelIndex() directly.
+    std::array<ChannelProcessor, kAllChannels.size()> processor_;
+
 
     pw_thread_loop* loop_ = nullptr;
     pw_context* context_ = nullptr;
@@ -231,29 +231,6 @@ private:
     std::atomic<std::uint64_t> revision_{0};
     std::atomic<std::uint64_t> devicesRevision_{0};
 
-    // Per-channel real I/O: the sink node (for volume/mute) and a monitor capture
-    // stream (for metering). Bound lazily as sinks appear in the registry. The
-    // atomics are written by the RT process callback and read by the UI thread.
-    struct ChannelIO {
-        pw_node* node = nullptr;
-        // Attenuation (0..1] compensating the EQ's peak boost — see applyEqualizer.
-        float eqHeadroom = 1.0f;
-        // Per-channel trim (0..2, linear) set by the user, independent of volume.
-        float desiredGain = 1.0f;
-        spa_hook nodeListener{};
-        pw_stream* meter = nullptr;
-        spa_hook meterListener{};
-        std::atomic<float> peakLeft{0.0f};
-        std::atomic<float> peakRight{0.0f};
-        std::string nodeName;                        // e.g. "sonar_game" (for EQ keys)
-        std::array<float, kEqBands> eqGains{};       // desired biquad gains (dB)
-        float desiredBalance = 0.0f;
-        float desiredVolume = 1.0f;
-        bool desiredMute = false;
-        bool bound = false;
-        bool infoApplied = false;  // desired values pushed once the node was ready
-    };
-    std::array<ChannelIO, kAllChannels.size()> io_{};
 };
 
 }  // namespace sonar::audio
