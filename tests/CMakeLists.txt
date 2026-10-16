@@ -106,6 +106,12 @@ target_link_libraries(ThemeTest PRIVATE sonero_core Qt6::Test Qt6::Widgets)
 # SystemSetup suite passes it.
 target_compile_definitions(ThemeTest PRIVATE SONAR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME ThemeTest COMMAND ThemeTest)
+# The only test that needs a graphics platform. It links Qt6::Widgets, so
+# QTEST_MAIN gives it a QApplication rather than the QCoreApplication the other
+# suites get, and it shows real widgets — the re-entrancy case only reproduces on
+# a shown widget tree. A CI container has no display, where QApplication aborts
+# before the first case runs.
+set_tests_properties(ThemeTest PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # One output channel's whole signal path: trim, equalizer, harmonic bass, limiter
 # and fader. The cases that matter are the invariants the old split arrangement

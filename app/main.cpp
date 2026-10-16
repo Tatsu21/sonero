@@ -15,6 +15,21 @@
 int main(int argc, char* argv[]) {
     sonar::log::init(sonar::log::Level::Debug);
 
+    // Identity before the application object, not after. These are static and
+    // documented as settable beforehand, and on Wayland it matters: the platform
+    // plugin registers the process with the desktop portal while QApplication is
+    // being constructed, taking the desktop file name as the app id. Setting the
+    // name afterwards made Qt ask the portal a second time on the same bus
+    // connection, which it refuses — "Connection already associated with an
+    // application ID" — leaving the registration that stuck as the one made
+    // before the name was known.
+    QApplication::setApplicationName(QStringLiteral("Sonero"));
+    QApplication::setOrganizationName(QStringLiteral("Sonero"));
+    QApplication::setApplicationVersion(QString::fromStdString(sonar::versionString()));
+    // Ties the process to Sonero.desktop so Wayland/GNOME uses its icon for the
+    // window, notifications and (with the AppIndicator extension) the tray item.
+    QApplication::setDesktopFileName(QStringLiteral("Sonero"));
+
     QApplication qtApp(argc, argv);
     // --background: start hidden (used by the autostart entry). Parsed by hand to
     // keep startup free of QCommandLineParser's help/version exit paths.
@@ -24,12 +39,6 @@ int main(int argc, char* argv[]) {
             background = true;
         }
     }
-    QApplication::setApplicationName(QStringLiteral("Sonero"));
-    QApplication::setOrganizationName(QStringLiteral("Sonero"));
-    QApplication::setApplicationVersion(QString::fromStdString(sonar::versionString()));
-    // Ties the process to Sonero.desktop so Wayland/GNOME uses its icon for the
-    // window, notifications and (with the AppIndicator extension) the tray item.
-    QApplication::setDesktopFileName(QStringLiteral("Sonero"));
 
     // Single instance: if one is already running, wake it and bail out *before*
     // touching PipeWire, so a second launch never spins up a duplicate audio graph.
