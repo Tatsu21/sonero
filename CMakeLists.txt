@@ -329,7 +329,14 @@ install(TARGETS Sonero RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Example themes, offered in Profiles alongside whatever the user has imported
 # into ~/.config/Sonero/themes. Read-only: importing one copies it to the user's
 # directory first.
-install(FILES themes/nord.json themes/daylight.json themes/README.md
+# Globbed rather than listed: the list was written when two of these existed and
+# silently stopped shipping the four added after it, so an installed build offered
+# a third of the examples the repository carries. CONFIGURE_DEPENDS so that adding
+# a theme re-runs the glob on the next build — a plain GLOB is evaluated once, at
+# configure time, which would reintroduce the same bug in a slower form.
+file(GLOB SONERO_THEME_FILES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/themes/*.json")
+install(FILES ${SONERO_THEME_FILES} themes/README.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/themes)
 
 install(FILES packaging/Sonero.desktop
