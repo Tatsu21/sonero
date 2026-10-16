@@ -115,3 +115,11 @@ add_test(NAME ThemeTest COMMAND ThemeTest)
 add_executable(ChannelChainTest ChannelChainTest.cpp)
 target_link_libraries(ChannelChainTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME ChannelChainTest COMMAND ChannelChainTest)
+
+# The generic battery path. Driven against a fabricated /sys tree, so the result
+# does not depend on what hardware is plugged into the machine running it — and
+# so the case that matters most can be tested at all: refusing to report the
+# laptop's own battery as a headset's.
+add_executable(BatterySourceTest BatterySourceTest.cpp)
+target_link_libraries(BatterySourceTest PRIVATE sonero_core Qt6::Test)
+add_test(NAME BatterySourceTest COMMAND BatterySourceTest)

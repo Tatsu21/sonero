@@ -13,7 +13,10 @@
 #include <QString>
 #include <QWidget>
 
+#include <memory>
+
 #include "audio/DeviceFormat.h"
+#include "hid/BatterySource.h"
 #include "dsp/Equalizer.h"
 #include "hid/SteelSeriesDevice.h"
 
@@ -107,6 +110,12 @@ private:
     bool headsetLowWarned_ = false;
 
     QVBoxLayout* deviceListBody_ = nullptr;   // rows, one per connected output
+    // Every way of learning a device's charge level, generic ones first. Battery
+    // support is a list of sources, not a list of products — see
+    // hid/BatterySource.h.
+    std::vector<std::unique_ptr<sonar::hid::IBatterySource>> batterySources_ =
+        sonar::hid::defaultBatterySources();
+
     QWidget* steelSeriesCard_ = nullptr;      // battery + EQ (hidden when absent)
     std::uint64_t lastDevicesRev_ = ~0ULL;    // force the initial build
     QTimer* timer_ = nullptr;

@@ -455,13 +455,18 @@ void MicrophonePage::buildNoiseCard(QVBoxLayout* root) {
                                        static_cast<qsizetype>(
                                            micController_->micNoiseSuppressionBackend().size()))));
     } else {
-        // Say which package and why, rather than greying a switch out and leaving
-        // the user to wonder whether their microphone is at fault.
-        noiseState_->setText(
-            QStringLiteral("Not in this build: RNNoise was not found when Sonero was "
-                           "compiled. Install it (<code>rnnoise</code> on Arch, "
-                           "<code>librnnoise-dev</code> on Debian) and rebuild, and this "
-                           "switch turns on."));
+        // Say exactly how to get it, rather than greying a switch out and leaving
+        // the user to wonder whether their microphone is at fault. Naming a
+        // package is not enough: only Arch ships one, so on nearly every system
+        // the answer is the script this project carries for that reason.
+        noiseState_->setText(QStringLiteral(
+            "Not in this build: RNNoise was not found when Sonero was compiled, and "
+            "almost no distribution packages it — Arch has <code>rnnoise</code>, "
+            "Debian only in sid and forky, Ubuntu and Fedora not at all. To turn "
+            "this on, build it once and rebuild Sonero:<br>"
+            "<code>sudo apt install autoconf automake libtool</code><br>"
+            "<code>sudo ./packaging/build-rnnoise.sh</code><br>"
+            "<code>cmake -S . -B build &amp;&amp; cmake --build build -j</code>"));
         noiseState_->setTextFormat(Qt::RichText);
     }
     body->addWidget(noiseState_);

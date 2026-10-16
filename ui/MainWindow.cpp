@@ -236,6 +236,7 @@ void MainWindow::buildUi() {
                         [this, channels](audio::ChannelId id) {
                             channels->showChannelGain(mixerPage_->channelGainDb(id),
                                                       mixerPage_->channelAutoGain(id));
+                            channels->showChannelOutput(mixerPage_->channelOutput(id));
                         });
                 // ...and back: while auto-gain runs it, not the user, owns the value.
                 connect(mixerPage_, &MixerPage::channelGainDbChanged, channels,
@@ -246,6 +247,7 @@ void MainWindow::buildUi() {
                 const audio::ChannelId first = channels->selectedChannel();
                 channels->showChannelGain(mixerPage_->channelGainDb(first),
                                           mixerPage_->channelAutoGain(first));
+                channels->showChannelOutput(mixerPage_->channelOutput(first));
             }
             pages_->addWidget(channels);
         } else if (titleView == "Microphone") {

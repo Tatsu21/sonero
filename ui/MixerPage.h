@@ -66,6 +66,9 @@ public:
     void applyChannelAutoGain(audio::ChannelId id, bool on);
     void applyChannelOutput(audio::ChannelId id, const QString& deviceNodeName);
     [[nodiscard]] float channelGainDb(audio::ChannelId id) const;
+    // The device this channel plays to, so the Channels page can show it. The
+    // backend is the authority — it is what the router actually applied.
+    [[nodiscard]] QString channelOutput(audio::ChannelId id) const;
     [[nodiscard]] bool channelAutoGain(audio::ChannelId id) const;
 
 private:

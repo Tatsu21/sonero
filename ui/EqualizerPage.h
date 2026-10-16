@@ -59,6 +59,11 @@ public:
 public slots:
     // Reflect values the Mixer page holds, when the selection changes.
     void showChannelGain(float gainDb, bool autoOn);
+    // Which device this channel plays to. The combo is rebuilt whenever the set
+    // of devices changes, so the selection has to be restored rather than left
+    // to survive — and without this the page showed "Default output" for every
+    // channel however it was actually routed.
+    void showChannelOutput(const QString& deviceNodeName);
     // Follow the auto-gain loop while it runs: it owns the value, so the slider
     // and the readout have to be told, not asked.
     void showAutoGainValue(audio::ChannelId id, float gainDb);
@@ -100,7 +105,11 @@ private:
     QCheckBox* autoGain_ = nullptr;
     QLabel* gainValue_ = nullptr;
     QComboBox* output_ = nullptr;
+    // Last device-list revision this page drew. The backend bumps its counter
+    // when a sink appears or goes away; polling it is how a device plugged in
+    // while the page is open shows up without restarting Sonero.
     std::uint64_t devicesRevision_ = ~0ULL;
+    QString currentOutput_;  // node.name, empty = follow the default
     config::SettingsStore* settings_ = nullptr;
 
     EqCurve* curve_ = nullptr;

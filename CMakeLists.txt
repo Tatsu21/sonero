@@ -231,7 +231,13 @@ add_library(sonero_core STATIC
     dsp/NoiseSuppressor.h
     dsp/NoiseSuppressor.cpp
     hid/SteelSeriesDevice.h
-    hid/SteelSeriesDevice.cpp)
+    hid/SteelSeriesDevice.cpp
+    hid/BatterySource.h
+    hid/BatterySource.cpp
+    hid/SysfsBattery.h
+    hid/SysfsBattery.cpp
+    hid/SteelSeriesBattery.h
+    hid/SteelSeriesBattery.cpp)
 
 target_include_directories(sonero_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(sonero_core PUBLIC PkgConfig::PIPEWIRE)

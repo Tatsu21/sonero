@@ -346,6 +346,13 @@ void MixerPage::applyChannelOutput(ChannelId id, const QString& deviceNodeName) 
     saveMixerState();
 }
 
+QString MixerPage::channelOutput(ChannelId id) const {
+    if (controller_ == nullptr) {
+        return {};
+    }
+    return QString::fromStdString(controller_->channelOutput(id));
+}
+
 float MixerPage::channelGainDb(ChannelId id) const {
     const auto it = channelGainDb_.find(static_cast<int>(id));
     return it != channelGainDb_.end() ? it->second : 0.0f;

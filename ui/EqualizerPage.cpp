@@ -180,8 +180,9 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
             audio::kAllChannels[static_cast<std::size_t>(channel_)], on);
     });
     connect(output_, &QComboBox::activated, this, [this](int) {
+        currentOutput_ = output_->currentData().toString();
         emit channelOutputChanged(audio::kAllChannels[static_cast<std::size_t>(channel_)],
-                                  output_->currentData().toString());
+                                  currentOutput_);
     });
 
     // Controls: enabled | presets + save/import/export | band count.
@@ -266,6 +267,13 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
         if (bassDirty_) {
             bassDirty_ = false;
             pushBass();
+        }
+        // A device plugged in while this page is open used to stay invisible
+        // until the channel was switched or Sonero restarted: the list was only
+        // built from loadChannel(). The backend bumps a revision when a sink
+        // comes or goes, and the Mixer and Devices pages already watch it.
+        if (devices_ != nullptr && devices_->devicesRevision() != devicesRevision_) {
+            refreshOutputs();
         }
     });
     eqFlush_->start();
@@ -613,6 +621,17 @@ void EqualizerPage::refreshOutputs() {
         output_->addItem(QString::fromStdString(dev.description),
                          QString::fromStdString(dev.name));
     }
+    // Rebuilding the list drops the selection, so put it back. A device that has
+    // since disappeared falls back to the first entry, which is what the channel
+    // is actually doing once its target is gone.
+    const int index = output_->findData(currentOutput_);
+    output_->setCurrentIndex(index >= 0 ? index : 0);
+    devicesRevision_ = devices_->devicesRevision();
+}
+
+void EqualizerPage::showChannelOutput(const QString& deviceNodeName) {
+    currentOutput_ = deviceNodeName;
+    refreshOutputs();
 }
 
 ChannelId EqualizerPage::selectedChannel() const {

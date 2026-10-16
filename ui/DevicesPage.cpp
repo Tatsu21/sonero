@@ -1,8 +1,10 @@
 #include "ui/DevicesPage.h"
 
+#include "hid/BatterySource.h"
 #include "ui/Theme.h"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -186,6 +188,17 @@ std::optional<int> btBatteryPercent(const std::string& nodeName) {
     std::string mac = nodeName.substr(p + prefix.size());
     if (const auto dot = mac.find('.'); dot != std::string::npos) {
         mac.resize(dot);  // "80_C3_BA_94_FA_B8.1" -> "80_C3_BA_94_FA_B8"
+    }
+    // PipeWire publishes the same Bluetooth sink under two names — one with the
+    // MAC's colons intact and one with them already underscored — and a DBus
+    // object path may contain neither colons nor anything else outside
+    // [A-Za-z0-9_]. Sending the colon form made the bus reject every call with
+    // "Invalid object path", five times per device per refresh, and the battery
+    // never arrived. Normalising here handles both names.
+    for (char& c : mac) {
+        if (std::isalnum(static_cast<unsigned char>(c)) == 0) {
+            c = '_';
+        }
     }
     if (mac.empty()) {
         return std::nullopt;
@@ -668,7 +681,17 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
 }
 
 std::optional<int> DevicesPage::updateBtBattery(QLabel* label, const std::string& nodeName) {
-    const std::optional<int> pct = btBatteryPercent(nodeName);
+    // BlueZ first, because it is the one source that speaks for a Bluetooth
+    // node; then every generic source, so any device whose kernel driver
+    // reports a charge level gets a figure without Sonero knowing what it is.
+    std::optional<int> pct = btBatteryPercent(nodeName);
+    if (!pct.has_value()) {
+        if (const auto reading = hid::readBattery(batterySources_, nodeName)) {
+            if (reading->valid()) {
+                pct = reading->percent;
+            }
+        }
+    }
     if (!pct.has_value()) {
         label->setVisible(false);
         return std::nullopt;
@@ -687,7 +710,7 @@ std::optional<int> DevicesPage::updateBtBattery(QLabel* label, const std::string
         if (btLowWarned_.insert(nodeName).second && notifier_ != nullptr) {
             const auto it = knownDevices_.find(nodeName);
             const QString what = it != knownDevices_.end() ? QString::fromStdString(it->second)
-                                                           : QStringLiteral("Bluetooth device");
+                                                           : QStringLiteral("Wireless device");
             notifier_->notify(QStringLiteral("Battery low"),
                               QStringLiteral("%1 at %2%").arg(what).arg(p), Notifier::Critical,
                               QStringLiteral("battery-caution"));
