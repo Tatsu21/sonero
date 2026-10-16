@@ -248,6 +248,7 @@ footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:
     <div class="links">
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#equalizer">Equalizer</a>
+      <a class="hide-sm" href="#themes">Themes</a>
       <a class="hide-sm" href="#microphone">Microphone</a>
       <a href="#install">Install</a>
       <a class="btn sm" href="https://github.com/Tatsu21/sonero">
@@ -314,6 +315,18 @@ footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:
         <p>10, 15 or 31 bands with 24 built-in presets, plus save, import and export of
         your own curves.</p></div>
 
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M2 12c2 0 2-7 4-7s2 14 4 14 2-9 4-9 2 5 4 5 2-3 4-3"/></svg></span>
+        <h3>Harmonic bass synthesis</h3>
+        <p>A small driver cannot move enough air to reproduce 40&nbsp;Hz. Sonero
+        synthesises the <em>harmonics</em> of the bass in the range the driver does
+        reproduce, and your hearing supplies the fundamental that is not there.</p></div>
+
+      <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.7 0 2-1.3 1.2-2.1-.8-.9-.5-2.2.8-2.2H17a4 4 0 0 0 4-4c0-5-4-9.7-9-9.7z"/><circle cx="7.5" cy="10.5" r="1.1"/><circle cx="12" cy="7.5" r="1.1"/><circle cx="16.5" cy="10.5" r="1.1"/></svg></span>
+        <h3>Themes you can write</h3>
+        <p>Thirteen colours and a font in a JSON file; the shades in between are derived
+        from them. The built-in theme is compiled in and only ever applied <em>over</em>,
+        so nothing you write can leave the app unusable.</p></div>
+
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v18M7 7v10M17 7v10M3 10v4M21 10v4"/></svg></span>
         <h3>Automatic gain</h3>
         <p>On request, it holds the highest gain — up to +6 dB — that keeps the channel
@@ -325,9 +338,11 @@ footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:
         and two channels can play to two different devices at once.</p></div>
 
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="16" height="10" rx="3"/><path d="M18 11h3v2h-3z"/><path d="M6 11v2M10 10v4"/></svg></span>
-        <h3>Battery where it exists</h3>
-        <p>Bluetooth headsets through BlueZ, and the SteelSeries Arctis Nova Pro Wireless
-        straight from its base station over USB HID — both shown in the tray.</p></div>
+        <h3>Battery, without a product list</h3>
+        <p>Read from the kernel&rsquo;s own <code>power_supply</code> class, which covers
+        any device whose driver reports a level, plus BlueZ for Bluetooth. A vendor
+        protocol is one more source behind the same interface, not the feature
+        itself — shown in the tray either way.</p></div>
 
       <div class="card"><span class="ico"><svg viewBox="0 0 24 24"><path d="M15 10l6-4v12l-6-4z"/><rect x="2" y="6" width="13" height="12" rx="3"/></svg></span>
         <h3>Streaming mix for OBS</h3>
@@ -358,14 +373,43 @@ footer .fl{margin-top:26px; display:flex; gap:20px; flex-wrap:wrap; align-items:
         <h2>It runs in software, so it works with any headset</h2>
         <p class="lead" style="margin-bottom:20px">Every channel is a cascade of peaking
           biquads — nothing has to be blessed by a hardware vendor. Drag the curve or the
-          per-band sliders; 10, 15 or 31 bands, with presets you can save and share.</p>
-        <p style="color:var(--dim); margin:0; font-size:15px">Gain staging is deliberate:
-          volume × channel gain × EQ headroom × a fixed filter reserve, so a boosted band
-          cannot clip on the way to the device.</p>
+          per-band sliders; 10, 15 or 31 bands, with presets you can save and share.
+          The harmonic bass stage sits right after it, on the same channel.</p>
+        <p style="color:var(--dim); margin:0; font-size:15px">The order is not a
+          preference: the equalizer feeds the bass stage so its crossover sees the signal
+          as it will be heard, a brick-wall limiter follows both because it is the only
+          thing between them and a driver, and the fader comes last so pulling a channel
+          down never changes what the limiter was protecting against. Ahead of the filters
+          the signal is attenuated by exactly what the curve boosts, so a raised band
+          cannot clip on the way out.</p>
       </div>
       <figure>
         <img class="frame" src="images/channels.png" width="1440" height="900"
              alt="The per-channel equalizer: a draggable response curve above per-band sliders">
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="themes">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <p class="eyebrow">Themes</p>
+        <h2>The interface is a file you can edit</h2>
+        <p class="lead" style="margin-bottom:20px">Thirteen colours and a font in a JSON
+          file. The shades in between — a hover against its surface, a slider groove, the
+          tint behind a soloed channel — are derived from those thirteen, so a coherent
+          interface costs thirteen decisions rather than thirty-six.</p>
+        <p style="color:var(--dim); margin:0; font-size:15px">The built-in theme is
+          compiled into the binary and is only ever applied <em>over</em>, never replaced,
+          so a theme that is wrong or written for an older version can change colours and
+          nothing else. Import, export and switch from the Profiles page; an optional
+          style-sheet block covers what colours cannot say.</p>
+      </div>
+      <figure>
+        <img class="frame" src="images/profiles.png" width="1440" height="900"
+             alt="The Profiles page: a theme picker with import and export">
       </figure>
     </div>
   </div>
@@ -466,11 +510,16 @@ cmake --build build --parallel
       left looking clickable. Nothing here pretends to work.</p>
     <div class="note">
       <ul>
-        <li><strong>Profiles</strong> — saving whole configurations as named profiles is
-          not implemented.</li>
-        <li><strong>Microphone controls</strong> — the source is live and apps can record
-          from it, but gain, mute, level, noise suppression, gate and monitoring are inert.
-          The DSP behind them is not wired.</li>
+        <li><strong>Profiles</strong> — the page exists and holds themes, but saving a
+          whole audio configuration as a named profile is not implemented.</li>
+        <li><strong>Microphone gate and monitoring</strong> — the source is live, and
+          input gain, mute, the voice equalizer and noise suppression all reach it. The
+          noise gate and &ldquo;hear myself&rdquo; are laid out but not wired; the DSP for
+          them exists and is tested, and has no node to run in yet.</li>
+        <li><strong>Noise suppression needs RNNoise at build time.</strong> The released
+          <code>.deb</code> and AppImage carry it. A build from source finds it only on
+          Arch, or after <code>packaging/build-rnnoise.sh</code> — without it that one
+          stage reports itself unavailable and says so in the app.</li>
         <li><strong>SteelSeries hardware EQ</strong> — the dock accepts the HID writes and
           nothing audible changes. Unsolved, so the card is disabled; the per-channel
           equalizer runs in software and works with any headset.</li>

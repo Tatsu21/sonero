@@ -40,23 +40,36 @@ transmission format — sample rate and bit depth for wired devices, codec for
 Bluetooth — and battery wherever the hardware reports one. Two channels can even play
 to two different devices at once.
 
+The processing is Sonero's own, which is why it is not tied to anyone's hardware: each
+channel runs an equalizer, a harmonic bass stage and a limiter inside a node this
+application owns. And the interface is yours to repaint — a theme is a small JSON file,
+and the built-in one is compiled in, so nothing you write can leave the app unusable.
+
 |  | Feature |
 |---|---|
 | 🎚️ | **Six output channels** — Master (System), Game, Chat, Media, Browser, Aux. Volume, mute, solo, balance and live VU meters per channel. |
 | 🧲 | **Drag-free app routing** — every playing app shows up as a chip; move it to a channel and it stays there across restarts. |
 | 🎛️ | **Equalizer per channel** in 10, 15 or 31 bands, with 24 built-in presets (music, gaming, voice, movie) plus save / import / export of your own. |
+| 🧠 | **Harmonic bass synthesis, per channel** — a small driver cannot move enough air to reproduce 40 Hz, and boosting 40 Hz only spends excursion distorting everything else. Sonero synthesises the *harmonics* of the bass instead, in the range the driver does reproduce, and your hearing supplies the fundamental that is not there. Crossover, level, how many orders and the even/odd balance are all yours, with an option to replace the lows rather than add to them. |
 | 🔊 | **Per-channel gain, set automatically on request** — it holds the highest gain (up to +6 dB) that keeps the channel's real output clear of full scale: quiet material climbs, a peak that overshoots is taken back by exactly what it overshot. Slow up, immediate down, so nothing breathes. |
 | 🎥 | **Streaming mix for OBS** — a `Sonero Stream` input source with an independent send level per channel, so your viewers hear a different balance than you do. |
 | 🎤 | **A microphone chain, not just a level** — the `Sonero Microphone` source your apps select runs a full voice chain: high-pass, learned noise suppression (RNNoise), gate, de-esser, 10-band voice equalizer, compressor and a brick-wall limiter, with presets for podcasting, streaming and meetings. Every application recording from Sonero hears the processed voice. |
 | 🎧 | **Any output device** — USB, Bluetooth, HDMI, S/PDIF and analog, each detected and badged automatically, each with its own output selection per channel. |
 | 💿 | **Per-device transmission format** — sample rate and bit depth up to 24-bit / 96 kHz, written as a per-device WirePlumber drop-in, so changing one device never disturbs the others. |
 | 📶 | **Bluetooth done properly** — automatic switch to the best A2DP codec the headset offers, ranked from LDAC (untested — see below) and aptX down to SBC, plus battery level through BlueZ. |
-| 🔋 | **SteelSeries headsets** — battery read straight from the base station over USB HID (Arctis Nova Pro Wireless and relatives), on top of everything above. |
+| 🔋 | **Battery, without a list of blessed products** — read from the kernel's own `power_supply` class, which covers any device whose driver reports a level, plus BlueZ for Bluetooth. A vendor protocol is one more source behind the same interface, not the feature itself; SteelSeries base stations use that path because they report battery no other way. |
+| 🎨 | **Themes you can write** — thirteen colours and a font in a JSON file, with the shades in between derived from them, so a coherent interface costs thirteen decisions rather than thirty-six. An optional style-sheet block covers what colours cannot say. The built-in theme is compiled into the binary and is only ever applied *over*, so there is always a way back. Import, export and switch from the Profiles page. |
 | 💾 | **Everything persists** — first launch gives you sane defaults; every change you make is remembered for the next session. |
 | 🖥️ | **A real desktop app** — tray icon, desktop notifications, autostart at login and background operation so your channels stay alive when the window is closed. The tray menu shows the battery of every connected device and opens a compact volume window for the channels. |
 
 <div align="center">
 <img src="docs/images/microphone.png" alt="The microphone page: input levels, the voice equalizer and noise suppression" width="860">
+</div>
+
+<div align="center">
+<img src="docs/images/profiles.png" alt="The Profiles page: the theme picker, with import and export" width="860">
+<br><sub>Themes are files. Import one, pick it, and the whole interface follows — including
+the parts that are painted rather than styled, like the equalizer curve and the meters.</sub>
 </div>
 
 <details>
@@ -222,7 +235,7 @@ freezing a copy of them. On Arch the `PKGBUILD` above does exactly this for you.
 | **PipeWire** | 0.3 | Plus WirePlumber as the session manager. Already running on every current desktop. |
 | **Qt** | 6.2 | Widgets, D-Bus and Network modules. |
 | **RNNoise** | 0.2 | Optional, and only for the microphone's noise suppression. Packaged on Arch; built by `packaging/build-rnnoise.sh` everywhere else. Without it that one stage reports itself unavailable. |
-| **CPU** | x86-64 | Nothing exotic; the DSP is a handful of biquads per channel. |
+| **CPU** | x86-64 | Nothing exotic. Per channel: 31 biquads a side, plus the bass stage's eight and a limiter — a few microseconds a block. |
 
 PipeWire is a *recommended*, not a hard, dependency of the `.deb` — installing Sonero
 will never drag in an audio server you did not ask for.
@@ -236,15 +249,25 @@ depend on what the hardware exposes.
 
 | Device class | Routing | Format control | Battery |
 |---|---|---|---|
-| USB headsets, DACs and interfaces | ✅ | rate + bit depth | — |
+| USB headsets, DACs and interfaces | ✅ | rate + bit depth | ✅ wherever the kernel reports one |
 | Bluetooth headphones and speakers | ✅ | codec selection | ✅ via BlueZ |
-| SteelSeries wireless (Arctis Nova Pro & relatives) | ✅ | rate + bit depth | ✅ direct over USB HID |
+| SteelSeries wireless (Arctis Nova Pro & relatives) | ✅ | rate + bit depth | ✅ vendor HID, since it reports no other way |
 | HDMI / DisplayPort outputs | ✅ | rate + bit depth | — |
 | S/PDIF and optical | ✅ | rate + bit depth | — |
 | Onboard analog | ✅ | rate + bit depth | — |
 
 No device is privileged over another, and each channel picks its own output — send
 Chat to your headset while Media keeps playing on the speakers.
+
+<div align="center">
+<img src="docs/images/devices.png" alt="The Devices page: every detected output with its type badge, format and battery" width="860">
+</div>
+
+Battery is read from `/sys/class/power_supply`, which is where the kernel publishes a
+charge level for any HID device whose driver knows one. Nothing vendor-specific is
+involved and no product list exists. Devices behind a receiver are handled too: for
+those the USB descriptors describe the dongle rather than the headset, so the power
+supply's own model name is matched as well.
 
 Two honest caveats about format control: a rate is only honoured up to what the
 hardware advertises (ask a 48 kHz headset for 96 kHz and ALSA clamps it back), and
@@ -273,9 +296,11 @@ aptX HD and LDAC appear only when the matching encoder libraries were compiled i
 
 ### Adding your own headset — without reading the code
 
-Battery level goes over USB HID, and that protocol differs per model, so only the Arctis
-Nova Pro Wireless is implemented. Everything else still plays audio normally — it is
-only the percentage that is model-specific.
+Most wireless headsets need nothing: if the kernel reports a charge level for yours, the
+generic path above already finds it. This section is for the ones that report battery
+*only* over a vendor HID protocol of their own, which differs per model — the Arctis
+Nova Pro Wireless is the implemented example. Everything else still plays audio normally
+either way; it is only the percentage that can be model-specific.
 
 If you want yours supported and you do not write C++, you do not have to.
 [`hid/SKILL.md`](hid/SKILL.md) is a written procedure meant to be handed to an **AI
@@ -443,8 +468,9 @@ Both are reversible by deleting a single file. Details in [docs/INSTALL.md](docs
 ## Where your settings live
 
 ```
-~/.config/Sonero/Sonero/settings.json   mixer, EQ, routing, preferences
+~/.config/Sonero/Sonero/settings.json   mixer, EQ, harmonic bass, routing, preferences
 ~/.config/Sonero/Sonero/presets/        saved equalizer presets
+~/.config/Sonero/Sonero/themes/         imported themes (*.json)
 ```
 
 The update check keeps its switch and the time of the last check in the same file,
@@ -461,28 +487,45 @@ Sonero keeps the audio engine free of Qt, so it can be tested headlessly and reu
 ```
 sonero/
 ├── app/       Composition root: main, Application, single-instance guard, autostart
-├── ui/        Qt6 Widgets — pages (Mixer, Channels, Microphone, Devices, Settings)
-│   │           plus the tray's compact volume window
+├── ui/        Qt6 Widgets — pages (Mixer, Channels, Microphone, Devices,
+│   │           Profiles, Settings), the theme engine, and the tray's
+│   │           compact volume window
 │   └── widgets/   ChannelStrip, AppChip, EqCurve, VuMeter
-├── audio/     Backend interfaces + PipeWireManager, Mixer, device formats
-├── dsp/       Equalizer (biquad cascade) and AutoGain
-├── hid/       SteelSeries base-station protocol over hidraw
+├── audio/     Backend interfaces + PipeWireManager, the per-channel node pairs,
+│              Mixer, device formats
+├── dsp/       The channel chain: equalizer, harmonic bass, limiter, AutoGain
+├── hid/       Battery sources — the kernel's power_supply class, and a vendor
+│              HID protocol behind the same interface
 ├── core/      Logging, version string, a std::format stand-in for older toolchains
 ├── config/    Debounced JSON settings store
+├── themes/    Example themes and the format they are written in
 ├── packaging/ .deb, AppImage, icons, udev rules, CI helper scripts
 ├── docs/      Install guide and notes
 └── tests/     QtTest suites
 ```
 
-**How the audio path works.** Every channel is a `module-filter-chain` instance whose
-capture side is a virtual `Audio/Sink` and whose graph is a cascade of 31 peaking
-biquads — the equalizer. A `module-loopback` then carries that chain's output to the
-device you picked, and a second loopback taps the same sink at its own send level to
-feed the `Sonero Stream` source that OBS records. Applications move between channels
-by rewriting their `target.object` metadata, which PipeWire applies without
-interrupting playback. Gain staging is deliberate: volume × channel gain × EQ
-headroom × a fixed filter reserve, so a boosted band cannot clip on the way to the
-device.
+**How the audio path works.** Every output channel is a pair of native PipeWire nodes
+that Sonero owns: an `Audio/Sink` applications play into, and an output stream feeding
+the device you picked. Between them runs one chain —
+
+```
+trim → 31-band equalizer → harmonic bass → brick-wall limiter → fader
+```
+
+— which is why the bass stage can exist at all. It synthesises frequencies that were
+not in the input, and no arrangement of the daemon's builtin biquads can do that, since
+a filter graph is linear by construction. A `module-loopback` taps the same sink at its
+own send level to feed the `Sonero Stream` source OBS records. Applications move between
+channels by rewriting their `target.object` metadata, which PipeWire applies without
+interrupting playback.
+
+The order in that chain is not a preference. The equalizer comes first because the bass
+stage's crossover should see the signal as it will be heard. The limiter follows the
+bass because it is the only thing between what those two produce and a driver. The fader
+is last, so pulling a channel down never changes what the limiter was protecting
+against — a channel at 10% is the same sound, quieter, rather than a differently
+limited one. Ahead of the filters the signal is attenuated by exactly what the curve
+boosts, so a raised band cannot clip on the way out.
 
 <div align="center">
 <img src="docs/images/channels.png" alt="Per-channel equalizer" width="820">
