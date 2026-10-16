@@ -86,6 +86,26 @@ add_test(NAME LimiterTest COMMAND LimiterTest)
 
 
 
+# Themes. The substitution must leave no placeholder behind (Qt would reject the
+# sheet), a partial or broken theme file must fall back rather than paint the app
+# black, and a theme must not be able to replace the built-in sheet — which is
+# what guarantees there is always a way back from a bad one.
+add_executable(ThemeTest ThemeTest.cpp
+    ${CMAKE_SOURCE_DIR}/ui/Theme.cpp
+    ${CMAKE_SOURCE_DIR}/app/SystemSetup.cpp
+    ${CMAKE_SOURCE_DIR}/app/AutoStart.cpp
+    # The two widgets that restyle themselves on a palette change, so the
+    # re-entrancy case can be built and switched.
+    ${CMAKE_SOURCE_DIR}/ui/widgets/AppChip.cpp
+    ${CMAKE_SOURCE_DIR}/ui/widgets/ChannelStrip.cpp
+    ${CMAKE_SOURCE_DIR}/ui/widgets/VuMeter.cpp
+    ${CMAKE_SOURCE_DIR}/ui/widgets/FlowLayout.cpp)
+target_link_libraries(ThemeTest PRIVATE sonero_core Qt6::Test Qt6::Widgets)
+# SystemSetup is compiled in for resourcePath(), which is how the theme loader
+# finds the examples that ship with an install. It wants the same define the
+# SystemSetup suite passes it.
+target_compile_definitions(ThemeTest PRIVATE SONAR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME ThemeTest COMMAND ThemeTest)
 
 # One output channel's whole signal path: trim, equalizer, harmonic bass, limiter
 # and fader. The cases that matter are the invariants the old split arrangement

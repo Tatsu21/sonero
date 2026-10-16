@@ -1,5 +1,7 @@
 #include "ui/SettingsPage.h"
 
+#include "ui/Theme.h"
+
 #include "core/Version.h"
 
 #include <QApplication>
@@ -229,8 +231,9 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
     // copied, and a user who distrusts the Copy button can highlight it instead.
     updateCommand_ = new QLabel;
     updateCommand_->setStyleSheet(
-        QStringLiteral("font-family:monospace; background:#12131b; border-radius:6px; "
-                       "padding:8px 10px;"));
+        QStringLiteral("font-family:monospace; background:%1; border-radius:6px; "
+                       "padding:8px 10px;")
+            .arg(ui::currentTheme().bg.name(QColor::HexRgb)));
     updateCommand_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     updateCommand_->setVisible(false);
 
@@ -371,7 +374,7 @@ void SettingsPage::showUpdateFound() {
     updateCheck_->setEnabled(true);
     updateStatus_->setText(
         QStringLiteral("<b>Sonero %1 is available</b> — you have %2. "
-                       "<a style='color:#7c83ff; text-decoration:none' href='%3'>What changed</a>")
+                       "<a style='text-decoration:none' href='%3'>What changed</a>")
             .arg(release.version.toHtmlEscaped(), updater_->runningVersion().toHtmlEscaped(),
                  release.pageUrl.toHtmlEscaped()));
 
@@ -405,7 +408,7 @@ void SettingsPage::buildAboutCard(QVBoxLayout* root) {
         "every day — not a commercial product. Shared in the hope that it is useful "
         "to someone else too.</p>"
         "<p style='margin:0 0 8px 0'>Source, issues and releases: "
-        "<a style='color:#7c83ff; text-decoration:none' "
+        "<a style='text-decoration:none' "
         "href='https://github.com/Tatsu21/sonero'>github.com/Tatsu21/sonero</a></p>"
         "<p style='margin:0 0 8px 0'>Built with AI assistance: much of the code was "
         "drafted together with Anthropic's Claude, then reviewed, built and verified "
@@ -462,7 +465,7 @@ void SettingsPage::refreshSystemChecks() {
         }
         auto* row = new QFrame;
         row->setProperty("sonarSystemRow", true);
-        row->setStyleSheet(QStringLiteral("QFrame { background:#12131b; border-radius:8px; }"));
+        row->setObjectName(QStringLiteral("InsetRow"));  // coloured by the theme
         auto* h = new QHBoxLayout(row);
         h->setContentsMargins(12, 9, 12, 9);
         h->setSpacing(10);
@@ -470,7 +473,8 @@ void SettingsPage::refreshSystemChecks() {
         const bool ok = check.status == setup::Status::Ok;
         auto* dot = new QLabel(ok ? QStringLiteral("●") : QStringLiteral("●"));
         dot->setStyleSheet(QStringLiteral("color:%1; font-size:14px;")
-                               .arg(ok ? QStringLiteral("#4ade80") : QStringLiteral("#facc15")));
+                               .arg((ok ? ui::currentTheme().ok : ui::currentTheme().warn)
+                                        .name(QColor::HexRgb)));
 
         auto* title = new QLabel(check.needsRoot && !ok
                                      ? QStringLiteral("🔒 %1").arg(check.title)

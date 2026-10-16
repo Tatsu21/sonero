@@ -281,6 +281,8 @@ qt_add_executable(Sonero
     ui/DevicesPage.h
     ui/DevicesPage.cpp
     ui/SettingsPage.h
+    ui/ProfilesPage.h
+    ui/ProfilesPage.cpp
     ui/SettingsPage.cpp
     ui/TrayMixer.h
     ui/TrayMixer.cpp
@@ -308,13 +310,21 @@ target_compile_definitions(Sonero PRIVATE
     SONAR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # --- HID probe (dev tool for the SteelSeries base station) -------------------
+include(GNUInstallDirs)
+
 add_executable(hidprobe hid/probe_main.cpp)
 target_link_libraries(hidprobe PRIVATE sonero_core)
 
 # --- Installation (also what the AppImage AppDir is built from) ---------------
-include(GNUInstallDirs)
+# GNUInstallDirs is included further up.
 
 install(TARGETS Sonero RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# Example themes, offered in Profiles alongside whatever the user has imported
+# into ~/.config/Sonero/themes. Read-only: importing one copies it to the user's
+# directory first.
+install(FILES themes/nord.json themes/daylight.json themes/README.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/sonero/themes)
 
 install(FILES packaging/Sonero.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)

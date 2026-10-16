@@ -1,5 +1,7 @@
 #include "ui/widgets/EqCurve.h"
 
+#include "ui/Theme.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,6 +14,8 @@
 
 namespace sonar::ui {
 
+using sonar::ui::currentTheme;
+
 using dsp::kMaxFreq;
 using dsp::kMaxGainDb;
 using dsp::kMinFreq;
@@ -22,13 +26,37 @@ constexpr float kLogMin = 1.30103f;   // log10(20)
 constexpr float kLogMax = 4.30103f;   // log10(20000)
 constexpr int kNodeRadius = 7;
 
-const QColor kPlotBg(0x12, 0x14, 0x1e);
-const QColor kPlotBorder(0x28, 0x2c, 0x3e);
-const QColor kGrid(0x21, 0x25, 0x36);
-const QColor kZeroLine(0x3a, 0x3f, 0x57);
-const QColor kAccent(0x63, 0x66, 0xf1);
-const QColor kAccentHi(0x8b, 0x8f, 0xf9);
-const QColor kText(0x8b, 0x90, 0xa8);
+// Read from the active theme rather than fixed, so a theme reaches the curve too.
+// A plot is not a stylable widget — every pixel of it is painted here — so the
+// colours have to be fetched rather than inherited from the style sheet.
+[[nodiscard]] QColor mixed(const QColor& a, const QColor& b, double t) {
+    const double u = 1.0 - t;
+    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
+                            a.blueF() * u + b.blueF() * t);
+}
+
+[[nodiscard]] QColor withAlpha(QColor c, int alpha) {
+    c.setAlpha(alpha);
+    return c;
+}
+
+[[nodiscard]] QColor plotBg() {
+    // A shade below the card it sits on, so the plot reads as recessed.
+    const ThemeTokens& t = currentTheme();
+    return mixed(t.surface, t.bg, 0.55);
+}
+[[nodiscard]] QColor plotBorder() { return currentTheme().border; }
+[[nodiscard]] QColor grid() {
+    const ThemeTokens& t = currentTheme();
+    return mixed(plotBg(), t.border, 0.55);
+}
+[[nodiscard]] QColor zeroLine() {
+    const ThemeTokens& t = currentTheme();
+    return mixed(t.border, t.textDim, 0.28);
+}
+[[nodiscard]] QColor accent() { return currentTheme().accent; }
+[[nodiscard]] QColor accentHi() { return currentTheme().accentHi; }
+[[nodiscard]] QColor dimText() { return currentTheme().textDim; }
 
 QString freqLabel(float f) {
     if (f >= 1000.0f) {
@@ -156,17 +184,17 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     // Plot background.
     QPainterPath bg;
     bg.addRoundedRect(r.adjusted(-8, -8, 8, 8), 12, 12);
-    p.fillPath(bg, kPlotBg);
-    p.setPen(QPen(kPlotBorder, 1));
+    p.fillPath(bg, plotBg());
+    p.setPen(QPen(plotBorder(), 1));
     p.drawPath(bg);
 
     // Horizontal dB grid + labels.
     p.setFont(QFont(font().family(), 8));
     for (int db = static_cast<int>(kMinGainDb); db <= static_cast<int>(kMaxGainDb); db += 6) {
         const float y = gainToY(static_cast<float>(db));
-        p.setPen(QPen(db == 0 ? kZeroLine : kGrid, db == 0 ? 1.4 : 1.0));
+        p.setPen(QPen(db == 0 ? zeroLine() : grid(), db == 0 ? 1.4 : 1.0));
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y));
-        p.setPen(kText);
+        p.setPen(dimText());
         p.drawText(QRectF(0, y - 8, r.left() - 8, 16), Qt::AlignRight | Qt::AlignVCenter,
                    QStringLiteral("%1%2").arg(db > 0 ? QStringLiteral("+") : QStringLiteral(""))
                        .arg(db));
@@ -176,9 +204,9 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     const std::array<float, 6> ticks = {30, 100, 300, 1000, 3000, 10000};
     for (const float f : ticks) {
         const float x = freqToX(f);
-        p.setPen(QPen(kGrid, 1.0));
+        p.setPen(QPen(grid(), 1.0));
         p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));
-        p.setPen(kText);
+        p.setPen(dimText());
         p.drawText(QRectF(x - 24, r.bottom() + 6, 48, 16), Qt::AlignHCenter | Qt::AlignTop,
                    freqLabel(f));
     }
@@ -208,15 +236,15 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     fill.lineTo(r.left(), gainToY(0));
     fill.closeSubpath();
     QLinearGradient grad(0, r.top(), 0, r.bottom());
-    grad.setColorAt(0.0, QColor(0x63, 0x66, 0xf1, 120));
-    grad.setColorAt(0.5, QColor(0x63, 0x66, 0xf1, 40));
-    grad.setColorAt(1.0, QColor(0x63, 0x66, 0xf1, 120));
+    grad.setColorAt(0.0, withAlpha(accent(), 120));
+    grad.setColorAt(0.5, withAlpha(accent(), 40));
+    grad.setColorAt(1.0, withAlpha(accent(), 120));
     p.save();
     p.setClipRect(r);
     p.fillPath(fill, grad);
     p.restore();
 
-    p.setPen(QPen(kAccent, 2.4));
+    p.setPen(QPen(accent(), 2.4));
     p.drawPath(curve);
 
     // Band nodes.
@@ -226,12 +254,12 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
         const QPointF c(freqToX(band.frequency), gainToY(band.gainDb));
         const bool hot = static_cast<int>(i) == active;
         if (hot) {
-            p.setBrush(QColor(0x63, 0x66, 0xf1, 60));
+            p.setBrush(withAlpha(accent(), 60));
             p.setPen(Qt::NoPen);
             p.drawEllipse(c, kNodeRadius + 6, kNodeRadius + 6);
         }
-        p.setBrush(hot ? kAccentHi : kAccent);
-        p.setPen(QPen(QColor(0xff, 0xff, 0xff), hot ? 2.2 : 1.6));
+        p.setBrush(hot ? accentHi() : accent());
+        p.setPen(QPen(currentTheme().text.lighter(140), hot ? 2.2 : 1.6));
         p.drawEllipse(c, kNodeRadius, kNodeRadius);
     }
 
@@ -252,8 +280,8 @@ void EqCurve::paintEvent(QPaintEvent* /*event*/) {
         pill.moveLeft(std::clamp(pill.left(), r.left(), r.right() - pill.width()));
         QPainterPath pp;
         pp.addRoundedRect(pill, 8, 8);
-        p.fillPath(pp, QColor(0x26, 0x2a, 0x3a));
-        p.setPen(QColor(0xff, 0xff, 0xff));
+        p.fillPath(pp, currentTheme().hover);
+        p.setPen(currentTheme().text.lighter(140));
         p.drawText(pill, Qt::AlignCenter, text);
     }
 }

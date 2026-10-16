@@ -1,5 +1,11 @@
 #include "ui/widgets/AppChip.h"
 
+#include <QColor>
+
+#include <QEvent>
+
+#include "ui/Theme.h"
+
 #include "ui/widgets/ChannelStrip.h"
 
 #include <QApplication>
@@ -47,17 +53,41 @@ AppChip::AppChip(std::uint32_t appId, const QString& name,
     layout->addWidget(dot);
     layout->addWidget(nameLabel);
 
-    if (channel) {
-        // Tint the chip with its channel's colour, so a glance across the mixer
-        // shows where everything went. The chip already sits inside that channel's
-        // column, which is why the old "-> Channel" badge is gone.
-        const QString accent = ChannelStrip::accentFor(*channel);
-        setStyleSheet(QStringLiteral("#AppChip { background:%1; border-radius:8px; }"
-                                     " #ChipName { color:#12131b; font-weight:700; }")
-                          .arg(accent));
-        dot->setStyleSheet(QStringLiteral("color:#12131b; font-size:12px;"));
-        setToolTip(QStringLiteral("%1 — on %2. Drag it onto another channel to move it.")
-                       .arg(name, channelText(*channel)));
+    dot_ = dot;
+    channel_ = channel;
+    applyTint();
+}
+
+void AppChip::applyTint() {
+    if (!channel_ || restyling_) {
+        return;
+    }
+    restyling_ = true;
+    // Tint the chip with its channel's colour, so a glance across the mixer
+    // shows where everything went. The chip already sits inside that channel's
+    // column, which is why the old "-> Channel" badge is gone.
+    const QString accent = ChannelStrip::accentFor(*channel_);
+    // The label sits on the channel's own colour, so it cannot come from the
+    // theme's text token — it has to contrast with whatever that tint is. Qt has
+    // no contrast function, so: dark text on a light tint and the reverse,
+    // decided by the tint's own lightness.
+    const QColor tint(accent);
+    const QString ink = tint.lightness() > 140 ? currentTheme().bg.name(QColor::HexRgb)
+                                               : currentTheme().text.name(QColor::HexRgb);
+    setStyleSheet(QStringLiteral("#AppChip { background:%1; border-radius:8px; }"
+                                 " #ChipName { color:%2; font-weight:700; }")
+                      .arg(accent, ink));
+    if (dot_ != nullptr) {
+        dot_->setStyleSheet(QStringLiteral("color:%1; font-size:12px;").arg(ink));
+    }
+    restyling_ = false;
+}
+
+void AppChip::changeEvent(QEvent* event) {
+    QFrame::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange ||
+        event->type() == QEvent::ApplicationPaletteChange) {
+        applyTint();
     }
 }
 

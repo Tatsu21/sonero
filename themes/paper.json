@@ -1,0 +1,18 @@
+{
+  "name": "Paper",
+  "bg": "#ffffff",
+  "sidebar": "#f6f4f0",
+  "surface": "#fdfcfa",
+  "input": "#f1efe9",
+  "hover": "#e7e3d9",
+  "border": "#ddd8cc",
+  "text": "#241f1a",
+  "textDim": "#6e665b",
+  "accent": "#1d4ed8",
+  "accentHi": "#3b68ef",
+  "danger": "#c0392b",
+  "warn": "#b8860b",
+  "ok": "#17733f",
+  "font": "\"Inter\", \"Segoe UI\", \"Cantarell\", sans-serif",
+  "qss": ""
+}

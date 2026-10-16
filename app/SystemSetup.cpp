@@ -112,9 +112,15 @@ QString resourcePath(const QString& relative) {
         roots << appDir + QStringLiteral("/usr/share");
     }
     roots << QStringLiteral("/usr/share/sonero") << QStringLiteral("/usr/local/share/sonero");
-    // Development: run straight from the build tree.
+    // Development: run straight from the build tree. Both the packaging
+    // directory (icons, udev rules, the desktop file) and the source root
+    // itself, because not every shipped resource lives under packaging — the
+    // example themes are at the top level, and looking only under packaging is
+    // why they were invisible in a build tree.
     roots << QCoreApplication::applicationDirPath() + QStringLiteral("/../packaging");
     roots << QStringLiteral(SONAR_SOURCE_DIR "/packaging");
+    roots << QCoreApplication::applicationDirPath() + QStringLiteral("/..");
+    roots << QStringLiteral(SONAR_SOURCE_DIR);
 
     for (const QString& root : roots) {
         const QString candidate = root + QLatin1Char('/') + relative;

@@ -1,5 +1,7 @@
 #include "ui/widgets/VuMeter.h"
 
+#include "ui/Theme.h"
+
 #include <algorithm>
 
 #include <QColor>
@@ -10,6 +12,15 @@
 namespace sonar::ui {
 
 namespace {
+
+// The peak-hold marker: the theme's text colour, close to opaque, so it reads
+// against every band of the level gradient underneath it.
+[[nodiscard]] QColor peakMarker() {
+    QColor c = currentTheme().text;
+    c.setAlpha(220);
+    return c;
+}
+
 constexpr float kReleaseFactor = 0.80f;    // per-update decay of the bar
 constexpr float kPeakReleaseFactor = 0.98f;  // slower decay of the peak marker
 }  // namespace
@@ -54,16 +65,20 @@ void VuMeter::drawBar(QPainter& painter, const QRectF& area, float value,
     constexpr qreal kRadius = 3.0;
     QPainterPath path;
     path.addRoundedRect(area, kRadius, kRadius);
-    painter.fillPath(path, QColor(0x23, 0x26, 0x3a));  // track
+    painter.fillPath(path, currentTheme().input);  // track
 
     const qreal filled = std::clamp(value, 0.0f, 1.0f) * area.height();
     if (filled > 0.5) {
         QLinearGradient gradient(area.bottomLeft(), area.topLeft());
-        gradient.setColorAt(0.00, QColor(0x9e, 0xce, 0x6a));  // green
-        gradient.setColorAt(0.62, QColor(0x9e, 0xce, 0x6a));
-        gradient.setColorAt(0.80, QColor(0xe0, 0xaf, 0x68));  // amber
-        gradient.setColorAt(0.93, QColor(0xf7, 0x76, 0x8e));  // red
-        gradient.setColorAt(1.00, QColor(0xf7, 0x76, 0x8e));
+        // The three state colours a theme already defines: healthy, approaching,
+        // over. A meter that kept its own green would be the one part of the
+        // interface a theme could not reach.
+        const ThemeTokens& t = currentTheme();
+        gradient.setColorAt(0.00, t.ok);
+        gradient.setColorAt(0.62, t.ok);
+        gradient.setColorAt(0.80, t.warn);   // amber
+        gradient.setColorAt(0.93, t.danger);  // over
+        gradient.setColorAt(1.00, t.danger);
 
         painter.save();
         painter.setClipPath(path);
@@ -77,7 +92,7 @@ void VuMeter::drawBar(QPainter& painter, const QRectF& area, float value,
         painter.save();
         painter.setClipPath(path);
         painter.fillRect(QRectF(area.left(), y - 1.0, area.width(), 2.0),
-                         QColor(0xe6, 0xec, 0xff, 220));
+                         peakMarker());
         painter.restore();
     }
 }

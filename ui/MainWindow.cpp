@@ -30,9 +30,12 @@
 #include "app/SystemSetup.h"
 #include "app/Updater.h"
 #include "config/SettingsStore.h"
+#include "audio/PipeWireManager.h"
+
 #include "ui/DevicesPage.h"
 #include "ui/EqualizerPage.h"
 #include "ui/Notifier.h"
+#include "ui/ProfilesPage.h"
 #include "ui/SettingsPage.h"
 #include "ui/MicrophonePage.h"
 #include "ui/MixerPage.h"
@@ -41,6 +44,15 @@
 namespace sonar::ui {
 
 namespace {
+
+// Linear mix, for the handful of shades this window derives from the theme's
+// tokens rather than taking literally.
+[[nodiscard]] QColor mixColors(const QColor& a, const QColor& b, double t) {
+    const double u = 1.0 - t;
+    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
+                            a.blueF() * u + b.blueF() * t);
+}
+
 
 struct PageDef {
     const char* title;
@@ -55,7 +67,7 @@ constexpr PageDef kPages[] = {
     {"Channels",  "Per-channel gain, output device and equalizer", true},
     {"Microphone", "Mic input gain, level, noise suppression, gate and monitoring", true},
     {"Devices",   "USB, Bluetooth, HDMI and external DAC detection & routing", true},
-    {"Profiles",  "Save and load complete audio configurations", false},
+    {"Profiles",  "Themes and how Sonero looks", true},
     {"Settings",  "Application preferences, themes and performance options", true},
 };
 
@@ -173,6 +185,10 @@ void MainWindow::buildUi() {
 
     // ---- Settings persistence (auto-loaded here, saved on change by the pages) ----
     settings_ = new config::SettingsStore(this);
+    // Before any page exists, so a custom theme is never preceded by a flash of
+    // the built-in one. main() has already applied the built-in theme, which is
+    // what stays if there is nothing remembered or the file has since broken.
+    ProfilesPage::applySavedTheme(settings_);
     notifier_ = new Notifier(settings_, this);  // desktop notifications
     // Checks GitHub for a newer release — but only if the user switched that on,
     // and it installs nothing by itself. See the Updates card in Settings.
@@ -242,6 +258,8 @@ void MainWindow::buildUi() {
             connect(devicesPage_, &DevicesPage::batteriesChanged, this,
                     &MainWindow::showBatteries);
             pages_->addWidget(devicesPage_);
+        } else if (titleView == "Profiles") {
+            pages_->addWidget(new ProfilesPage(settings_));
         } else if (titleView == "Settings") {
             pages_->addWidget(new SettingsPage(notifier_, settings_, updater_));
         } else {
@@ -283,9 +301,6 @@ void MainWindow::buildUi() {
 
     // Each tab carries a faint tint of its own, so the eye can find a page by
     // colour before reading the word.
-    static const char* const kTabTints[] = {
-        "#2a2b33", "#1e2d24", "#242036", "#2f2334", "#332b1e", "#1e2f30", "#232833",
-    };
     navGroup_ = new QButtonGroup(this);
     navGroup_->setExclusive(true);
     for (int i = 0; i < static_cast<int>(std::size(kPages)); ++i) {
@@ -293,15 +308,11 @@ void MainWindow::buildUi() {
         tab->setCheckable(true);
         tab->setCursor(kPages[i].ready ? Qt::PointingHandCursor : Qt::ArrowCursor);
         tab->setToolTip(QString::fromUtf8(kPages[i].subtitle));
-        // The pill carries its own sheet, so the theme's disabled rule does not
-        // reach it — the grey for a page that has nothing behind it is here.
-        tab->setStyleSheet(
-            QStringLiteral("QPushButton { background:%1; border:none; border-radius:9px;"
-                           " padding:0 18px; color:#c8ccd8; font-size:14px; }"
-                           "QPushButton:hover { color:#ffffff; }"
-                           "QPushButton:checked { color:#ffffff; font-weight:700; }"
-                           "QPushButton:disabled { background:#15161c; color:#474b5c; }")
-                .arg(QString::fromUtf8(kTabTints[i % 7])));
+        // Styled by the application sheet, not here: a pill with its own sheet
+        // could not follow a theme change. The `tab` property is what selects
+        // its tint there.
+        tab->setObjectName(QStringLiteral("NavPill"));
+        tab->setProperty("tab", i % 7);
         tab->setFixedHeight(38);
         // Opening a placeholder only promises a module that is not there.
         tab->setEnabled(kPages[i].ready);
@@ -331,7 +342,7 @@ void MainWindow::buildUi() {
 
     auto* repo = new QLabel(
         QStringLiteral("<a href=\"https://github.com/Tatsu21/sonero\" "
-                       "style=\"color:#6b7183; text-decoration:none\">"
+                       "style=\"text-decoration:none\">"
                        "https://github.com/Tatsu21/sonero</a>"),
         footer);
     repo->setOpenExternalLinks(true);
@@ -354,12 +365,16 @@ void MainWindow::buildUi() {
     auto* status = new QLabel(footer);
     status->setTextFormat(Qt::RichText);
     status->setText(QStringLiteral("<span style='color:%1'>&#9679;</span>")
-                        .arg(available ? QStringLiteral("#9ece6a") : QStringLiteral("#f7768e")));
+                        .arg((available ? ui::currentTheme().ok : ui::currentTheme().danger)
+                                 .name(QColor::HexRgb)));
     status->setToolTip(available ? QStringLiteral("PipeWire connected")
                                  : QStringLiteral("PipeWire offline"));
 
     auto* handle = new QLabel(QStringLiteral("@sonero"), footer);
-    handle->setStyleSheet(QStringLiteral("color:#5a5f70; font-size:12px;"));
+    handle->setStyleSheet(
+        QStringLiteral("color:%1; font-size:12px;")
+            .arg(mixColors(ui::currentTheme().textDim, ui::currentTheme().bg, 0.4)
+                     .name(QColor::HexRgb)));
 
     footRow->addWidget(ghMark);
     footRow->addWidget(repo);
@@ -377,8 +392,6 @@ void MainWindow::buildUi() {
     // The pages sit on a rounded panel inset from the window edge.
     auto* panel = new QFrame(central);
     panel->setObjectName(QStringLiteral("ContentPanel"));
-    panel->setStyleSheet(
-        QStringLiteral("#ContentPanel { background:#313238; border-radius:16px; }"));
     pages_->setStyleSheet(QStringLiteral("QStackedWidget { background:transparent; }"));
     auto* panelLayout = new QVBoxLayout(panel);
     panelLayout->setContentsMargins(0, 0, 0, 0);

@@ -1,0 +1,18 @@
+{
+  "name": "Phosphor",
+  "bg": "#050b06",
+  "sidebar": "#030703",
+  "surface": "#0b170d",
+  "input": "#102014",
+  "hover": "#1a3220",
+  "border": "#204a2c",
+  "text": "#8fffa8",
+  "textDim": "#3f8a52",
+  "accent": "#39ff7a",
+  "accentHi": "#7dffab",
+  "danger": "#ff5f45",
+  "warn": "#ffd93d",
+  "ok": "#39ff7a",
+  "font": "\"JetBrains Mono\", \"DejaVu Sans Mono\", monospace",
+  "qss": "/* Phosphor is the example of what the `qss` block is for: everything here is\n   something the thirteen colours cannot say. */\n\n/* A terminal has no rounded corners. */\n#Card, #ChannelStrip, #ContentPanel { border-radius: 2px; }\n#Segmented, #Segmented QPushButton { border-radius: 1px; }\nQPushButton { border-radius: 2px; }\nQSlider::handle:horizontal, QSlider::handle:vertical { border-radius: 1px; }\n\n/* ...and it is monospaced, with the letter-spacing of a character cell. */\n* { font-family: \"JetBrains Mono\", \"DejaVu Sans Mono\", monospace; }\n#PageTitle { letter-spacing: 2px; text-transform: uppercase; }\n#ChannelName { letter-spacing: 1px; }\n\n/* A faint scanline-ish separation between the strips. */\n#ChannelStrip { border: 1px solid #1f3a24; }\n"
+}

@@ -45,15 +45,10 @@ TrayMixer::TrayMixer(audio::IMixer& mixer, QWidget* parent)
     // The window itself is the surface. The first version put a bordered Card
     // inside it, which drew a second frame a pixel inside the compositor's own —
     // two nested boxes around six sliders.
+    // No sheet of its own: these object names are styled in the application
+    // sheet (ui/Theme.cpp) so that a theme reaches the tray window too. A local
+    // setStyleSheet() here would have been immune to it.
     setObjectName(QStringLiteral("TrayMixer"));
-    setStyleSheet(QStringLiteral(
-        "#TrayMixer { background:#161822; }"
-        "#TrayMixer QLabel { background:transparent; }"
-        "#TrayMixerName { color:#c2c7de; font-size:13px; font-weight:600; }"
-        "#TrayMixerValue { color:#8b90a8; font-size:12px; font-weight:700; }"
-        "#TrayMixerTag { color:#8b8ff9; font-size:9px; font-weight:800;"
-        " letter-spacing:1px; }"
-        "#TrayMixerRule { background:#2c3042; max-height:1px; min-height:1px; }"));
 
     auto* body = new QVBoxLayout(this);
     body->setContentsMargins(22, 20, 22, 20);

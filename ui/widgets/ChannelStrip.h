@@ -10,6 +10,8 @@
 #include "audio/Channel.h"
 
 class QComboBox;
+class QEvent;
+class QFrame;
 class QDragEnterEvent;
 class QDragLeaveEvent;
 class QDropEvent;
@@ -62,11 +64,17 @@ signals:
     void appDropped(sonar::audio::ChannelId id, std::uint32_t appId);
 
 protected:
+    // The strip's accent is derived from the theme, and several of its parts are
+    // painted from it through their own style sheets — which the application
+    // sheet cannot reach. Qt delivers a palette change here, so this is where
+    // they are re-derived when a theme is switched at runtime.
+    void changeEvent(QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
 private:
+    void applyAccent();  // (re)style the parts coloured by the channel's accent
     void setDropActive(bool active);
     void updateVolumeLabel(int percent);
 
@@ -78,6 +86,13 @@ private:
     QPushButton* solo_ = nullptr;
     QLabel* volumeLabel_ = nullptr;
     QLabel* appsEmpty_ = nullptr;
+    // Kept so applyAccent() can restyle them after a theme change.
+    QLabel* title_ = nullptr;
+    QFrame* accentRule_ = nullptr;
+    QLabel* streamCaption_ = nullptr;
+    QFrame* appsHost_ = nullptr;
+    // See AppChip: setStyleSheet() from changeEvent() re-enters it.
+    bool restyling_ = false;
     QVBoxLayout* appsBody_ = nullptr;
     QWidget* streamRow_ = nullptr;
     QSlider* stream_ = nullptr;

@@ -1,5 +1,9 @@
 #include "ui/widgets/ChannelStrip.h"
 
+#include <QEvent>
+
+#include "ui/Theme.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -27,6 +31,13 @@ using audio::ChannelId;
 using audio::ChannelState;
 
 namespace {
+
+[[nodiscard]] QColor mixed(const QColor& a, const QColor& b, double t) {
+    const double u = 1.0 - t;
+    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
+                            a.blueF() * u + b.blueF() * t);
+}
+
 constexpr int kStripWidth = 144;
 }  // namespace
 
@@ -41,8 +52,6 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     // from stretching six channels into six billboards.
     setMinimumWidth(kStripWidth);
     setMaximumWidth(kStripWidth * 3 / 2);
-
-    const QString accent = accentFor(id);
 
     auto* glyph = new QLabel(glyphFor(id), this);
     if (id == ChannelId::System) {
@@ -65,8 +74,7 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     const bool isMaster = id == ChannelId::System;
     auto* title = new QLabel(isMaster ? QStringLiteral("MASTER") : name.toUpper(), this);
     title->setObjectName(QStringLiteral("ChannelName"));
-    title->setStyleSheet(
-        QStringLiteral("color:%1; font-weight:800; letter-spacing:1px;").arg(accent));
+    title_ = title;
     title->setFixedHeight(kHeaderHeight);
     title->setAlignment(Qt::AlignCenter);
     auto* titleRow = new QHBoxLayout;
@@ -79,8 +87,7 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     // A hairline in the channel's colour, as a divider under the header.
     auto* accentRule = new QFrame(this);
     accentRule->setFixedHeight(isMaster ? 3 : 2);
-    accentRule->setStyleSheet(
-        QStringLiteral("background:%1; border-radius:1px;").arg(accent));
+    accentRule_ = accentRule;
 
     meter_ = new VuMeter(this);
 
@@ -129,7 +136,7 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     streamCol->setSpacing(3);
     auto* streamCaption = new QLabel(QStringLiteral("TO STREAM"), streamRow_);
     streamCaption->setObjectName(QStringLiteral("BalanceCaption"));
-    streamCaption->setStyleSheet(QStringLiteral("color:%1;").arg(accent));
+    streamCaption_ = streamCaption;
     stream_ = new QSlider(Qt::Horizontal, streamRow_);
     stream_->setFixedHeight(14);
     stream_->setRange(0, 100);
@@ -153,8 +160,7 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
 
     auto* appsHost = new QFrame(this);
     appsHost->setObjectName(QStringLiteral("AppsHost"));
-    appsHost->setStyleSheet(
-        QStringLiteral("#AppsHost { background:#0f1017; border-radius:8px; }"));
+    appsHost_ = appsHost;
     appsHost->setMinimumHeight(64);
     appsBody_ = new QVBoxLayout(appsHost);
     appsBody_->setContentsMargins(6, 6, 6, 6);
@@ -209,23 +215,78 @@ void ChannelStrip::setState(const ChannelState& state) {
     mute_->setChecked(state.muted);
     solo_->setChecked(state.solo);
     updateVolumeLabel(volume_->value());
+
+    // Everything coloured by the channel's accent, in one place so a theme
+    // change can re-run it.
+    applyAccent();
 }
 
 void ChannelStrip::setLevel(float left, float right) {
     meter_->setLevel(left, right);
 }
 
-QString ChannelStrip::accentFor(ChannelId id) {
-    switch (id) {
-        case ChannelId::System:     return QStringLiteral("#7aa2f7");  // blue
-        case ChannelId::Game:       return QStringLiteral("#4ade80");  // green
-        case ChannelId::Chat:       return QStringLiteral("#f59e0b");  // amber
-        case ChannelId::Media:      return QStringLiteral("#f7768e");  // pink
-        case ChannelId::Browser:    return QStringLiteral("#22d3ee");  // cyan
-        case ChannelId::Microphone: return QStringLiteral("#facc15");  // yellow
-        case ChannelId::Aux:        return QStringLiteral("#a78bfa");  // violet
+void ChannelStrip::applyAccent() {
+    if (restyling_) {
+        return;
     }
-    return QStringLiteral("#7aa2f7");
+    restyling_ = true;
+    const QString accent = accentFor(id_);
+    if (title_ != nullptr) {
+        title_->setStyleSheet(
+            QStringLiteral("color:%1; font-weight:800; letter-spacing:1px;").arg(accent));
+    }
+    if (accentRule_ != nullptr) {
+        accentRule_->setStyleSheet(
+            QStringLiteral("background:%1; border-radius:1px;").arg(accent));
+    }
+    if (streamCaption_ != nullptr) {
+        streamCaption_->setStyleSheet(QStringLiteral("color:%1;").arg(accent));
+    }
+    if (appsHost_ != nullptr) {
+        // A well rather than a raised surface, so a chip dropped in it reads as
+        // contained. Derived from the theme, which is why it is re-done here.
+        appsHost_->setStyleSheet(
+            QStringLiteral("#AppsHost { background:%1; border-radius:8px; }")
+                .arg(mixed(currentTheme().surface, currentTheme().bg, 0.72)
+                         .name(QColor::HexRgb)));
+    }
+    restyling_ = false;
+}
+
+void ChannelStrip::changeEvent(QEvent* event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange ||
+        event->type() == QEvent::ApplicationPaletteChange) {
+        applyAccent();
+    }
+}
+
+QString ChannelStrip::accentFor(ChannelId id) {
+    // Each channel keeps its own hue, because that is identity: green has meant
+    // Game since the first build, and someone glancing at the mixer finds their
+    // strip by colour before they read the label.
+    //
+    // Saturation and lightness come from the active theme's accent instead of
+    // being fixed, so the row follows the theme's mood — muted in a pastel theme,
+    // vivid in a loud one — without losing which strip is which.
+    int hue = 219;  // blue
+    switch (id) {
+        case ChannelId::System:     hue = 219; break;  // blue
+        case ChannelId::Game:       hue = 142; break;  // green
+        case ChannelId::Chat:       hue = 38;  break;  // amber
+        case ChannelId::Media:      hue = 350; break;  // pink
+        case ChannelId::Browser:    hue = 187; break;  // cyan
+        case ChannelId::Microphone: hue = 48;  break;  // yellow
+        case ChannelId::Aux:        hue = 256; break;  // violet
+    }
+    const QColor accent = currentTheme().accent;
+    QColor c = QColor::fromHsl(hue, accent.hslSaturation(), accent.lightness());
+    // A theme whose accent is nearly grey would turn the whole row grey, which
+    // defeats the point; keep enough saturation to tell the strips apart.
+    if (c.hslSaturation() < 90) {
+        c = QColor::fromHsl(hue, 150, accent.lightness());
+    }
+    return c.name(QColor::HexRgb);
 }
 
 QString ChannelStrip::glyphFor(ChannelId id) {

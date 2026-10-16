@@ -1,0 +1,18 @@
+{
+  "name": "Cyberpunk",
+  "bg": "#0b0714",
+  "sidebar": "#080410",
+  "surface": "#160f26",
+  "input": "#1e1435",
+  "hover": "#2c1e4f",
+  "border": "#3a2a66",
+  "text": "#e9e2ff",
+  "textDim": "#8c7cc0",
+  "accent": "#05d9e8",
+  "accentHi": "#4ff2fb",
+  "danger": "#ff2a6d",
+  "warn": "#f9f002",
+  "ok": "#00ff9f",
+  "font": "\"Inter\", \"Segoe UI\", \"Cantarell\", sans-serif",
+  "qss": ""
+}

@@ -1,5 +1,7 @@
 #include "ui/DevicesPage.h"
 
+#include "ui/Theme.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -34,6 +36,24 @@
 namespace sonar::ui {
 
 namespace {
+
+// A device-type badge. The hue is the type's identity — USB has been indigo
+// since the first build — while saturation and lightness come from the theme's
+// accent, so the badges follow the theme instead of staying put. `muted` is for
+// the types that are deliberately unremarkable (analog, unknown).
+[[nodiscard]] QColor mixed(const QColor& a, const QColor& b, double t) {
+    const double u = 1.0 - t;
+    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
+                            a.blueF() * u + b.blueF() * t);
+}
+
+[[nodiscard]] QString badgeColor(int hue, bool muted = false) {
+    const QColor accent = currentTheme().accent;
+    const int sat = muted ? accent.hslSaturation() / 4 : accent.hslSaturation();
+    return QColor::fromHsl(hue, std::clamp(sat, 24, 255), accent.lightness())
+        .name(QColor::HexRgb);
+}
+
 
 QVBoxLayout* makeCard(QVBoxLayout* root, const QString& title, const QString& subtitle) {
     auto* frame = new QFrame;
@@ -95,23 +115,25 @@ void clearLayout(QLayout* layout) {
 // Short badge label + accent colour for a device class.
 struct TypeStyle {
     const char* label;
-    const char* color;
+    // A QString rather than a literal: the colour is derived from the active
+    // theme now, so it is computed per call rather than baked in.
+    QString color;
 };
 TypeStyle typeStyle(audio::DeviceType t) {
     using audio::DeviceType;
     switch (t) {
-        case DeviceType::Usb:       return {"USB", "#6366f1"};
-        case DeviceType::Bluetooth: return {"BT", "#3b82f6"};
-        case DeviceType::Hdmi:      return {"HDMI", "#a855f7"};
-        case DeviceType::Spdif:     return {"S/PDIF", "#14b8a6"};
-        case DeviceType::Analog:    return {"Analog", "#64748b"};
+        case DeviceType::Usb:       return {"USB", badgeColor(239)};
+        case DeviceType::Bluetooth: return {"BT", badgeColor(217)};
+        case DeviceType::Hdmi:      return {"HDMI", badgeColor(280)};
+        case DeviceType::Spdif:     return {"S/PDIF", badgeColor(174)};
+        case DeviceType::Analog:    return {"Analog", badgeColor(215, true)};
         // Nothing classifies a device as System today; it is handled so that
         // -Wswitch keeps warning when a new class is added, rather than letting
         // the new one fall through to the generic badge unnoticed.
         case DeviceType::System:
-        case DeviceType::Other:     return {"Audio", "#64748b"};
+        case DeviceType::Other:     return {"Audio", badgeColor(215, true)};
     }
-    return {"Audio", "#64748b"};
+    return {"Audio", badgeColor(215, true)};
 }
 
 // Nominal resolution of an A2DP codec and whether it counts as hi-res. aptX HD /
@@ -265,7 +287,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
         QStringLiteral("USB base station · onboard battery, transmission format and equalizer"));
 
     statusLabel_ = new QLabel(QStringLiteral("● Connected"));
-    statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
+    setState(statusLabel_, "ok");
     body->addWidget(statusLabel_);
 
     if (!probe.accessible) {
@@ -307,7 +329,8 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     if (std::getenv("SONAR_HID_DEBUG") != nullptr) {  // dev-only raw report line
         rawLabel_ = new QLabel;
         rawLabel_->setStyleSheet(
-            QStringLiteral("font-family: monospace; font-size: 10px; color:#565b74;"));
+            QStringLiteral("font-family: monospace; font-size: 10px; color:%1;")
+                .arg(mixed(currentTheme().textDim, currentTheme().bg, 0.42).name(QColor::HexRgb)));
         body->addSpacing(6);
         body->addWidget(rawLabel_);
     }
@@ -508,7 +531,8 @@ void DevicesPage::publishBatteries(QList<BatteryLevel> levels) {
 void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& dev) {
     auto* row = new QFrame;
     row->setObjectName(QStringLiteral("DeviceRow"));
-    row->setStyleSheet(QStringLiteral("#DeviceRow { background:#12131b; border-radius:10px; }"));
+    row->setStyleSheet(QStringLiteral("#DeviceRow { background:%1; border-radius:10px; }")
+            .arg(mixed(currentTheme().surface, currentTheme().bg, 0.6).name(QColor::HexRgb)));
     auto* h = new QHBoxLayout(row);
     h->setContentsMargins(14, 10, 14, 10);
     h->setSpacing(12);
@@ -517,9 +541,15 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
     auto* badge = new QLabel(QString::fromUtf8(st.label));
     badge->setAlignment(Qt::AlignCenter);
     badge->setFixedWidth(64);
-    badge->setStyleSheet(QStringLiteral("background:%1; color:white; font-weight:800; "
+    // The badge text sits on the badge's own colour, so it cannot come from the
+    // theme's text token — it has to contrast with whatever that colour is.
+    const QColor badgeTint(st.color);
+    badge->setStyleSheet(QStringLiteral("background:%1; color:%2; font-weight:800; "
                                         "font-size:11px; border-radius:7px; padding:5px 0;")
-                             .arg(QString::fromUtf8(st.color)));
+                             .arg(st.color,
+                                  (badgeTint.lightness() > 140 ? currentTheme().bg
+                                                               : currentTheme().text)
+                                      .name(QColor::HexRgb)));
 
     auto* name = new QLabel(QString::fromStdString(dev.description));
     name->setStyleSheet(QStringLiteral("font-weight:700; font-size:13px;"));
@@ -543,7 +573,9 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
             static_cast<int>(std::lround(devices_->deviceVolume(dev.nodeId) * 100.0f));
         vol->setValue(std::clamp(cur, 0, 100));
         auto* pct = new QLabel(QStringLiteral("%1%").arg(vol->value()));
-        pct->setStyleSheet(QStringLiteral("color:#9aa0b5; font-size:11px;"));
+        pct->setStyleSheet(QStringLiteral("color:%1; font-size:11px;")
+                               .arg(mixed(currentTheme().text, currentTheme().textDim, 0.6)
+                                        .name(QColor::HexRgb)));
         pct->setFixedWidth(34);
         const std::uint32_t nid = dev.nodeId;
         connect(vol, &QSlider::valueChanged, this, [this, nid, pct](int v) {
@@ -600,8 +632,12 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
             // "HI-RES" badge lit whenever the active codec carries 24-bit audio.
             auto* hires = new QLabel(QStringLiteral("HI-RES"));
             hires->setStyleSheet(
-                QStringLiteral("background:#f59e0b; color:#12131b; font-weight:800; "
-                               "font-size:9px; border-radius:5px; padding:3px 6px;"));
+                QStringLiteral("background:%1; color:%2; font-weight:800; "
+                               "font-size:9px; border-radius:5px; padding:3px 6px;")
+                    .arg(currentTheme().warn.name(QColor::HexRgb),
+                         // Dark ink on the warn colour, which is light by
+                         // definition in any theme that means it as a warning.
+                         currentTheme().bg.name(QColor::HexRgb)));
             hires->setVisible(combo->currentText().contains(QStringLiteral("24-bit")));
             const std::uint32_t did = dev.deviceId;
             connect(combo, &QComboBox::activated, this, [this, did, combo, hires](int) {
@@ -625,7 +661,8 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
     }
 
     auto* dot = new QLabel(QStringLiteral("● live"));
-    dot->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:700; font-size:11px;"));
+    dot->setStyleSheet(QStringLiteral("color:%1; font-weight:700; font-size:11px;")
+                           .arg(currentTheme().ok.name(QColor::HexRgb)));
     h->addWidget(dot);
     body->addWidget(row);
 }
@@ -637,10 +674,12 @@ std::optional<int> DevicesPage::updateBtBattery(QLabel* label, const std::string
         return std::nullopt;
     }
     const int p = *pct;
-    const char* color = p <= 20 ? "#ff5c7a" : (p <= 40 ? "#facc15" : "#4ade80");
+    const ThemeTokens& theme = currentTheme();
+    const QString color = (p <= 20 ? theme.danger : (p <= 40 ? theme.warn : theme.ok))
+                              .name(QColor::HexRgb);
     label->setText(QStringLiteral("🔋 %1%").arg(p));
     label->setStyleSheet(
-        QStringLiteral("color:%1; font-weight:700; font-size:12px;").arg(QString::fromUtf8(color)));
+        QStringLiteral("color:%1; font-weight:700; font-size:12px;").arg(color));
     label->setVisible(true);
 
     // Low-battery notification, once per drain (rearmed above 25%).
@@ -808,13 +847,13 @@ void DevicesPage::applyFormat() {
     if (!wrote) {
         formatStatus_->setText(QStringLiteral("Could not write %1.")
                                    .arg(QString::fromStdString(mgr.configPath())));
-        formatStatus_->setStyleSheet(QStringLiteral("color:#ff5c7a;"));
+        setState(formatStatus_, "bad");
     } else {
         formatStatus_->setText(
             QStringLiteral("Saved %1 for %2 — applies at next login (or `systemctl --user "
                            "restart wireplumber`). Bluetooth is not disturbed.")
                 .arg(what, formatDeviceCombo_->currentText()));
-        formatStatus_->setStyleSheet(QStringLiteral("color:#4ade80;"));
+        setState(formatStatus_, "ok");
     }
 }
 
@@ -861,7 +900,7 @@ void DevicesPage::refresh() {
     const hid::BatteryStatus s = device_.readBattery();
     if (!s.valid) {
         statusLabel_->setText(QStringLiteral("● No response"));
-        statusLabel_->setStyleSheet(QStringLiteral("color:#ff5c7a; font-weight:800;"));
+        setState(statusLabel_, "bad");
         headsetPercent_ = -1;
         return;
     }
@@ -870,15 +909,15 @@ void DevicesPage::refresh() {
     switch (s.state) {
         case hid::HeadsetState::Offline:
             statusLabel_->setText(QStringLiteral("● Headset off"));
-            statusLabel_->setStyleSheet(QStringLiteral("color:#facc15; font-weight:800;"));
+            setState(statusLabel_, "warn");
             break;
         case hid::HeadsetState::Charging:
             statusLabel_->setText(QStringLiteral("● Charging"));
-            statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
+            setState(statusLabel_, "ok");
             break;
         default:
             statusLabel_->setText(QStringLiteral("● Connected"));
-            statusLabel_->setStyleSheet(QStringLiteral("color:#4ade80; font-weight:800;"));
+            setState(statusLabel_, "ok");
             break;
     }
 
