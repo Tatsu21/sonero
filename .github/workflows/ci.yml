@@ -635,3 +635,29 @@ jobs:
             --title "Development build (main)" \
             --notes "${notes}" \
             --prerelease
+
+  # home:Tatsu21/Sonero on the openSUSE Build Service mirrors this repository
+  # through scmsync, but OBS does not watch GitHub: until something tells it to
+  # resync, it keeps building whichever commit it last fetched. This is that
+  # something. Gated on the build jobs so a broken main is not handed to OBS too.
+  #
+  # OBS_TOKEN is a runservice token scoped to that one package:
+  #   osc -A https://api.opensuse.org token --create --operation runservice home:Tatsu21 Sonero
+  obs:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, debian, rolling]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Tell OBS to resync and rebuild
+        env:
+          OBS_TOKEN: ${{ secrets.OBS_TOKEN }}
+        run: |
+          if [ -z "${OBS_TOKEN}" ]; then
+            echo "::error::the OBS_TOKEN secret is not set — create a runservice" \
+                 "token for home:Tatsu21/Sonero and add it under Settings → Secrets"
+            exit 1
+          fi
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Token ${OBS_TOKEN}" \
+            "https://api.opensuse.org/trigger/runservice?project=home:Tatsu21&package=Sonero"
