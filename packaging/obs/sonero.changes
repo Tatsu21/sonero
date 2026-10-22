@@ -1,0 +1,6 @@
+-------------------------------------------------------------------
+Thu Oct 22 00:00:00 UTC 2026 - Luci <radu4cristian1@gmail.com>
+
+- Build from a tarball made by an obs_scm source service instead of
+  mirroring the whole git repository through scmsync
+- Initial package, based on upstream 0.1.5

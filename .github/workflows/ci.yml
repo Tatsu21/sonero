@@ -636,10 +636,11 @@ jobs:
             --notes "${notes}" \
             --prerelease
 
-  # home:Tatsu21/Sonero on the openSUSE Build Service mirrors this repository
-  # through scmsync, but OBS does not watch GitHub: until something tells it to
-  # resync, it keeps building whichever commit it last fetched. This is that
-  # something. Gated on the build jobs so a broken main is not handed to OBS too.
+  # home:Tatsu21/Sonero on the openSUSE Build Service holds only the files in
+  # packaging/obs; its obs_scm service fetches the sources from GitHub, but OBS
+  # does not watch GitHub: until something reruns the service, it keeps building
+  # whichever commit it last fetched. This is that something. Gated on the build
+  # jobs so a broken main is not handed to OBS too.
   #
   # OBS_TOKEN is a runservice token scoped to that one package:
   #   osc -A https://api.opensuse.org token --create --operation runservice home:Tatsu21 Sonero

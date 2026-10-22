@@ -1,0 +1,21 @@
+<services>
+  <!-- Runs on the OBS server on every runservice trigger (see the obs job in
+       .github/workflows/ci.yml): fetches main into an .obscpio. -->
+  <service name="obs_scm">
+    <param name="url">https://github.com/Tatsu21/sonero.git</param>
+    <param name="scm">git</param>
+    <param name="revision">main</param>
+    <!-- Release tags are bare numbers; "dev" is the moving rolling-build tag
+         and must not become the version. -->
+    <param name="match-tag">[0-9]*</param>
+    <param name="versionformat">@PARENT_TAG@+git@TAG_OFFSET@.%h</param>
+  </service>
+  <!-- Run inside the build: turn the .obscpio into Source0 and fill in
+       Version: @SERVICE@ from its .obsinfo. -->
+  <service name="set_version" mode="buildtime"/>
+  <service name="tar" mode="buildtime"/>
+  <service name="recompress" mode="buildtime">
+    <param name="file">*.tar</param>
+    <param name="compression">xz</param>
+  </service>
+</services>
