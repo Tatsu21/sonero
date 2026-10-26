@@ -49,4 +49,10 @@ bool SingleInstance::listen() {
     return true;
 }
 
+void SingleInstance::close() {
+    if (server_ != nullptr) {
+        server_->close();
+    }
+}
+
 }  // namespace sonar

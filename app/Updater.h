@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QVector>
@@ -9,6 +10,7 @@
 
 class QNetworkAccessManager;
 class QNetworkReply;
+class QProcess;
 
 namespace sonar::config {
 class SettingsStore;
@@ -19,12 +21,13 @@ namespace sonar::update {
 // --- What kind of install this is -------------------------------------------
 //
 // It decides what "update" is even allowed to mean. Replacing a file the user
-// downloaded is Sonero's business; replacing files a package manager owns is
-// not, so for packaged installs the app only ever says what to run.
+// downloaded is Sonero's business. Files a package manager owns are only ever
+// replaced through that package manager: a .deb is handed to apt (with the
+// user's password, via polkit), and everything else is told what to run.
 enum class Channel {
     AppImage,  // a portable bundle we may replace with a newer one
     Pacman,    // installed by pacman — the AUR package, or a local makepkg
-    Deb,       // installed by dpkg/apt
+    Deb,       // installed by dpkg/apt; updated by handing apt the new .deb
     Package,   // some other package manager owns it: /usr, but neither db exists
     Source     // a build tree or a manual copy — nobody owns it but the user
 };
@@ -46,6 +49,14 @@ struct InstallFacts {
 // the exact command, ready to paste, or an empty string when there is none.
 [[nodiscard]] QString upgradeCommand(Channel channel);
 [[nodiscard]] QString channelName(Channel channel);
+
+// Which of the release's .deb builds fits this system, as the suffix CI gives
+// it ("ubuntu2404", "debian13"), from /etc/os-release. Empty for a system no
+// .deb is built for — a .deb links its distribution's own Qt, so the wrong one
+// does not install, and guessing is worse than saying so.
+[[nodiscard]] QHash<QString, QString> parseOsRelease(const QByteArray& text);
+[[nodiscard]] QString debTarget(const QHash<QString, QString>& osRelease);
+[[nodiscard]] QString currentDebTarget();  // also empty off x86_64: amd64 only
 
 // --- Versions ----------------------------------------------------------------
 //
@@ -74,6 +85,7 @@ struct Asset {
     QString name;
     QString url;
     qint64 size = 0;
+    QString sha256;  // lowercase hex from GitHub's "digest", empty when absent
 };
 
 struct Release {
@@ -88,23 +100,36 @@ struct Release {
 // that endpoint, so `dev` builds are out of scope by construction.
 [[nodiscard]] std::optional<Release> parseRelease(const QByteArray& json);
 
-// The bundle to download for an AppImage install: the portable one, built on the
-// oldest glibc. The -arch and -fedora bundles exist to catch CI regressions and
-// run on fewer systems, so they are never chosen automatically. Returns nothing
-// for every other channel, and when the release carries no such asset.
-[[nodiscard]] std::optional<Asset> pickAsset(const Release& release, Channel channel);
+// The file to download for this install. For an AppImage, the portable bundle,
+// built on the oldest glibc — the -arch and -fedora bundles exist to catch CI
+// regressions and run on fewer systems, so they are never chosen automatically.
+// For a .deb, the build for `debTarget` (see debTarget()). Returns nothing for
+// every other channel, and when the release carries no such asset.
+[[nodiscard]] std::optional<Asset> pickAsset(const Release& release, Channel channel,
+                                             const QString& debTarget = QString());
+
+// Set by an update that wants a new process started once this one is gone, and
+// taken by main() after the single-instance socket is closed: started any
+// earlier, the new process finds this one still answering, asks it to come
+// forward, and exits — and then this one quits too.
+void scheduleRelaunch(const QString& program);
+[[nodiscard]] QString takeScheduledRelaunch();
 
 // --- The updater -------------------------------------------------------------
 //
-// Checks GitHub for a newer release, and — on an AppImage install only —
-// downloads the new bundle next to the running one. It never replaces the
-// running file and never installs anything on its own: the download lands beside
-// the current bundle and the user restarts into it, at which point Sonero's
-// existing bookkeeping re-points the menu entry and removes the old file.
+// Checks GitHub for a newer release and, when the user presses Update, installs
+// it and restarts into it:
 //
-// Nothing here runs unless the user asked for it, either by switching the
-// automatic check on or by pressing Check now. Off by default: contacting a
-// server is not something an audio mixer should do uninvited.
+//   AppImage  the new bundle is downloaded next to the running one (never over
+//             it) and started; on its first run Sonero's existing bookkeeping
+//             re-points the menu entry and removes the old file.
+//   Deb       the .deb built for this distribution is downloaded to the cache
+//             and handed to apt through pkexec, so the user authorizes it with
+//             their password and dpkg stays the owner of every file.
+//
+// Every download is checked against the SHA-256 GitHub publishes for it. The
+// once-a-day check is on by default and can be switched off; nothing is ever
+// downloaded or installed without the button being pressed.
 class Updater : public QObject {
     Q_OBJECT
 
@@ -114,7 +139,7 @@ public:
     [[nodiscard]] Channel channel() const { return channel_; }
     [[nodiscard]] QString runningVersion() const { return running_; }
 
-    // Persisted in the "updates" section. Off unless the user turned it on.
+    // Persisted in the "updates" section. On unless the user turned it off.
     [[nodiscard]] bool autoCheckEnabled() const { return autoCheck_; }
     void setAutoCheckEnabled(bool on);
 
@@ -127,21 +152,19 @@ public:
     void checkForUpdates(bool userInitiated);
 
     // The automatic check, subject to the setting and the throttle. Safe to call
-    // on every start; does nothing when the user has not opted in.
+    // on every start; does nothing when the user switched it off.
     void checkOnStartupIfDue();
 
-    // Download the release's AppImage next to the running bundle. Only valid on
-    // an AppImage install with a pending update; emits downloadFailed otherwise.
-    void downloadUpdate();
-
-    // Launch the downloaded bundle and quit this one. Returns false when nothing
-    // has been downloaded, or the new bundle could not be started — in which
-    // case this process stays exactly as it was.
-    bool restartIntoDownloadedUpdate();
+    // Download the pending release, install it and restart into it. On success
+    // this process quits; on any failure it stays exactly as it was and
+    // updateFailed() says why.
+    void installUpdate();
 
     [[nodiscard]] bool updateAvailable() const { return available_.has_value(); }
+    // True when installUpdate() can do the job for the pending release — this
+    // channel updates itself, and the release carries a file for this system.
+    [[nodiscard]] bool canInstallUpdate() const;
     [[nodiscard]] Release availableRelease() const;
-    [[nodiscard]] QString downloadedBundlePath() const { return downloaded_; }
 
 signals:
     void checkStarted();
@@ -153,24 +176,32 @@ signals:
     void checkFailed(const QString& reason);
 
     void downloadProgress(qint64 received, qint64 total);
-    // The bundle is on disk at `path`, executable, ready to be started.
+    // The download is on disk and verified; installing it starts now. For a .deb
+    // that means the system is about to ask for the user's password.
     void downloadFinished(const QString& path);
-    void downloadFailed(const QString& reason);
+    // installUpdate() stopped. `reason` is written for a person.
+    void updateFailed(const QString& reason);
 
 private:
     void handleCheckReply(QNetworkReply* reply, bool userInitiated);
-    void handleDownloadReply(QNetworkReply* reply, const QString& targetPath,
-                             const QString& partPath);
+    void handleDownloadReply(QNetworkReply* reply, const Asset& asset,
+                             const QString& targetPath);
+    void applyDownloaded(const QString& path);
+    void installDeb(const QString& path);
+    void restartInto(const QString& program);
     void rememberCheckTime();
 
     config::SettingsStore* settings_ = nullptr;
     QNetworkAccessManager* net_ = nullptr;
     Channel channel_ = Channel::Source;
     QString running_;
-    bool autoCheck_ = false;
+    // Taken at startup: once apt has replaced the binary, /proc/self/exe reads
+    // "/usr/bin/Sonero (deleted)", and that is not something to relaunch.
+    QString executable_;
+    QString debTarget_;
+    bool autoCheck_ = true;
     bool busy_ = false;  // one request at a time; the UI disables its buttons too
     std::optional<Release> available_;
-    QString downloaded_;  // path of a finished download, empty until then
 };
 
 }  // namespace sonar::update

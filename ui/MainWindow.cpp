@@ -190,8 +190,8 @@ void MainWindow::buildUi() {
     // what stays if there is nothing remembered or the file has since broken.
     ProfilesPage::applySavedTheme(settings_);
     notifier_ = new Notifier(settings_, this);  // desktop notifications
-    // Checks GitHub for a newer release — but only if the user switched that on,
-    // and it installs nothing by itself. See the Updates card in Settings.
+    // Checks GitHub for a newer release once a day (unless switched off); it
+    // installs only when the user presses Update. See the Updates card in Settings.
     updater_ = new update::Updater(settings_, this);
     connect(updater_, &update::Updater::updateFound, this,
             [this](const update::Release& release) {

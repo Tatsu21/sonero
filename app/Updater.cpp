@@ -1,6 +1,7 @@
 #include "app/Updater.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -13,7 +14,11 @@
 #include <QNetworkRequest>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QStandardPaths>
+#include <QSysInfo>
 #include <QUrl>
+
+#include <utility>
 
 #include "config/SettingsStore.h"
 #include "core/Log.h"
@@ -27,8 +32,13 @@ constexpr auto kLatestReleaseUrl =
 constexpr auto kSettingsSection = "updates";
 constexpr qint64 kCheckIntervalSecs = 24 * 60 * 60;
 // A release bundle is ~60 MB; anything an order of magnitude past that is not a
-// Sonero AppImage and will not be written to the user's disk.
+// Sonero package and will not be written to the user's disk.
 constexpr qint64 kMaxDownloadBytes = 400LL * 1024 * 1024;
+
+QString& scheduledRelaunch() {
+    static QString program;
+    return program;
+}
 
 // Redirects are followed, so what matters is where the bytes actually came from.
 // GitHub hands release assets off to its object storage, and both of those hosts
@@ -126,6 +136,62 @@ QString upgradeCommand(Channel channel) {
     return {};
 }
 
+QHash<QString, QString> parseOsRelease(const QByteArray& text) {
+    QHash<QString, QString> fields;
+    for (const QByteArray& raw : text.split('\n')) {
+        const QString line = QString::fromUtf8(raw).trimmed();
+        const qsizetype eq = line.indexOf(QLatin1Char('='));
+        if (line.startsWith(QLatin1Char('#')) || eq <= 0) {
+            continue;
+        }
+        QString value = line.mid(eq + 1);
+        if (value.size() >= 2 && (value.front() == QLatin1Char('"') ||
+                                  value.front() == QLatin1Char('\'')) &&
+            value.back() == value.front()) {
+            value = value.mid(1, value.size() - 2);
+        }
+        fields.insert(line.left(eq), value);
+    }
+    return fields;
+}
+
+QString debTarget(const QHash<QString, QString>& osRelease) {
+    // By the base release's codename, not by ID: Mint, Pop!_OS, Zorin and LMDE
+    // name themselves but say which Ubuntu or Debian they are built on, and that
+    // is what decides which Qt the package links.
+    static const QHash<QString, QString> targets = {
+        {QStringLiteral("jammy"), QStringLiteral("ubuntu2204")},
+        {QStringLiteral("noble"), QStringLiteral("ubuntu2404")},
+        {QStringLiteral("resolute"), QStringLiteral("ubuntu2604")},
+        {QStringLiteral("trixie"), QStringLiteral("debian13")},
+    };
+    for (const char* key : {"UBUNTU_CODENAME", "DEBIAN_CODENAME", "VERSION_CODENAME"}) {
+        const QString target = targets.value(osRelease.value(QString::fromLatin1(key)));
+        if (!target.isEmpty()) {
+            return target;
+        }
+    }
+    return {};
+}
+
+QString currentDebTarget() {
+    if (QSysInfo::currentCpuArchitecture() != QLatin1String("x86_64")) {
+        return {};
+    }
+    QFile file(QStringLiteral("/etc/os-release"));
+    if (!file.open(QIODevice::ReadOnly)) {
+        file.setFileName(QStringLiteral("/usr/lib/os-release"));
+        if (!file.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+    }
+    return debTarget(parseOsRelease(file.readAll()));
+}
+
+void scheduleRelaunch(const QString& program) { scheduledRelaunch() = program; }
+
+QString takeScheduledRelaunch() { return std::exchange(scheduledRelaunch(), QString()); }
+
 QString channelName(Channel channel) {
     switch (channel) {
         case Channel::AppImage:
@@ -207,6 +273,12 @@ std::optional<Release> parseRelease(const QByteArray& json) {
         asset.name = a.value(QStringLiteral("name")).toString();
         asset.url = a.value(QStringLiteral("browser_download_url")).toString();
         asset.size = static_cast<qint64>(a.value(QStringLiteral("size")).toDouble());
+        // "sha256:<hex>", computed by GitHub on upload — not something a
+        // tampered mirror or a captive portal can produce for its own bytes.
+        const QString digest = a.value(QStringLiteral("digest")).toString();
+        if (digest.startsWith(QLatin1String("sha256:"))) {
+            asset.sha256 = digest.mid(7).toLower();
+        }
         if (!asset.name.isEmpty() && !asset.url.isEmpty()) {
             release.assets.push_back(asset);
         }
@@ -214,15 +286,20 @@ std::optional<Release> parseRelease(const QByteArray& json) {
     return release;
 }
 
-std::optional<Asset> pickAsset(const Release& release, Channel channel) {
-    if (channel != Channel::AppImage) {
+std::optional<Asset> pickAsset(const Release& release, Channel channel,
+                               const QString& debTarget) {
+    QString wanted;
+    if (channel == Channel::AppImage) {
+        // The portable bundle, by its exact published name. The -arch and -fedora
+        // ones are CI's regression canaries: they link a newer glibc and would
+        // fail to start on the very systems the portable build exists for.
+        wanted = QStringLiteral("Sonero-%1-x86_64.AppImage").arg(release.version);
+    } else if (channel == Channel::Deb && !debTarget.isEmpty()) {
+        // packaging/collect-artifacts.sh folds the target into the version part.
+        wanted = QStringLiteral("sonero_%1-%2_amd64.deb").arg(release.version, debTarget);
+    } else {
         return std::nullopt;
     }
-    // The portable bundle, by its exact published name. The -arch and -fedora
-    // ones are CI's regression canaries: they link a newer glibc and would fail
-    // to start on the very systems the portable build exists for.
-    const QString wanted =
-        QStringLiteral("Sonero-%1-x86_64.AppImage").arg(release.version);
     for (const Asset& asset : release.assets) {
         if (asset.name == wanted) {
             return asset;
@@ -238,11 +315,15 @@ Updater::Updater(config::SettingsStore* settings, QObject* parent)
       settings_(settings),
       net_(new QNetworkAccessManager(this)),
       channel_(currentChannel()),
-      running_(QString::fromLatin1(SONAR_VERSION)) {
+      running_(QString::fromLatin1(SONAR_VERSION)),
+      executable_(QCoreApplication::applicationFilePath()) {
+    if (channel_ == Channel::Deb) {
+        debTarget_ = currentDebTarget();
+    }
     if (settings_ != nullptr) {
         autoCheck_ = settings_->section(QString::fromLatin1(kSettingsSection))
                          .value(QStringLiteral("autoCheck"))
-                         .toBool(false);
+                         .toBool(true);
     }
 }
 
@@ -372,56 +453,67 @@ Release Updater::availableRelease() const {
     return available_.value_or(Release{});
 }
 
-void Updater::downloadUpdate() {
+bool Updater::canInstallUpdate() const {
+    return available_.has_value() && pickAsset(*available_, channel_, debTarget_).has_value();
+}
+
+void Updater::installUpdate() {
     if (busy_) {
         return;
     }
-    if (channel_ != Channel::AppImage) {
+    if (!available_.has_value()) {
+        emit updateFailed(QStringLiteral("There is nothing to install."));
+        return;
+    }
+    const std::optional<Asset> asset = pickAsset(*available_, channel_, debTarget_);
+    if (!asset.has_value()) {
         // Not reachable from the UI, which offers a command instead. Guarded
         // anyway: this is the one path that writes an executable to disk.
-        emit downloadFailed(QStringLiteral("Only an AppImage install updates itself."));
-        return;
-    }
-    if (!available_.has_value()) {
-        emit downloadFailed(QStringLiteral("There is nothing to download."));
-        return;
-    }
-    const std::optional<Asset> asset = pickAsset(*available_, channel_);
-    if (!asset.has_value()) {
-        emit downloadFailed(
-            QStringLiteral("Release %1 carries no portable AppImage.").arg(available_->version));
+        emit updateFailed(channel_ == Channel::AppImage
+                              ? QStringLiteral("Release %1 carries no portable AppImage.")
+                                    .arg(available_->version)
+                              : QStringLiteral("Release %1 has no package for this system.")
+                                    .arg(available_->version));
         return;
     }
     const QUrl url(asset->url);
     if (!isTrustedHost(url)) {
-        emit downloadFailed(QStringLiteral("The download link does not point at GitHub."));
+        emit updateFailed(QStringLiteral("The download link does not point at GitHub."));
         return;
     }
     if (asset->size > kMaxDownloadBytes) {
-        emit downloadFailed(QStringLiteral("The published bundle is implausibly large."));
+        emit updateFailed(QStringLiteral("The published file is implausibly large."));
         return;
     }
 
-    // Next to the running bundle, never over it: the AppImage is mounted from
-    // that file for as long as this process lives, and the user keeps whatever
-    // they have until they choose to start the new one.
-    const QString current = qEnvironmentVariable("APPIMAGE");
-    const QDir dir = QFileInfo(current).absoluteDir();
+    QDir dir;
+    if (channel_ == Channel::AppImage) {
+        // Next to the running bundle, never over it: the AppImage is mounted from
+        // that file for as long as this process lives.
+        const QString current = qEnvironmentVariable("APPIMAGE");
+        dir = QFileInfo(current).absoluteDir();
+        if (QFileInfo(dir.absoluteFilePath(asset->name)).absoluteFilePath() ==
+            QFileInfo(current).absoluteFilePath()) {
+            emit updateFailed(QStringLiteral("The new bundle has the same name as this one."));
+            return;
+        }
+        if (!QFileInfo(dir.absolutePath()).isWritable()) {
+            emit updateFailed(QStringLiteral("%1 is not writable — move Sonero somewhere "
+                                             "you can write to, or download it yourself.")
+                                  .arg(dir.absolutePath()));
+            return;
+        }
+    } else {
+        // Only a staging area: apt copies the package into its own cache.
+        dir = QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation) +
+                   QStringLiteral("/updates"));
+        if (!dir.mkpath(QStringLiteral("."))) {
+            emit updateFailed(
+                QStringLiteral("Could not create %1.").arg(dir.absolutePath()));
+            return;
+        }
+    }
     const QString target = dir.absoluteFilePath(asset->name);
-    if (QFileInfo(target).absoluteFilePath() == QFileInfo(current).absoluteFilePath()) {
-        emit downloadFailed(QStringLiteral("The new bundle has the same name as this one."));
-        return;
-    }
-    const QFileInfo dirInfo(dir.absolutePath());
-    if (!dirInfo.isWritable()) {
-        emit downloadFailed(QStringLiteral("%1 is not writable — move Sonero somewhere "
-                                           "you can write to, or download it yourself.")
-                                .arg(dir.absolutePath()));
-        return;
-    }
-
-    const QString partPath = target + QStringLiteral(".part");
-    QFile::remove(partPath);  // a previous attempt that died mid-download
 
     busy_ = true;
     QNetworkRequest request{url};
@@ -433,90 +525,158 @@ void Updater::downloadUpdate() {
 
     QNetworkReply* reply = net_->get(request);
     connect(reply, &QNetworkReply::downloadProgress, this, &Updater::downloadProgress);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, target, partPath] {
-        handleDownloadReply(reply, target, partPath);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, asset = *asset, target] {
+        handleDownloadReply(reply, asset, target);
         reply->deleteLater();
     });
 }
 
-void Updater::handleDownloadReply(QNetworkReply* reply, const QString& targetPath,
-                                  const QString& partPath) {
+void Updater::handleDownloadReply(QNetworkReply* reply, const Asset& asset,
+                                  const QString& targetPath) {
     busy_ = false;
 
     if (reply->error() != QNetworkReply::NoError) {
-        emit downloadFailed(humanNetworkError(reply));
+        emit updateFailed(humanNetworkError(reply));
         return;
     }
     if (!isTrustedHost(reply->url())) {
-        emit downloadFailed(QStringLiteral("The download was redirected off GitHub."));
+        emit updateFailed(QStringLiteral("The download was redirected off GitHub."));
         return;
     }
 
     const QByteArray payload = reply->readAll();
     if (payload.isEmpty() || payload.size() > kMaxDownloadBytes) {
-        emit downloadFailed(QStringLiteral("The download did not arrive intact."));
+        emit updateFailed(QStringLiteral("The download did not arrive intact."));
         return;
     }
-    // An AppImage is an ELF binary with the AppImage type magic at offset 8.
-    // Cheap, and it catches the case that actually happens: an error page, a
-    // captive portal's login form, or a truncated transfer saved as an
-    // executable the user is then invited to run.
-    const bool looksLikeElf = payload.size() > 12 && payload.startsWith("\x7f" "ELF") &&
-                              static_cast<unsigned char>(payload[8]) == 'A' &&
-                              static_cast<unsigned char>(payload[9]) == 'I';
-    if (!looksLikeElf) {
-        emit downloadFailed(QStringLiteral("What arrived is not an AppImage."));
+    // Releases published before GitHub started recording digests have none; the
+    // format check below is then all there is.
+    if (!asset.sha256.isEmpty() &&
+        QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex() !=
+            asset.sha256.toLatin1()) {
+        emit updateFailed(QStringLiteral("The download does not match the checksum GitHub "
+                                         "published for it."));
+        return;
+    }
+    // Cheap, and it catches the case that actually happens when there is no
+    // digest: an error page, a captive portal's login form, or a truncated
+    // transfer saved under the name of something the user is about to run.
+    if (channel_ == Channel::AppImage) {
+        // An AppImage is an ELF binary with the AppImage type magic at offset 8.
+        const bool looksLikeAppImage = payload.size() > 12 &&
+                                       payload.startsWith("\x7f" "ELF") &&
+                                       static_cast<unsigned char>(payload[8]) == 'A' &&
+                                       static_cast<unsigned char>(payload[9]) == 'I';
+        if (!looksLikeAppImage) {
+            emit updateFailed(QStringLiteral("What arrived is not an AppImage."));
+            return;
+        }
+    } else if (!payload.startsWith("!<arch>\ndebian-binary")) {
+        emit updateFailed(QStringLiteral("What arrived is not a Debian package."));
         return;
     }
 
+    const QString partPath = targetPath + QStringLiteral(".part");
     QFile part(partPath);
     if (!part.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        emit downloadFailed(QStringLiteral("Could not write to %1.").arg(partPath));
+        emit updateFailed(QStringLiteral("Could not write to %1.").arg(partPath));
         return;
     }
     if (part.write(payload) != payload.size() || !part.flush()) {
         part.close();
         QFile::remove(partPath);
-        emit downloadFailed(QStringLiteral("The download could not be saved — is the disk full?"));
+        emit updateFailed(QStringLiteral("The download could not be saved — is the disk full?"));
         return;
     }
     part.close();
 
     // Executable before it is named: nothing should ever see the final name
-    // while it is still a file that cannot be started.
-    if (!QFile::setPermissions(partPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
-                                             QFileDevice::ExeOwner | QFileDevice::ReadGroup |
-                                             QFileDevice::ExeGroup | QFileDevice::ReadOther |
-                                             QFileDevice::ExeOther)) {
+    // while it is still a file that cannot be started. A .deb only needs to be
+    // readable — apt runs as root, but reads it from here.
+    QFileDevice::Permissions perms = QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                     QFileDevice::ReadGroup | QFileDevice::ReadOther;
+    if (channel_ == Channel::AppImage) {
+        perms |= QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther;
+    }
+    if (!QFile::setPermissions(partPath, perms)) {
         QFile::remove(partPath);
-        emit downloadFailed(QStringLiteral("The downloaded bundle could not be made executable."));
+        emit updateFailed(QStringLiteral("The download could not be made executable."));
         return;
     }
     QFile::remove(targetPath);  // a previous download of the same release
     if (!QFile::rename(partPath, targetPath)) {
         QFile::remove(partPath);
-        emit downloadFailed(QStringLiteral("Could not put the new bundle in place."));
+        emit updateFailed(QStringLiteral("Could not put the download in place."));
         return;
     }
 
-    downloaded_ = targetPath;
     log::info("Downloaded update to {}", targetPath.toStdString());
     emit downloadFinished(targetPath);
+    applyDownloaded(targetPath);
 }
 
-bool Updater::restartIntoDownloadedUpdate() {
-    if (downloaded_.isEmpty() || !QFileInfo::exists(downloaded_)) {
-        return false;
+void Updater::applyDownloaded(const QString& path) {
+    if (channel_ == Channel::AppImage) {
+        // On its first start the new bundle re-points the menu entry at itself
+        // and removes the one it replaced — the same path a manually downloaded
+        // update takes.
+        restartInto(path);
+        return;
     }
-    // Detached on purpose: the new bundle outlives this process, and on its first
-    // start it re-points the menu entry at itself and removes the one it
-    // replaced — the same path a manually downloaded update takes.
-    if (!QProcess::startDetached(downloaded_, {})) {
-        log::warn("Could not start {}", downloaded_.toStdString());
-        return false;
-    }
+    installDeb(path);
+}
+
+void Updater::installDeb(const QString& path) {
+    busy_ = true;
+    // pkexec, not sudo: there is no terminal to type into. polkit shows its own
+    // dialog naming the command, and apt-get — not this process — writes the
+    // files, runs the maintainer scripts and records the new version.
+    auto* apt = new QProcess(this);
+    apt->setProcessChannelMode(QProcess::MergedChannels);
+    connect(apt, &QProcess::errorOccurred, this, [this, apt, path](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart) {
+            return;  // a crash still ends in finished(), which reports it
+        }
+        busy_ = false;
+        apt->deleteLater();
+        emit updateFailed(QStringLiteral("pkexec is not available to ask for your password. "
+                                         "Install the package yourself: sudo apt install %1")
+                              .arg(path));
+    });
+    connect(apt, &QProcess::finished, this,
+            [this, apt, path](int code, QProcess::ExitStatus status) {
+                busy_ = false;
+                const QString output = QString::fromLocal8Bit(apt->readAll()).trimmed();
+                apt->deleteLater();
+                if (status == QProcess::NormalExit && code == 0) {
+                    log::info("Installed {}", path.toStdString());
+                    QFile::remove(path);
+                    restartInto(executable_);
+                    return;
+                }
+                log::warn("apt-get install {} failed ({}): {}", path.toStdString(), code,
+                          output.toStdString());
+                // 126: the dialog was dismissed. 127: not authorized, or no
+                // polkit agent running to show the dialog at all.
+                if (code == 126 || code == 127) {
+                    emit updateFailed(QStringLiteral("Not authorized — nothing was changed."));
+                    return;
+                }
+                const QString last = output.section(QLatin1Char('\n'), -1).trimmed();
+                emit updateFailed(QStringLiteral("apt could not install it%1")
+                                      .arg(last.isEmpty() ? QStringLiteral(".")
+                                                          : QStringLiteral(": ") + last));
+            });
+    apt->start(QStringLiteral("pkexec"),
+               {QStringLiteral("/usr/bin/apt-get"), QStringLiteral("install"),
+                QStringLiteral("-y"), path});
+}
+
+void Updater::restartInto(const QString& program) {
+    // main() starts it once this process has let go of the single-instance
+    // socket; see scheduleRelaunch().
+    scheduleRelaunch(program);
     QCoreApplication::quit();
-    return true;
 }
 
 }  // namespace sonar::update

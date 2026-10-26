@@ -48,7 +48,7 @@ private:
     // Update card, kept as members because the updater's signals repaint them.
     QLabel* updateStatus_ = nullptr;
     QPushButton* updateCheck_ = nullptr;
-    QPushButton* updateAction_ = nullptr;  // download / restart / open the page
+    QPushButton* updateAction_ = nullptr;  // update / copy the command / open the page
     QProgressBar* updateProgress_ = nullptr;
     QLabel* updateCommand_ = nullptr;  // the exact line to paste, when there is one
 };

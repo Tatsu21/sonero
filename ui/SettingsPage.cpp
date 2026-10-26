@@ -207,16 +207,30 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
     });
     body->addWidget(autoCheck);
 
-    // Say plainly what switching it on does — it is the only thing in Sonero
-    // that talks to a server, and the only reason it is off until asked.
-    auto* hint = new QLabel(
-        channel == update::Channel::AppImage
-            ? QStringLiteral("Asks github.com once a day whether a newer release exists. "
-                             "Nothing is downloaded, and nothing replaces this bundle, "
-                             "until you press the button yourself.")
-            : QStringLiteral("Asks github.com once a day whether a newer release exists, "
-                             "and tells you. Installing it stays your package manager's "
-                             "job — Sonero never touches files it does not own."));
+    // Say plainly what it does — it is the only thing in Sonero that talks to a
+    // server, and the box is right here for anyone who would rather it did not.
+    QString hintText;
+    switch (channel) {
+        case update::Channel::AppImage:
+            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
+                                      "exists. Nothing is downloaded until you press Update; "
+                                      "then the new bundle replaces this one and Sonero "
+                                      "restarts.");
+            break;
+        case update::Channel::Deb:
+            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
+                                      "exists. Update downloads the package for your "
+                                      "system and has apt install it — your password is "
+                                      "asked for — then Sonero restarts.");
+            break;
+        default:
+            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
+                                      "exists, and tells you. Installing it stays your "
+                                      "package manager's job — Sonero never touches files "
+                                      "it does not own.");
+            break;
+    }
+    auto* hint = new QLabel(hintText);
     hint->setObjectName(QStringLiteral("Hint"));
     hint->setWordWrap(true);
     body->addWidget(hint);
@@ -261,21 +275,14 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
         }
         // One handler, three jobs, because which one applies is a property of
         // the updater's state rather than of the button.
-        if (!updater_->downloadedBundlePath().isEmpty()) {
-            if (!updater_->restartIntoDownloadedUpdate()) {
-                updateStatus_->setText(
-                    QStringLiteral("The downloaded bundle could not be started. It is at "
-                                   "%1 — try running it yourself.")
-                        .arg(updater_->downloadedBundlePath().toHtmlEscaped()));
-            }
-            return;
-        }
-        if (updater_->channel() == update::Channel::AppImage) {
+        if (updater_->canInstallUpdate()) {
             updateAction_->setEnabled(false);
+            updateCheck_->setEnabled(false);
+            updateProgress_->setRange(0, 100);
             updateProgress_->setValue(0);
             updateProgress_->setVisible(true);
             updateStatus_->setText(QStringLiteral("Downloading…"));
-            updater_->downloadUpdate();
+            updater_->installUpdate();
             return;
         }
         const QString command = update::upgradeCommand(updater_->channel());
@@ -329,20 +336,18 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
                 updateProgress_->setRange(0, 100);
                 updateProgress_->setValue(static_cast<int>(received * 100 / total));
             });
-    connect(updater_, &update::Updater::downloadFinished, this, [this](const QString& path) {
+    connect(updater_, &update::Updater::downloadFinished, this, [this](const QString&) {
         updateProgress_->setVisible(false);
-        updateAction_->setEnabled(true);
-        updateAction_->setText(QStringLiteral("Restart into %1")
-                                   .arg(updater_->availableRelease().version));
-        updateStatus_->setText(
-            QStringLiteral("Downloaded to %1. Restarting starts the new bundle; the old one "
-                           "is removed on its first run.")
-                .arg(path.toHtmlEscaped()));
+        updateStatus_->setText(updater_->channel() == update::Channel::Deb
+                                   ? QStringLiteral("Installing — confirm with your password…")
+                                   : QStringLiteral("Restarting into %1…")
+                                         .arg(updater_->availableRelease().version));
     });
-    connect(updater_, &update::Updater::downloadFailed, this, [this](const QString& reason) {
+    connect(updater_, &update::Updater::updateFailed, this, [this](const QString& reason) {
         updateProgress_->setVisible(false);
         updateAction_->setEnabled(true);
-        updateStatus_->setText(QStringLiteral("Download failed: %1").arg(reason.toHtmlEscaped()));
+        updateCheck_->setEnabled(true);
+        updateStatus_->setText(QStringLiteral("Update failed: %1").arg(reason.toHtmlEscaped()));
     });
 
     showUpdateIdle();
@@ -378,16 +383,16 @@ void SettingsPage::showUpdateFound() {
             .arg(release.version.toHtmlEscaped(), updater_->runningVersion().toHtmlEscaped(),
                  release.pageUrl.toHtmlEscaped()));
 
+    const bool canInstall = updater_->canInstallUpdate();
     const QString command = update::upgradeCommand(channel);
-    updateCommand_->setVisible(channel != update::Channel::AppImage && !command.isEmpty());
+    updateCommand_->setVisible(!canInstall && channel != update::Channel::AppImage &&
+                               !command.isEmpty());
     updateCommand_->setText(command);
 
     updateAction_->setVisible(true);
     updateAction_->setEnabled(true);
-    if (!updater_->downloadedBundlePath().isEmpty()) {
-        updateAction_->setText(QStringLiteral("Restart into %1").arg(release.version));
-    } else if (channel == update::Channel::AppImage) {
-        updateAction_->setText(QStringLiteral("Download %1").arg(release.version));
+    if (canInstall) {
+        updateAction_->setText(QStringLiteral("Update to %1").arg(release.version));
     } else if (!command.isEmpty()) {
         updateAction_->setText(QStringLiteral("Copy command"));
     } else {

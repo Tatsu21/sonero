@@ -29,6 +29,10 @@ public:
     // socket could not be claimed (another instance won the race).
     bool listen();
 
+    // Stops answering, so that a process started after this call becomes the
+    // primary instead of waking this one.
+    void close();
+
 signals:
     // A secondary instance asked the primary to come to the foreground.
     void activationRequested();

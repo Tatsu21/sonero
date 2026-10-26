@@ -2,10 +2,12 @@
 #include <memory>
 
 #include <QApplication>
+#include <QProcess>
 #include <QWidget>
 
 #include "app/Application.h"
 #include "app/SingleInstance.h"
+#include "app/Updater.h"
 #include "audio/Mixer.h"
 #include "audio/PipeWireManager.h"
 #include "core/Log.h"
@@ -71,6 +73,19 @@ int main(int argc, char* argv[]) {
         }
 
         code = qtApp.exec();
+    }
+
+    // An installed update restarts into the new build only now: the audio graph
+    // is torn down, and once the socket is closed the new process becomes the
+    // primary instead of waking this one on its way out.
+    const QString relaunch = sonar::update::takeScheduledRelaunch();
+    if (!relaunch.isEmpty()) {
+        instance.close();
+        if (QProcess::startDetached(relaunch, {})) {
+            sonar::log::info("Restarting into {}", relaunch.toStdString());
+        } else {
+            sonar::log::warn("Could not start {}", relaunch.toStdString());
+        }
     }
 
     sonar::log::shutdown();

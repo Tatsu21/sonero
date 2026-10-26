@@ -21,7 +21,10 @@ private slots:
     void readsAGitHubRelease();
     void rejectsAPayloadWithoutAReleaseTag();
     void picksThePortableBundleOnly();
-    void offersNoAssetToPackagedInstalls();
+    void picksTheDebForThisDistribution();
+    void offersNoAssetToOtherPackagedInstalls();
+    void readsTheDigestGitHubPublishes();
+    void mapsOsReleaseToADebTarget();
     void classifiesAppImageBeforeAnythingElse();
     void classifiesSystemPrefixesByPackageDatabase();
     void classifiesEverythingElseAsALocalBuild();
@@ -39,7 +42,10 @@ QByteArray UpdaterTest::releasePayload() {
         "body": "Nothing to see here.",
         "assets": [
             {"name": "sonero_0.2.0-ubuntu2204_amd64.deb",
-             "browser_download_url": "https://github.com/x/sonero_0.2.0.deb", "size": 4},
+             "browser_download_url": "https://github.com/x/sonero_0.2.0.deb", "size": 4,
+             "digest": "sha256:ABCDEF0123"},
+            {"name": "sonero_0.2.0-debian13_amd64.deb",
+             "browser_download_url": "https://github.com/x/debian13.deb", "size": 5},
             {"name": "Sonero-0.2.0-arch-x86_64.AppImage",
              "browser_download_url": "https://github.com/x/arch.AppImage", "size": 2},
             {"name": "Sonero-0.2.0-x86_64.AppImage",
@@ -106,7 +112,7 @@ void UpdaterTest::readsAGitHubRelease() {
     QCOMPARE(release->version, QStringLiteral("0.2.0"));
     QCOMPARE(release->pageUrl,
              QStringLiteral("https://github.com/Tatsu21/sonero/releases/tag/0.2.0"));
-    QCOMPARE(static_cast<int>(release->assets.size()), 4);
+    QCOMPARE(static_cast<int>(release->assets.size()), 5);
 }
 
 void UpdaterTest::rejectsAPayloadWithoutAReleaseTag() {
@@ -137,14 +143,62 @@ void UpdaterTest::picksThePortableBundleOnly() {
     QVERIFY(!update::pickAsset(without, update::Channel::AppImage).has_value());
 }
 
-void UpdaterTest::offersNoAssetToPackagedInstalls() {
+void UpdaterTest::picksTheDebForThisDistribution() {
     const auto release = update::parseRelease(releasePayload());
     QVERIFY(release.has_value());
-    // The .deb is in the payload, and is still not offered: dpkg owns those
-    // files, and an app that writes to them is a bug report waiting to happen.
+
+    const auto deb = update::pickAsset(*release, update::Channel::Deb,
+                                       QStringLiteral("debian13"));
+    QVERIFY(deb.has_value());
+    QCOMPARE(deb->url, QStringLiteral("https://github.com/x/debian13.deb"));
+
+    // A .deb links its distribution's Qt: no build for this system means no
+    // offer, never the nearest one — and an unknown system gets nothing at all.
+    QVERIFY(!update::pickAsset(*release, update::Channel::Deb, QStringLiteral("ubuntu2604"))
+                 .has_value());
     QVERIFY(!update::pickAsset(*release, update::Channel::Deb).has_value());
-    QVERIFY(!update::pickAsset(*release, update::Channel::Pacman).has_value());
+}
+
+void UpdaterTest::offersNoAssetToOtherPackagedInstalls() {
+    const auto release = update::parseRelease(releasePayload());
+    QVERIFY(release.has_value());
+    // pacman and friends own their files and have their own way of updating.
+    QVERIFY(!update::pickAsset(*release, update::Channel::Pacman, QStringLiteral("debian13"))
+                 .has_value());
+    QVERIFY(!update::pickAsset(*release, update::Channel::Package).has_value());
     QVERIFY(!update::pickAsset(*release, update::Channel::Source).has_value());
+}
+
+void UpdaterTest::readsTheDigestGitHubPublishes() {
+    const auto release = update::parseRelease(releasePayload());
+    QVERIFY(release.has_value());
+    const auto deb = update::pickAsset(*release, update::Channel::Deb,
+                                       QStringLiteral("ubuntu2204"));
+    QVERIFY(deb.has_value());
+    QCOMPARE(deb->sha256, QStringLiteral("abcdef0123"));  // lowercased, prefix gone
+    // Older releases carry no digest; that is "unknown", not "matches nothing".
+    const auto bundle = update::pickAsset(*release, update::Channel::AppImage);
+    QVERIFY(bundle.has_value());
+    QVERIFY(bundle->sha256.isEmpty());
+}
+
+void UpdaterTest::mapsOsReleaseToADebTarget() {
+    const auto target = [](const char* text) {
+        return update::debTarget(update::parseOsRelease(QByteArray(text)));
+    };
+    QCOMPARE(target("ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n"
+                    "UBUNTU_CODENAME=noble\n"),
+             QStringLiteral("ubuntu2404"));
+    // Mint names itself, and says which Ubuntu it is underneath.
+    QCOMPARE(target("ID=linuxmint\nVERSION_CODENAME=virginia\nUBUNTU_CODENAME=jammy\n"),
+             QStringLiteral("ubuntu2204"));
+    QCOMPARE(target("ID=debian\nVERSION_ID=\"13\"\nVERSION_CODENAME=trixie\n"),
+             QStringLiteral("debian13"));
+    // LMDE: its own codename first, Debian's in a field of its own.
+    QCOMPARE(target("ID=linuxmint\nVERSION_CODENAME=gigi\nDEBIAN_CODENAME=trixie\n"),
+             QStringLiteral("debian13"));
+    QVERIFY(target("ID=debian\nVERSION_CODENAME=bookworm\n").isEmpty());
+    QVERIFY(target("ID=fedora\nVERSION_ID=42\n").isEmpty());
 }
 
 void UpdaterTest::classifiesAppImageBeforeAnythingElse() {
