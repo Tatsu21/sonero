@@ -277,6 +277,11 @@ DevicesPage::DevicesPage(audio::IAudioDevices* devices, audio::IDeviceFormats* f
 
     root->addStretch(1);
 
+    hotplugTimer_ = new QTimer(this);
+    hotplugTimer_->setSingleShot(true);
+    hotplugTimer_->setInterval(3000);
+    connect(hotplugTimer_, &QTimer::timeout, this, &DevicesPage::notifyDeviceChanges);
+
     timer_ = new QTimer(this);  // poll the registry + refresh battery
     timer_->setInterval(1500);
     connect(timer_, &QTimer::timeout, this, &DevicesPage::syncDevices);
@@ -445,6 +450,31 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     parent->addWidget(steelSeriesCard_);
 }
 
+void DevicesPage::notifyDeviceChanges() {
+    if (notifier_ != nullptr) {
+        // Keyed per device, so a reconnect replaces that device's disconnect.
+        const auto deviceKey = [](const std::string& name) {
+            return QStringLiteral("device:") + QString::fromStdString(name);
+        };
+        for (const auto& [name, desc] : pendingDevices_) {
+            if (knownDevices_.find(name) == knownDevices_.end()) {
+                notifier_->notify(QStringLiteral("Device connected"),
+                                  QString::fromStdString(desc), Notifier::Low, QString(),
+                                  /*clickable=*/false, deviceKey(name));
+            }
+        }
+        for (const auto& [name, desc] : knownDevices_) {
+            if (pendingDevices_.find(name) == pendingDevices_.end()) {
+                notifier_->notify(QStringLiteral("Device disconnected"),
+                                  QString::fromStdString(desc), Notifier::Low, QString(),
+                                  /*clickable=*/false, deviceKey(name));
+            }
+        }
+    }
+    knownDevices_ = std::move(pendingDevices_);
+    pendingDevices_.clear();
+}
+
 void DevicesPage::syncDevices() {
     if (devices_ != nullptr) {
         const std::uint64_t rev = devices_->devicesRevision();
@@ -465,28 +495,21 @@ void DevicesPage::syncDevices() {
                                                  : autoPreferredDevices_.erase(it);
                 }
             }
-            // Notify on devices (dis)connecting — edge-triggered, silent on first fill.
+            // Notify on devices (dis)connecting — edge-triggered, silent on first
+            // fill, and only once the list has settled: an HDMI/DP output drops
+            // out and comes back every time the monitor sleeps or wakes.
             {
                 std::unordered_map<std::string, std::string> current;
                 for (const audio::AudioDevice& d : list) {
                     current[d.name] = d.description;
                 }
-                if (devicesInitialized_ && notifier_ != nullptr) {
-                    for (const auto& [name, desc] : current) {
-                        if (knownDevices_.find(name) == knownDevices_.end()) {
-                            notifier_->notify(QStringLiteral("Device connected"),
-                                              QString::fromStdString(desc), Notifier::Low);
-                        }
-                    }
-                    for (const auto& [name, desc] : knownDevices_) {
-                        if (current.find(name) == current.end()) {
-                            notifier_->notify(QStringLiteral("Device disconnected"),
-                                              QString::fromStdString(desc), Notifier::Low);
-                        }
-                    }
+                if (devicesInitialized_) {
+                    pendingDevices_ = std::move(current);
+                    hotplugTimer_->start();  // restart: wait for the next quiet spell
+                } else {
+                    knownDevices_ = std::move(current);
+                    devicesInitialized_ = true;
                 }
-                knownDevices_ = std::move(current);
-                devicesInitialized_ = true;
             }
             if (list.empty()) {
                 auto* none = new QLabel(QStringLiteral("No audio outputs detected."));

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -31,8 +32,12 @@ public:
     // Fire-and-forget a notification (no-op when disabled). `icon` is a themed
     // icon name; a sensible default is used when empty. When `clickable` is true
     // the notification gets a default action and clicking it emits activated().
+    // A non-empty `key` marks a status update rather than an event: it replaces
+    // the previous notification posted with the same key and is sent as
+    // transient, so it is not kept in the notification history.
     void notify(const QString& title, const QString& body, Urgency urgency = Normal,
-                const QString& icon = QString(), bool clickable = false);
+                const QString& icon = QString(), bool clickable = false,
+                const QString& key = QString());
 
 signals:
     // Emitted when the user clicks a clickable notification we posted.
@@ -46,6 +51,7 @@ private:
     config::SettingsStore* settings_ = nullptr;
     bool enabled_ = true;
     QSet<uint> clickableIds_;  // ids of posted notifications that carry an action
+    QHash<QString, uint> keyedIds_;  // key -> id of the notification it last posted
 };
 
 }  // namespace sonar::ui

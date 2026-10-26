@@ -1,5 +1,7 @@
 #include "ui/Notifier.h"
 
+#include <iterator>
+
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCall>
@@ -43,7 +45,7 @@ void Notifier::setEnabled(bool on) {
 }
 
 void Notifier::notify(const QString& title, const QString& body, Urgency urgency,
-                      const QString& icon, bool clickable) {
+                      const QString& icon, bool clickable, const QString& key) {
     if (!enabled_) {
         return;
     }
@@ -53,6 +55,9 @@ void Notifier::notify(const QString& title, const QString& body, Urgency urgency
     QVariantMap hints;
     hints[QStringLiteral("urgency")] = QVariant::fromValue(static_cast<uchar>(urgency));
     hints[QStringLiteral("desktop-entry")] = QStringLiteral("Sonero");
+    if (!key.isEmpty()) {
+        hints[QStringLiteral("transient")] = true;  // don't pile up in the history
+    }
 
     // A "default" action is the one most servers (GNOME Shell, KDE) invoke when the
     // notification body itself is clicked.
@@ -62,7 +67,7 @@ void Notifier::notify(const QString& title, const QString& body, Urgency urgency
     }
 
     msg << QStringLiteral("Sonero")                                          // app_name
-        << 0U                                                                    // replaces_id
+        << keyedIds_.value(key, 0U)                                              // replaces_id
         << (icon.isEmpty() ? QStringLiteral("audio-headphones") : icon)          // app_icon
         << title                                                                 // summary
         << body                                                                  // body
@@ -71,16 +76,22 @@ void Notifier::notify(const QString& title, const QString& body, Urgency urgency
         << -1;                                                                   // expire_timeout
 
     QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(msg);
-    if (!clickable) {
+    if (!clickable && key.isEmpty()) {
         return;  // fire-and-forget; no need to track the returned id
     }
-    // Remember the notification id so we can match its ActionInvoked callback.
+    // Remember the notification id so we can match its ActionInvoked callback
+    // and replace it on the next notification with the same key.
     auto* watcher = new QDBusPendingCallWatcher(call, this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this,
-            [this](QDBusPendingCallWatcher* w) {
+            [this, clickable, key](QDBusPendingCallWatcher* w) {
                 const QDBusPendingReply<uint> reply = *w;
                 if (reply.isValid()) {
-                    clickableIds_.insert(reply.value());
+                    if (clickable) {
+                        clickableIds_.insert(reply.value());
+                    }
+                    if (!key.isEmpty()) {
+                        keyedIds_.insert(key, reply.value());
+                    }
                 }
                 w->deleteLater();
             });
@@ -96,6 +107,9 @@ void Notifier::onActionInvoked(uint id, const QString& actionKey) {
 void Notifier::onNotificationClosed(uint id, uint reason) {
     Q_UNUSED(reason);
     clickableIds_.remove(id);  // stop tracking a notification that is gone
+    for (auto it = keyedIds_.begin(); it != keyedIds_.end();) {
+        it = it.value() == id ? keyedIds_.erase(it) : std::next(it);
+    }
 }
 
 }  // namespace sonar::ui

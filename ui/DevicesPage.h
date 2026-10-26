@@ -80,6 +80,7 @@ private:
     // Rebuilds the connected-outputs list when the device set changes; keeps the
     // SteelSeries controls shown only while the base station is present.
     void syncDevices();
+    void notifyDeviceChanges();  // diff the settled device list against knownDevices_
     void buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& dev);
     void buildSteelSeriesControls(QVBoxLayout* parent);
     // Refreshes the row's badge and hands back the level it found, if any.
@@ -105,6 +106,8 @@ private:
 
     // Notification bookkeeping (avoid spamming; edge-triggered only).
     std::unordered_map<std::string, std::string> knownDevices_;  // name -> description
+    std::unordered_map<std::string, std::string> pendingDevices_;  // awaiting settle
+    QTimer* hotplugTimer_ = nullptr;  // debounces flapping outputs (HDMI on DPMS)
     bool devicesInitialized_ = false;                            // skip the first sync
     std::unordered_set<std::string> btLowWarned_;                // BT names warned low
     bool headsetLowWarned_ = false;
