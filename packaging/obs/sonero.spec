@@ -28,7 +28,6 @@ URL:            https://github.com/Tatsu21/sonero
 Source0:        %{name}-%{version}.tar.xz
 BuildRequires:  cmake >= 3.21
 BuildRequires:  desktop-file-utils
-BuildRequires:  fdupes
 BuildRequires:  gcc-c++
 BuildRequires:  hicolor-icon-theme
 BuildRequires:  pkgconfig
@@ -39,6 +38,15 @@ BuildRequires:  cmake(Qt6Widgets)
 BuildRequires:  pkgconfig(libpipewire-0.3)
 BuildRequires:  pkgconfig(spdlog)
 BuildRequires:  pkgconfig(udev)
+%if 0%{?suse_version}
+BuildRequires:  fdupes
+BuildRequires:  ninja
+%else
+# Fedora: %%cmake_qt6 generates for Ninja too, and %%_udevrulesdir comes from
+# here rather than from the default build root.
+BuildRequires:  ninja-build
+BuildRequires:  systemd-rpm-macros
+%endif
 # rnnoise-devel exists only from Tumbleweed / Leap 16 on; without it the
 # microphone noise suppression is built out.
 %if 0%{?suse_version} >= 1600
@@ -62,23 +70,39 @@ its own channel, every output device first-class, built on PipeWire.
 # the +git suffix the service appends.
 %cmake_qt6 \
     -DSONERO_FALLBACK_VERSION=%{_ver}
+# Fedora defines %%cmake_qt6 but not the qt6_build/qt6_install pair; its plain
+# cmake macros work on the same build directory.
+%if 0%{?suse_version}
 %qt6_build
+%else
+%cmake_build
+%endif
 
 %install
+%if 0%{?suse_version}
 %qt6_install
+%else
+%cmake_install
+%endif
 rm -rvf %{buildroot}%{_datadir}/doc
+%if 0%{?suse_version}
 %fdupes -s %{buildroot}%{_datadir}/
+%endif
 
 %check
 export QT_QPA_PLATFORM=offscreen
 %ctest
 desktop-file-validate %{buildroot}%{_datadir}/applications/%{_name}.desktop
 
+# Fedora's systemd package reloads and re-triggers udev itself, from a file
+# trigger on the rules directory.
+%if 0%{?suse_version}
 %post
 %udev_trigger_with_reload -s hidraw
 
 %postun
 %udev_rules_update
+%endif
 
 %files
 %doc README.md

@@ -1,4 +1,13 @@
 -------------------------------------------------------------------
+Tue Oct 27 00:00:00 UTC 2026 - Luci <radu4cristian1@gmail.com>
+
+- Run every source service on the server: buildtime services pulled
+  obs-service-* into the Fedora build roots, where their dependencies
+  are ambiguous and the build never started
+- Build on Fedora: Ninja, systemd-rpm-macros and the plain cmake build
+  and install macros; udev is reloaded by Fedora's own file trigger
+
+-------------------------------------------------------------------
 Thu Oct 22 00:00:00 UTC 2026 - Luci <radu4cristian1@gmail.com>
 
 - Build from a tarball made by an obs_scm source service instead of
