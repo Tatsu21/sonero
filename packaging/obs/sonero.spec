@@ -37,9 +37,13 @@ BuildRequires:  cmake(Qt6Network)
 BuildRequires:  cmake(Qt6Test)
 BuildRequires:  cmake(Qt6Widgets)
 BuildRequires:  pkgconfig(libpipewire-0.3)
-BuildRequires:  pkgconfig(rnnoise)
 BuildRequires:  pkgconfig(spdlog)
 BuildRequires:  pkgconfig(udev)
+# rnnoise-devel exists only from Tumbleweed / Leap 16 on; without it the
+# microphone noise suppression is built out.
+%if 0%{?suse_version} >= 1600
+BuildRequires:  pkgconfig(rnnoise)
+%endif
 Recommends:     pipewire
 Recommends:     wireplumber
 # The project used to be called LinuxSonar.
