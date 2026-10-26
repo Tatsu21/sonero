@@ -6,6 +6,9 @@ Tue Oct 27 00:00:00 UTC 2026 - Luci <radu4cristian1@gmail.com>
   are ambiguous and the build never started
 - Build on Fedora: Ninja, systemd-rpm-macros and the plain cmake build
   and install macros; udev is reloaded by Fedora's own file trigger
+- Build for Debian too, from sonero.dsc and the debian.* files
+- Build for Arch too, from PKGBUILD
+- No rnnoise on i586: Slowroll does not build it there
 
 -------------------------------------------------------------------
 Thu Oct 22 00:00:00 UTC 2026 - Luci <radu4cristian1@gmail.com>

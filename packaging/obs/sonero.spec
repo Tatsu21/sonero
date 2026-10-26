@@ -47,10 +47,12 @@ BuildRequires:  ninja
 BuildRequires:  ninja-build
 BuildRequires:  systemd-rpm-macros
 %endif
-# rnnoise-devel exists only from Tumbleweed / Leap 16 on; without it the
-# microphone noise suppression is built out.
+# rnnoise-devel exists only from Tumbleweed / Leap 16 on, and Slowroll has no
+# i586 build of it; without it the microphone noise suppression is built out.
 %if 0%{?suse_version} >= 1600
+%ifnarch %{ix86}
 BuildRequires:  pkgconfig(rnnoise)
+%endif
 %endif
 Recommends:     pipewire
 Recommends:     wireplumber

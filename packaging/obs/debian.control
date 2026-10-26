@@ -1,0 +1,25 @@
+Source: sonero
+Section: sound
+Priority: optional
+Maintainer: Luci <radu4cristian1@gmail.com>
+Build-Depends: debhelper-compat (= 13), cmake (>= 3.21), ninja-build, pkg-config,
+ qt6-base-dev, qt6-base-dev-tools, libpipewire-0.3-dev, libgl-dev,
+ desktop-file-utils
+Standards-Version: 4.7.0
+Homepage: https://tatsu21.github.io/sonero/
+Rules-Requires-Root: no
+
+Package: sonero
+Architecture: any
+# Not linked against, so shlibs cannot see them: the Qt platform plugins are
+# dlopen()ed, and PipeWire is a running service rather than a library call.
+Depends: ${shlibs:Depends}, ${misc:Depends}, qt6-qpa-plugins
+Recommends: pipewire (>= 0.3), wireplumber, qt6-wayland
+Suggests: pipewire-audio
+# The project used to be called LinuxSonar.
+Conflicts: linuxsonar
+Replaces: linuxsonar
+Provides: linuxsonar
+Description: Audio mixer, router and equalizer
+ Per-application audio mixer, router and equalizer for Linux — every app on
+ its own channel, every output device first-class, built on PipeWire.

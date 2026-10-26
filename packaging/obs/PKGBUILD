@@ -1,0 +1,46 @@
+# Maintainer: Radu Cristian <37669757+Tatsu21@users.noreply.github.com>
+#
+# The Arch half of the OBS package, built from main. packaging/aur/sonero is the
+# one users install from the AUR; this differs only where OBS does: there is no
+# network in the build, so the source is the tarball tar_scm made, and
+# set_version fills in pkgver, pkgrel and the checksums on every service run.
+
+pkgname=sonero
+pkgver=0.1.5
+pkgrel=0
+pkgdesc="Per-application audio mixer, router and equalizer for PipeWire"
+arch=('x86_64')
+url="https://github.com/Tatsu21/sonero"
+license=('MIT')
+depends=('qt6-base' 'libpipewire' 'rnnoise' 'hicolor-icon-theme')
+makedepends=('cmake' 'ninja')
+optdepends=('pipewire: the audio server Sonero drives — without it there is nothing to mix'
+            'wireplumber: session manager that exposes devices to PipeWire'
+            'qt6-wayland: native Wayland windowing instead of XWayland')
+provides=('linuxsonar')
+conflicts=('linuxsonar')
+install="${pkgname}.install"
+source=("${pkgname}-${pkgver}.tar.xz")
+sha256sums=('SKIP')
+
+build() {
+    # The tarball has no .git, so the version comes from the fallback; drop the
+    # +git suffix the service appends, as the spec does. spdlog stays out for
+    # the reason the AUR package gives.
+    cmake -S "${pkgname}-${pkgver}" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DSONERO_FALLBACK_VERSION="${pkgver%%+*}" \
+        -DSONAR_USE_SPDLOG=OFF
+    cmake --build build
+}
+
+check() {
+    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build
+    install -Dm644 "${pkgname}-${pkgver}/LICENSE" \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

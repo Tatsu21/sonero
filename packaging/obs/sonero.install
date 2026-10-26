@@ -1,0 +1,28 @@
+# Sonero — post-transaction work pacman's own hooks do not cover.
+#
+# Reloading udev rules, the desktop database and the icon cache all happen
+# already: systemd ships 35-systemd-udev-reload.hook for usr/lib/udev/rules.d,
+# and desktop-file-utils and gtk-update-icon-cache ship their own. What none of
+# them do is re-apply a new rule to hardware that is already plugged in, which
+# is exactly the case that matters here — the rule grants access to a headset
+# the user has been wearing since before the install.
+
+_retrigger_hidraw() {
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm trigger --subsystem-match=hidraw || true
+    fi
+}
+
+post_install() {
+    _retrigger_hidraw
+    cat <<'MSG'
+Sonero needs PipeWire and WirePlumber running to see any audio.
+SteelSeries headset battery works through the udev rule this package
+installs; a headset that was already connected picks it up after a
+replug or a reboot.
+MSG
+}
+
+post_upgrade() {
+    _retrigger_hidraw
+}

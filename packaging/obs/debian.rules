@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+#
+# The Debian half of the OBS package: debtransform assembles debian/ from the
+# debian.* files next to this one and unpacks the tarball tar_scm made from main.
+
+include /usr/share/dpkg/pkg-info.mk
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export QT_QPA_PLATFORM = offscreen
+
+# The tarball has no .git, so the version comes from the fallback; drop the
+# +git suffix the service appends, as the spec does.
+UPSTREAM := $(firstword $(subst +, ,$(DEB_VERSION_UPSTREAM)))
+
+%:
+	dh $@ --buildsystem=cmake+ninja
+
+# spdlog stays out, as in the GitHub .deb: its package name encodes both its
+# own and libfmt's ABI, and differs on every distribution.
+override_dh_auto_configure:
+	dh_auto_configure -- \
+	    -DCMAKE_BUILD_TYPE=Release \
+	    -DSONAR_USE_SPDLOG=OFF \
+	    -DSONERO_FALLBACK_VERSION=$(UPSTREAM)
+
+override_dh_auto_install:
+	dh_auto_install
+	desktop-file-validate debian/sonero/usr/share/applications/Sonero.desktop
