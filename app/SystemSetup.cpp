@@ -111,6 +111,12 @@ QString resourcePath(const QString& relative) {
         roots << appDir + QStringLiteral("/usr/share/sonero");
         roots << appDir + QStringLiteral("/usr/share");
     }
+    // A snap is mounted read-only at $SNAP, and its /usr is not the host's.
+    const QString snap = qEnvironmentVariable("SNAP");
+    if (!snap.isEmpty()) {
+        roots << snap + QStringLiteral("/usr/share/sonero");
+        roots << snap + QStringLiteral("/usr/share");
+    }
     roots << QStringLiteral("/usr/share/sonero") << QStringLiteral("/usr/local/share/sonero");
     // Development: run straight from the build tree. Both the packaging
     // directory (icons, udev rules, the desktop file) and the source root

@@ -272,6 +272,43 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+  # The snap, built from snap/snapcraft.yaml in an LXD container on every run,
+  # so a broken recipe shows up here rather than at release time. Published to
+  # the edge channel from main only, and only once SNAPCRAFT_STORE_CREDENTIALS
+  # exists — it is created with:
+  #   snapcraft export-login --snaps=sonero --channels=edge,stable --acls package_access,package_push,package_update,package_release -
+  # Until the Snap Store grants classic confinement, an upload waits in manual
+  # review instead of being released.
+  snap:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — the snap's version is the latest release tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: snapcore/action-build@v1
+        id: build
+
+      - name: Upload snap
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap  # not Sonero-*: collect-artifacts.sh owns that pattern
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Publish to edge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "${SNAPCRAFT_STORE_CREDENTIALS}" ]; then
+            echo "::notice::SNAPCRAFT_STORE_CREDENTIALS is not set — built, not published"
+            exit 0
+          fi
+          sudo snap install snapcraft --classic
+          snapcraft upload --release=edge "${{ steps.build.outputs.snap }}"
+
   # The AUR is the one channel where a broken package is the user's problem and
   # not a red CI run: `yay -S sonero` builds from the PKGBUILD as pushed, on the
   # user's machine, with no binary in between. So the package is built here the

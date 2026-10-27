@@ -86,6 +86,7 @@ QString humanNetworkError(QNetworkReply* reply) {
 InstallFacts currentInstall() {
     InstallFacts facts;
     facts.appImagePath = qEnvironmentVariable("APPIMAGE");
+    facts.snapName = qEnvironmentVariable("SNAP_NAME");
     facts.executablePath = QCoreApplication::applicationFilePath();
     facts.hasPacmanDb = QFileInfo::exists(QStringLiteral("/var/lib/pacman/local"));
     facts.hasDpkgDb = QFileInfo::exists(QStringLiteral("/var/lib/dpkg/status"));
@@ -93,6 +94,11 @@ InstallFacts currentInstall() {
 }
 
 Channel classify(const InstallFacts& facts) {
+    // snapd sets $SNAP_NAME for everything it starts, and its files live under
+    // /snap — which no other rule below would recognise as packaged.
+    if (!facts.snapName.isEmpty()) {
+        return Channel::Snap;
+    }
     // $APPIMAGE is set by the runtime itself and points at the bundle, so it
     // settles the question before any path guessing starts.
     if (!facts.appImagePath.isEmpty()) {
@@ -129,6 +135,9 @@ QString upgradeCommand(Channel channel) {
             return QStringLiteral("sudo apt install ./sonero_*_amd64.deb");
         case Channel::Source:
             return QStringLiteral("git pull && cmake --build build --parallel");
+        case Channel::Snap:
+            // Only for the impatient: snapd refreshes on its own, a few times a day.
+            return QStringLiteral("sudo snap refresh sonero");
         case Channel::AppImage:
         case Channel::Package:
             break;
@@ -196,6 +205,8 @@ QString channelName(Channel channel) {
     switch (channel) {
         case Channel::AppImage:
             return QStringLiteral("AppImage");
+        case Channel::Snap:
+            return QStringLiteral("snap");
         case Channel::Pacman:
             return QStringLiteral("pacman package");
         case Channel::Deb:

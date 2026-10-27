@@ -26,6 +26,7 @@ namespace sonar::update {
 // user's password, via polkit), and everything else is told what to run.
 enum class Channel {
     AppImage,  // a portable bundle we may replace with a newer one
+    Snap,      // installed by snapd, which refreshes it on its own
     Pacman,    // installed by pacman — the AUR package, or a local makepkg
     Deb,       // installed by dpkg/apt; updated by handing apt the new .deb
     Package,   // some other package manager owns it: /usr, but neither db exists
@@ -36,6 +37,7 @@ enum class Channel {
 // be tested without an AppImage, a package database, or a particular machine.
 struct InstallFacts {
     QString appImagePath;  // $APPIMAGE, empty when not running from a bundle
+    QString snapName;      // $SNAP_NAME, empty when not running from a snap
     QString executablePath;
     bool hasPacmanDb = false;  // /var/lib/pacman/local
     bool hasDpkgDb = false;    // /var/lib/dpkg/status

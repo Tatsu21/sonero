@@ -27,6 +27,7 @@ private slots:
     void mapsOsReleaseToADebTarget();
     void classifiesAppImageBeforeAnythingElse();
     void classifiesSystemPrefixesByPackageDatabase();
+    void classifiesSnapBeforeAnythingElse();
     void classifiesEverythingElseAsALocalBuild();
     void namesTheCommandForChannelsItWillNotUpdate();
 
@@ -227,6 +228,17 @@ void UpdaterTest::classifiesSystemPrefixesByPackageDatabase() {
 
     facts.hasDpkgDb = false;
     QCOMPARE(update::classify(facts), update::Channel::Package);
+}
+
+void UpdaterTest::classifiesSnapBeforeAnythingElse() {
+    update::InstallFacts facts;
+    facts.snapName = QStringLiteral("sonero");
+    // /snap is no system prefix, and the host's package database says nothing
+    // about who installed this copy.
+    facts.executablePath = QStringLiteral("/snap/sonero/12/usr/bin/Sonero");
+    facts.hasDpkgDb = true;
+    QCOMPARE(update::classify(facts), update::Channel::Snap);
+    QVERIFY(update::upgradeCommand(update::Channel::Snap).contains(QLatin1String("snap refresh")));
 }
 
 void UpdaterTest::classifiesEverythingElseAsALocalBuild() {

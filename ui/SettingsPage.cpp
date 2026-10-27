@@ -223,6 +223,12 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
                                       "system and has apt install it — your password is "
                                       "asked for — then Sonero restarts.");
             break;
+        case update::Channel::Snap:
+            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
+                                      "exists. snapd installs new versions by itself, a few "
+                                      "times a day; the command below only makes it happen "
+                                      "now.");
+            break;
         default:
             hintText = QStringLiteral("Asks github.com once a day whether a newer release "
                                       "exists, and tells you. Installing it stays your "

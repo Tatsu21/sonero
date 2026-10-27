@@ -47,6 +47,12 @@ QString executablePath() {
     if (!appImage.isEmpty() && QFileInfo::exists(appImage)) {
         return appImage;
     }
+    // A snap's binary lives under /snap/<name>/<revision>/, and the revision is
+    // gone after the next refresh; /snap/bin/<name> is the launcher that stays.
+    const QString snapName = qEnvironmentVariable("SNAP_NAME");
+    if (!snapName.isEmpty()) {
+        return QStringLiteral("/snap/bin/") + snapName;
+    }
     return QCoreApplication::applicationFilePath();
 }
 

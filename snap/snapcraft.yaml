@@ -1,0 +1,112 @@
+name: sonero
+title: Sonero
+base: core24
+adopt-info: sonero
+summary: Per-application audio mixer, router and equalizer for PipeWire
+description: |
+  Every app on its own channel, every output device first-class. Sonero sits
+  on top of PipeWire: per-application volume and routing, a parametric
+  equalizer, microphone noise suppression, and battery levels for Bluetooth
+  and SteelSeries headsets.
+license: MIT
+icon: packaging/icons/sonero-256.png
+website: https://tatsu21.github.io/sonero/
+source-code: https://github.com/Tatsu21/sonero
+issues: https://github.com/Tatsu21/sonero/issues
+grade: stable
+
+# Classic, not strict. A mixer has to see and move every other application's
+# streams; PipeWire hands a strictly confined snap only its own, whatever
+# audio interfaces are connected. And the SteelSeries battery reading needs a
+# udev rule, which a strict snap cannot install. Classic needs the Snap Store's
+# approval: https://forum.snapcraft.io/c/store-requests
+confinement: classic
+
+platforms:
+  amd64:
+
+apps:
+  sonero:
+    command: usr/bin/Sonero
+    desktop: usr/share/applications/Sonero.desktop
+    environment:
+      # Classic: Qt would otherwise look for its platform plugins under the
+      # host's /usr, and find ones built for a different Qt.
+      QT_PLUGIN_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qt6/plugins
+      QT_QPA_PLATFORM_PLUGIN_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qt6/plugins/platforms
+
+parts:
+  # Not in Ubuntu 24.04, so built here, statically — the same source, model and
+  # checksums as packaging/build-rnnoise.sh.
+  rnnoise:
+    plugin: autotools
+    source: https://gitlab.xiph.org/xiph/rnnoise/-/archive/v0.2/rnnoise-v0.2.tar.gz
+    source-checksum: sha512/930aa892299edbc1d512803df6b845ea6164eb498cacdab9970e5ae799bc6cf3c8c94d2b9576955fb9a2d8aa13a6d255e58fb99d0367a0d0ef842a1cb938e674
+    build-packages: [autoconf, automake, libtool, curl]
+    override-pull: |
+      craftctl default
+      # The weights ship separately and unpack into their own src/, which
+      # belongs on top of the source tree's. Without them the library builds
+      # and does nothing.
+      curl -fsSL --retry 3 -o model.tar.gz \
+        https://media.xiph.org/rnnoise/models/rnnoise_data-0b50c45.tar.gz
+      echo "c15fef7c88d86264a29a3dab14d94bde769da68f255d131d135f6a40d94037b1ffe521f9e0a26339114750dbdd7cf774c3185ba40279c74200fb32732f57db8b  model.tar.gz" \
+        | sha512sum -c -
+      tar -xzf model.tar.gz
+      rm model.tar.gz
+    autotools-bootstrap-parameters: [-isf]
+    autotools-configure-parameters:
+      - --prefix=/usr
+      - --disable-shared
+      - --enable-static
+      - --with-pic
+      - --enable-x86-rtcd
+    # Linked into Sonero; nothing of it belongs in the snap itself.
+    prime: [-*]
+
+  sonero:
+    after: [rnnoise]
+    plugin: cmake
+    source: .
+    cmake-generator: Ninja
+    cmake-parameters:
+      - -DCMAKE_INSTALL_PREFIX=/usr
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TESTING=OFF
+      # The built-in logger, as in every other package: see CMakeLists.txt.
+      - -DSONAR_USE_SPDLOG=OFF
+    build-environment:
+      - PKG_CONFIG_PATH: $CRAFT_STAGE/usr/lib/pkgconfig
+    build-packages:
+      - g++
+      - git
+      - ninja-build
+      - pkg-config
+      - qt6-base-dev
+      - qt6-base-dev-tools
+      - libpipewire-0.3-dev
+      - libgl-dev
+    stage-packages:
+      - libqt6core6t64
+      - libqt6gui6t64
+      - libqt6widgets6t64
+      - libqt6dbus6t64
+      - libqt6network6t64
+      - qt6-qpa-plugins
+      - qt6-wayland
+      - libpipewire-0.3-0t64
+    # Classic snaps run against the host's root filesystem: point the binary at
+    # core24's loader and at the libraries staged here, or it picks up the
+    # host's, built against another glibc and another Qt.
+    build-attributes: [enable-patchelf]
+    override-pull: |
+      craftctl default
+      # The release tag, as CMakeLists.txt reads it; a commit past the tag
+      # says so, like the OBS builds do.
+      craftctl set version="$(git describe --tags --match '[0-9]*' 2>/dev/null \
+        | sed -E 's/-([0-9]+)-g([0-9a-f]+)$/+git\1.\2/' || echo 0.0.0)"
+    override-prime: |
+      craftctl default
+      # The desktop file names a themed icon the host does not have.
+      sed -i 's|^Icon=.*|Icon=${SNAP}/usr/share/icons/hicolor/256x256/apps/Sonero.png|' \
+        usr/share/applications/Sonero.desktop
