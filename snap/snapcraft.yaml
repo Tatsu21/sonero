@@ -39,10 +39,12 @@ parts:
   # Not in Ubuntu 24.04, so built here, statically — the same source, model and
   # checksums as packaging/build-rnnoise.sh.
   rnnoise:
-    plugin: autotools
+    # nil, not autotools: that plugin runs ./autogen.sh, which in 0.2 also
+    # downloads a model with wget — and the model is already here, checked.
+    plugin: nil
     source: https://gitlab.xiph.org/xiph/rnnoise/-/archive/v0.2/rnnoise-v0.2.tar.gz
     source-checksum: sha512/930aa892299edbc1d512803df6b845ea6164eb498cacdab9970e5ae799bc6cf3c8c94d2b9576955fb9a2d8aa13a6d255e58fb99d0367a0d0ef842a1cb938e674
-    build-packages: [autoconf, automake, libtool, curl]
+    build-packages: [gcc, make, autoconf, automake, libtool, curl]
     override-pull: |
       craftctl default
       # The weights ship separately and unpack into their own src/, which
@@ -54,13 +56,15 @@ parts:
         | sha512sum -c -
       tar -xzf model.tar.gz
       rm model.tar.gz
-    autotools-bootstrap-parameters: [-isf]
-    autotools-configure-parameters:
-      - --prefix=/usr
-      - --disable-shared
-      - --enable-static
-      - --with-pic
-      - --enable-x86-rtcd
+    # As packaging/build-rnnoise.sh does it: static and position-independent,
+    # since it is linked into a PIE.
+    override-build: |
+      autoreconf -isf
+      ./configure --prefix=/usr \
+        --disable-shared --enable-static --with-pic --enable-x86-rtcd \
+        CFLAGS="-O2 -fPIC"
+      make -j"${CRAFT_PARALLEL_BUILD_COUNT}"
+      make install DESTDIR="${CRAFT_PART_INSTALL}"
     # Linked into Sonero; nothing of it belongs in the snap itself.
     prime: [-*]
 
