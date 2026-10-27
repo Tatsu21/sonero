@@ -278,7 +278,9 @@ jobs:
   # exists — it is created with:
   #   snapcraft export-login --snaps=sonero --channels=edge,stable --acls package_access,package_push,package_update,package_release -
   # Until the Snap Store grants classic confinement, an upload waits in manual
-  # review instead of being released.
+  # review instead of being released — so publishing is also gated on the
+  # SNAP_PUBLISH repository variable, set to true once classic is granted.
+  # Otherwise every push to main queues one more revision for the reviewers.
   snap:
     runs-on: ubuntu-latest
     steps:
@@ -298,7 +300,9 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to edge
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          vars.SNAP_PUBLISH == 'true'
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |
