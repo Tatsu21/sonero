@@ -28,6 +28,7 @@ class Updater;
 
 namespace sonar::ui {
 class Notifier;
+class MicrophonePage;
 class MixerPage;
 class TrayMixer;
 }
@@ -68,6 +69,7 @@ private:
     void buildUi();
     void buildTrayIcon();
     void showTrayMixer();  // the volume faders, as a window the tray opens
+    void rebuildTrayMicMenu();  // mute and the input devices, as the tray lists them
     // Rewrites the battery entries at the top of the tray menu.
     void showBatteries(const QList<BatteryLevel>& levels);
     void showBackgroundHintOnce();  // one-time "still running" hint on first hide
@@ -96,6 +98,8 @@ private:
     // with its parent, and the tray must stay usable while the window is hidden.
     std::unique_ptr<TrayMixer> trayMixer_;
     QMenu* trayMenu_ = nullptr;                   // null when no tray is available
+    MicrophonePage* microphonePage_ = nullptr;    // owns the input selection and mute
+    QMenu* trayMicMenu_ = nullptr;
     QList<QAction*> batteryActions_;              // rebuilt as levels change
     bool forceQuit_ = false;                       // set by the tray's Quit action
 };

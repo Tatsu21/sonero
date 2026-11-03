@@ -95,6 +95,36 @@ std::string streamSendArgs(const std::string& channelNode, const std::string& mi
         channelNode, mixNode);
 }
 
+// The echo canceller in front of the microphone: PipeWire's own module, running
+// WebRTC's canceller. Monitor mode, because the reference is whatever the output
+// already plays — taken from its monitor — rather than audio that has to be sent
+// through a sink of the module's own.
+//
+// Mono at 48 kHz, which is what the chain runs at anyway. WebRTC's own noise
+// suppression, gain control and high-pass are off: the chain has all three, and
+// an automatic gain in front of a compressor is two hands on one fader.
+//
+// Passive on both captures, like the chain's own: an unused microphone must stay
+// free to suspend. Not dont-fallback, though — that is decided here, and a
+// reference that falls back to another output is still better than none.
+constexpr const char* kEchoSourceNode = "sonero_echo_cancel";
+
+std::string echoCancelArgs(const std::string& mic, const std::string& reference) {
+    return fmt::format(
+        R"({{ library.name = aec/libspa-aec-webrtc monitor.mode = true )"
+        R"(audio.rate = 48000 audio.channels = 1 audio.position = [ MONO ] )"
+        R"(aec.args = {{ webrtc.gain_control = false webrtc.noise_suppression = false )"
+        R"(webrtc.high_pass_filter = false webrtc.voice_detection = false )"
+        R"(webrtc.transient_suppression = false }} )"
+        R"(capture.props = {{ node.name = "{2}.capture" target.object = "{0}" )"
+        R"(node.passive = true node.virtual = true node.dont-fallback = true }} )"
+        R"(source.props = {{ node.name = "{2}" node.description = "Sonero echo cancellation" )"
+        R"(node.virtual = true node.passive = true }} )"
+        R"(sink.props = {{ node.name = "{2}.reference" target.object = "{1}" )"
+        R"(node.passive = true node.virtual = true }} }})",
+        mic, reference, kEchoSourceNode);
+}
+
 // Extract the sink name from a default metadata value like {"name":"foo"}.
 std::string parseSinkName(const char* json) {
     if (json == nullptr) {
@@ -224,13 +254,13 @@ void PipeWireManager::createVirtualSinks() {
 
         // The Microphone channel is a virtual SOURCE (capture the real mic → the
         // voice chain → Audio/Source); every other channel is an Audio/Sink.
-        // Never bind the mic capture to a Bluetooth input: doing so forces the
-        // headset into HFP and kills its A2DP music quality. A BT mic and A2DP
-        // playback cannot coexist, so we keep A2DP and leave the capture idle.
         if (id == ChannelId::Microphone) {
-            const std::string micTarget =
-                startsWith(realDefaultSource_, "bluez") ? std::string() : realDefaultSource_;
-            if (!mic_.start(core_, node, desc, micTarget)) {
+            // Started unattached, then attached through the same path every
+            // later change takes — which is also what puts the echo canceller in
+            // front of it when that is on.
+            if (mic_.start(core_, node, desc, std::string())) {
+                applyMicRouteLocked();
+            } else {
                 log::warn("PipeWire: the microphone node could not be created");
             }
             continue;
@@ -342,6 +372,7 @@ void PipeWireManager::teardown() noexcept {
         processor.stop();
     }
 
+    destroyEchoCancelLocked();
     for (pw_impl_module* module : modules_) {
         if (module != nullptr) {
             pw_impl_module_destroy(module);
@@ -355,6 +386,7 @@ void PipeWireManager::teardown() noexcept {
         metadata_ = nullptr;
     }
     realDefaultSink_.clear();
+    realDefaultSource_.clear();
     if (registry_ != nullptr) {
         spa_hook_remove(&registryListener_);
         pw_proxy_destroy(reinterpret_cast<pw_proxy*>(registry_));
@@ -379,6 +411,9 @@ void PipeWireManager::teardown() noexcept {
     assignments_.clear();
     sinkSerials_.clear();
     devices_.clear();
+    inputs_.clear();
+    micDevice_.clear();
+    realDefaultSinkShared_.clear();
 }
 
 // --- IAppRouter --------------------------------------------------------------
@@ -482,13 +517,33 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             if (const char* d = spa_dict_lookup(props, "device.id"); d != nullptr) {
                 dev.deviceId = static_cast<std::uint32_t>(std::strtoul(d, nullptr, 10));
             }
+            if (const char* r = spa_dict_lookup(props, "card.profile.device"); r != nullptr) {
+                dev.routeDevice = static_cast<std::int32_t>(std::strtol(r, nullptr, 10));
+            }
             dev.type = classifyDeviceType(nodeName);
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 devices_[id] = std::move(dev);
             }
             devicesRevision_.fetch_add(1, std::memory_order_relaxed);
+            micInputRevision_.fetch_add(1, std::memory_order_relaxed);
             applyAllRoutesLocked();  // a (re)connected device may reclaim its channels
+            applyMicRouteLocked();   // ...and the echo canceller its speakers
+        } else if ((std::strcmp(mediaClass, "Audio/Source") == 0 ||
+                    std::strcmp(mediaClass, "Audio/Source/Virtual") == 0) &&
+                   !nodeName.empty() && !startsWith(nodeName, "sonero_")) {
+            // A real input, or someone else's filter in front of one.
+            MicInputDevice input;
+            input.name = nodeName;
+            const char* desc = spa_dict_lookup(props, "node.description");
+            input.description = (desc != nullptr && desc[0] != '\0') ? desc : nodeName;
+            input.type = classifyDeviceType(nodeName);
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                inputs_[id] = std::move(input);
+            }
+            micInputRevision_.fetch_add(1, std::memory_order_relaxed);
+            applyMicRouteLocked();  // the chosen device may just have come back
         } else if (std::strcmp(mediaClass, "Stream/Input/Audio") == 0 &&
                    startsWith(nodeName, "sonero_") && endsWith(nodeName, ".stream")) {
             // The capture side of a channel's stream send. Remember its id so the
@@ -542,6 +597,7 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
 void PipeWireManager::onGlobalRemove(std::uint32_t id) {
     bool changed = false;
     bool deviceRemoved = false;
+    bool inputRemoved = false;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         changed = apps_.erase(id) > 0;
@@ -550,12 +606,19 @@ void PipeWireManager::onGlobalRemove(std::uint32_t id) {
             devicesRevision_.fetch_add(1, std::memory_order_relaxed);
             deviceRemoved = true;
         }
+        inputRemoved = inputs_.erase(id) > 0;
         for (auto it = channelOut_.begin(); it != channelOut_.end();) {
             it = it->second.id == id ? channelOut_.erase(it) : std::next(it);
         }
     }
     if (deviceRemoved) {
         applyAllRoutesLocked();  // channels pinned to it fall back to the default
+        micInputRevision_.fetch_add(1, std::memory_order_relaxed);
+        applyMicRouteLocked();
+    }
+    if (inputRemoved) {
+        micInputRevision_.fetch_add(1, std::memory_order_relaxed);
+        applyMicRouteLocked();
     }
     if (changed) {
         bumpRevision();
@@ -578,12 +641,18 @@ void PipeWireManager::onMetaProperty(std::uint32_t subject, const char* key,
     if (std::strcmp(key, "default.audio.source") == 0) {
         const std::string src = parseSinkName(value);
         if (!src.empty() && !startsWith(src, "sonero_")) {
-            realDefaultSource_ = src;
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                realDefaultSource_ = src;
+            }
+            micInputRevision_.fetch_add(1, std::memory_order_relaxed);
+            applyMicRouteLocked();
         }
         return;
     }
 
-    if (std::strcmp(key, "default.audio.sink") != 0) {
+    const bool configured = std::strcmp(key, "default.configured.audio.sink") == 0;
+    if (!configured && std::strcmp(key, "default.audio.sink") != 0) {
         return;
     }
 
@@ -593,16 +662,36 @@ void PipeWireManager::onMetaProperty(std::uint32_t subject, const char* key,
     }
 
     if (startsWith(name, "sonero_")) {
-        // A virtual sink was made default; put it back to the real one.
-        if (!realDefaultSink_.empty() && metadata_ != nullptr) {
-            const std::string json = "{\"name\":\"" + realDefaultSink_ + "\"}";
-            pw_metadata_set_property(metadata_, 0, "default.audio.sink",
-                                     "Spa:String:JSON", json.c_str());
-            log::info("PipeWire: default sink kept off '{}' (restored '{}')", name,
-                      realDefaultSink_);
+        // A virtual sink was made default; put the choice back on a real one.
+        // The configured key, not default.audio.sink: that one is the session
+        // manager's answer, recomputed from the configured one, so writing it
+        // changes nothing for long — while a configured sonero_* stays saved and
+        // comes back at every login, where at worst it resolves to no output at
+        // all and the desktop shows itself muted.
+        if (metadata_ != nullptr) {
+            if (!realDefaultSink_.empty()) {
+                const std::string json = "{ \"name\": \"" + realDefaultSink_ + "\" }";
+                pw_metadata_set_property(metadata_, 0, "default.configured.audio.sink",
+                                         "Spa:String:JSON", json.c_str());
+            } else {
+                // No real default seen yet (it was ours since before we started):
+                // drop the choice and let the session manager pick a real one.
+                pw_metadata_set_property(metadata_, 0, "default.configured.audio.sink",
+                                         nullptr, nullptr);
+            }
+            log::info("PipeWire: default sink kept off '{}' (now '{}')", name,
+                      realDefaultSink_.empty() ? "session manager's choice" : realDefaultSink_);
         }
+    } else if (configured) {
+        return;  // a real choice; the effective default follows and is handled below
     } else {
         realDefaultSink_ = name;  // remember the real default to restore to
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            realDefaultSinkShared_ = name;
+        }
+        micInputRevision_.fetch_add(1, std::memory_order_relaxed);
+        applyMicRouteLocked();    // the echo canceller may be listening to the default
     }
 }
 
@@ -958,11 +1047,119 @@ void onNodeVolumeParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t 
 }
 }  // namespace
 
+namespace {
+// The active output route of a device, for one of its sinks. A hardware sink's
+// volume lives here, not on the node: the node's own channelVolumes can be written,
+// but the device never applies them and the session manager never saves them —
+// which is how a slider here once looked right while the speakers sat at whatever
+// the route had been restored to at boot.
+struct RouteCollector {
+    std::int32_t wantDevice = -1;
+    bool found = false;
+    std::int32_t index = 0;
+    std::int32_t device = 0;
+    std::vector<float> volumes;
+};
+
+void onDeviceRouteParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*index*/,
+                        std::uint32_t /*next*/, const spa_pod* param) {
+    if (param == nullptr || id != SPA_PARAM_Route) {
+        return;
+    }
+    auto* c = static_cast<RouteCollector*>(data);
+    std::int32_t index = 0;
+    std::int32_t device = 0;
+    std::uint32_t direction = 0;
+    const spa_pod* props = nullptr;
+    if (spa_pod_parse_object(param, SPA_TYPE_OBJECT_ParamRoute, nullptr,
+                             SPA_PARAM_ROUTE_index, SPA_POD_Int(&index),
+                             SPA_PARAM_ROUTE_direction, SPA_POD_Id(&direction),
+                             SPA_PARAM_ROUTE_device, SPA_POD_Int(&device),
+                             SPA_PARAM_ROUTE_props, SPA_POD_OPT_Pod(&props)) < 0) {
+        return;
+    }
+    if (direction != SPA_DIRECTION_OUTPUT || device != c->wantDevice || props == nullptr) {
+        return;
+    }
+    const auto* obj = reinterpret_cast<const spa_pod_object*>(props);
+    const spa_pod_prop* prop = spa_pod_object_find_prop(obj, nullptr, SPA_PROP_channelVolumes);
+    if (prop == nullptr) {
+        return;
+    }
+    std::uint32_t n = 0;
+    const auto* vals = static_cast<const float*>(spa_pod_get_array(&prop->value, &n));
+    if (vals == nullptr || n == 0) {
+        return;
+    }
+    c->found = true;
+    c->index = index;
+    c->device = device;
+    c->volumes.assign(vals, vals + n);
+}
+
+// Volume sliders on the desktop are cubic: the same position means the same
+// loudness here and there.
+float toCubic(float linear) { return std::cbrt(std::clamp(linear, 0.0f, 1.0f)); }
+float fromCubic(float cubic) {
+    const float c = std::clamp(cubic, 0.0f, 1.0f);
+    return c * c * c;
+}
+}  // namespace
+
+bool PipeWireManager::readRouteLocked(std::uint32_t nodeId, RouteState& out) {
+    std::uint32_t deviceId = 0;
+    std::int32_t routeDevice = -1;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        const auto it = devices_.find(nodeId);
+        if (it == devices_.end()) {
+            return false;
+        }
+        deviceId = it->second.deviceId;
+        routeDevice = it->second.routeDevice;
+    }
+    if (deviceId == 0 || routeDevice < 0) {
+        return false;
+    }
+    auto* dev = static_cast<pw_device*>(pw_registry_bind(
+        registry_, deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE, 0));
+    if (dev == nullptr) {
+        return false;
+    }
+    RouteCollector collector;
+    collector.wantDevice = routeDevice;
+    spa_hook hook{};
+    static const pw_device_events kEvents = {
+        .version = PW_VERSION_DEVICE_EVENTS,
+        .param = &onDeviceRouteParam,
+    };
+    pw_device_add_listener(dev, &hook, &kEvents, &collector);
+    pw_device_enum_params(dev, 0, SPA_PARAM_Route, 0, UINT32_MAX, nullptr);
+    doRoundtrip();
+    doRoundtrip();
+    spa_hook_remove(&hook);
+    out.device = dev;
+    out.index = collector.index;
+    out.routeDevice = collector.device;
+    out.volumes = std::move(collector.volumes);
+    if (!collector.found) {
+        pw_proxy_destroy(reinterpret_cast<pw_proxy*>(dev));
+        out.device = nullptr;
+        return false;
+    }
+    return true;
+}
+
 float PipeWireManager::deviceVolume(std::uint32_t nodeId) {
     if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) {
         return 1.0f;
     }
     pw_thread_loop_lock(loop_);
+    if (RouteState route; readRouteLocked(nodeId, route)) {
+        pw_proxy_destroy(reinterpret_cast<pw_proxy*>(route.device));
+        pw_thread_loop_unlock(loop_);
+        return toCubic(route.volumes.front());
+    }
     auto* node = static_cast<pw_node*>(
         pw_registry_bind(registry_, nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0));
     if (node == nullptr) {
@@ -982,11 +1179,47 @@ float PipeWireManager::deviceVolume(std::uint32_t nodeId) {
     spa_hook_remove(&hook);
     pw_proxy_destroy(reinterpret_cast<pw_proxy*>(node));
     pw_thread_loop_unlock(loop_);
-    return collector.volume >= 0.0f ? collector.volume : 1.0f;
+    return collector.volume >= 0.0f ? toCubic(collector.volume) : 1.0f;
 }
 
-
 void PipeWireManager::setDeviceVolume(std::uint32_t nodeId, float volume) {
+    if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) {
+        return;
+    }
+    const float linear = fromCubic(volume);
+    pw_thread_loop_lock(loop_);
+    RouteState route;
+    if (!readRouteLocked(nodeId, route)) {
+        pw_thread_loop_unlock(loop_);
+        setNodeVolume(nodeId, linear);  // no route (a virtual or network sink)
+        return;
+    }
+    // Exactly what the desktop's own slider sends: the route, all its channels,
+    // and save — so this is the volume the speakers come back at after a reboot.
+    std::vector<float> volumes(route.volumes.size(), linear);
+    std::uint8_t buffer[1024];
+    spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    spa_pod_frame outer{};
+    spa_pod_frame inner{};
+    spa_pod_builder_push_object(&b, &outer, SPA_TYPE_OBJECT_ParamRoute, SPA_PARAM_Route);
+    spa_pod_builder_add(&b, SPA_PARAM_ROUTE_index, SPA_POD_Int(route.index),
+                        SPA_PARAM_ROUTE_device, SPA_POD_Int(route.routeDevice), 0);
+    spa_pod_builder_prop(&b, SPA_PARAM_ROUTE_props, 0);
+    spa_pod_builder_push_object(&b, &inner, SPA_TYPE_OBJECT_Props, SPA_PARAM_Route);
+    spa_pod_builder_add(&b, SPA_PROP_channelVolumes,
+                        SPA_POD_Array(sizeof(float), SPA_TYPE_Float,
+                                      static_cast<std::uint32_t>(volumes.size()), volumes.data()),
+                        0);
+    spa_pod_builder_pop(&b, &inner);
+    spa_pod_builder_add(&b, SPA_PARAM_ROUTE_save, SPA_POD_Bool(true), 0);
+    auto* pod = static_cast<spa_pod*>(spa_pod_builder_pop(&b, &outer));
+    pw_device_set_param(route.device, SPA_PARAM_Route, 0, pod);
+    doRoundtrip();
+    pw_proxy_destroy(reinterpret_cast<pw_proxy*>(route.device));
+    pw_thread_loop_unlock(loop_);
+}
+
+void PipeWireManager::setNodeVolume(std::uint32_t nodeId, float volume) {
     if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) {
         return;
     }
@@ -1043,7 +1276,7 @@ void PipeWireManager::setStreamLevel(ChannelId id, float level) {
         }
     }
     if (nodeId != 0) {
-        setDeviceVolume(nodeId, level);  // same mechanism: bind, set, release
+        setNodeVolume(nodeId, level);  // a stream of ours: it has no route
     }
 }
 
@@ -1196,22 +1429,195 @@ std::string_view PipeWireManager::micNoiseSuppressionBackend() const {
     return MicProcessor::noiseSuppressionBackend();
 }
 
+std::vector<MicInputDevice> PipeWireManager::micInputDevices() const {
+    std::vector<MicInputDevice> out;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        out.reserve(inputs_.size());
+        for (const auto& [id, input] : inputs_) {
+            out.push_back(input);
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const MicInputDevice& a, const MicInputDevice& b) {
+        return a.description < b.description;
+    });
+    return out;
+}
+
+std::string PipeWireManager::resolveMicTarget(const std::string& chosen,
+                                              const std::string& systemDefault,
+                                              const std::vector<std::string>& connected) {
+    const auto isConnected = [&](const std::string& name) {
+        return std::find(connected.begin(), connected.end(), name) != connected.end();
+    };
+    if (!chosen.empty() && isConnected(chosen)) {
+        return chosen;
+    }
+    if (isConnected(systemDefault) && !startsWith(systemDefault, "bluez")) {
+        return systemDefault;
+    }
+    return {};
+}
+
+std::string PipeWireManager::micTarget() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    std::vector<std::string> connected;
+    connected.reserve(inputs_.size());
+    for (const auto& [id, input] : inputs_) {
+        connected.push_back(input.name);
+    }
+    return resolveMicTarget(micChosen_, realDefaultSource_, connected);
+}
+
+void PipeWireManager::applyMicRouteLocked() {
+    const std::string device = micTarget();
+    const std::string target = applyEchoCancelLocked(device);
+    bool deviceMoved = false;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        deviceMoved = device != micDevice_;
+        micDevice_ = device;
+    }
+    if (target != mic_.captureTarget() && mic_.setCaptureTarget(core_, target)) {
+        log::info("Microphone: capturing from {}", target.empty() ? "nothing" : target);
+    }
+    if (deviceMoved || target != mic_.captureTarget()) {
+        micInputRevision_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+std::string PipeWireManager::applyEchoCancelLocked(const std::string& micDevice) {
+    // The reference has to be a real output: the default, unless that is not
+    // known yet. One of our own channel sinks would hold only part of the desktop.
+    std::string reference;
+    bool wanted = false;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        wanted = micEchoCancel_;
+        // The chosen output while it is connected; otherwise the default, which
+        // is at least where everything not pinned elsewhere plays.
+        for (const auto& [id, dev] : devices_) {
+            if (!micEchoSpeakers_.empty() && dev.name == micEchoSpeakers_) {
+                reference = dev.name;
+            }
+        }
+    }
+    if (reference.empty() && !realDefaultSink_.empty() && !startsWith(realDefaultSink_, "sonero_")) {
+        reference = realDefaultSink_;
+    }
+    if (!wanted || micDevice.empty() || reference.empty() || context_ == nullptr) {
+        destroyEchoCancelLocked();
+        return micDevice;
+    }
+    if (echoModule_ != nullptr && echoMic_ == micDevice && echoReference_ == reference) {
+        return kEchoSourceNode;
+    }
+
+    destroyEchoCancelLocked();
+    echoModule_ = pw_context_load_module(context_, "libpipewire-module-echo-cancel",
+                                         echoCancelArgs(micDevice, reference).c_str(), nullptr);
+    if (echoModule_ == nullptr) {
+        // Packaged with PipeWire everywhere, but a distribution can split it out.
+        // Without it the microphone keeps working, only with the echo.
+        log::warn("Microphone: could not load the echo canceller; running without it");
+        return micDevice;
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        echoMic_ = micDevice;
+        echoReference_ = reference;
+    }
+    echoActive_.store(true);
+    log::info("Microphone: echo cancellation on ({} against {})", micDevice, reference);
+    return kEchoSourceNode;
+}
+
+void PipeWireManager::destroyEchoCancelLocked() {
+    if (echoModule_ != nullptr) {
+        pw_impl_module_destroy(echoModule_);
+        echoModule_ = nullptr;
+        log::info("Microphone: echo cancellation off");
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        echoMic_.clear();
+        echoReference_.clear();
+    }
+    echoActive_.store(false);
+}
+
+std::string PipeWireManager::micEchoReference() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return echoActive_.load() ? echoReference_ : std::string();
+}
+
+std::string PipeWireManager::micDefaultOutput() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return realDefaultSinkShared_;
+}
+
+void PipeWireManager::setMicEchoCancellation(bool on, const std::string& speakers) {
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        micEchoCancel_ = on;
+        micEchoSpeakers_ = speakers;
+    }
+    if (loop_ == nullptr || core_ == nullptr) {
+        return;
+    }
+    pw_thread_loop_lock(loop_);
+    applyMicRouteLocked();
+    pw_thread_loop_unlock(loop_);
+}
+
 bool PipeWireManager::setMicCaptureDevice(const std::string& nodeName) {
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        micChosen_ = nodeName;
+    }
     if (loop_ == nullptr || core_ == nullptr) {
         return false;
     }
     // Rebuilding a stream touches the graph, so it happens with the loop held —
     // the same rule every other node change in this file follows.
     pw_thread_loop_lock(loop_);
-    const bool ok = mic_.setCaptureTarget(core_, nodeName);
+    applyMicRouteLocked();
     pw_thread_loop_unlock(loop_);
-    if (!ok) {
-        log::warn("PipeWire: the microphone could not attach to '{}'", nodeName);
-    }
-    return ok;
+    return true;
 }
 
-std::string PipeWireManager::micCaptureDevice() const { return mic_.captureTarget(); }
+std::string PipeWireManager::micCaptureDevice() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return micChosen_;
+}
+
+std::string PipeWireManager::micActiveCaptureDevice() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return micDevice_;
+}
+
+std::string PipeWireManager::micDefaultInput() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return realDefaultSource_;
+}
+
+void PipeWireManager::setMicLive(bool live) {
+    if (loop_ == nullptr || core_ == nullptr) {
+        return;
+    }
+    pw_thread_loop_lock(loop_);
+    mic_.setLive(core_, live);
+    pw_thread_loop_unlock(loop_);
+}
+
+void PipeWireManager::setMicMonitor(bool on, float level) {
+    if (loop_ == nullptr || core_ == nullptr) {
+        return;
+    }
+    pw_thread_loop_lock(loop_);
+    mic_.setMonitor(core_, on, level);
+    pw_thread_loop_unlock(loop_);
+}
 
 float PipeWireManager::micLatencyMs() const { return mic_.latencyMs(); }
 

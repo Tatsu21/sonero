@@ -35,9 +35,16 @@ constexpr std::uint32_t kRingSize = 16384;
 // and on the stack rather than allocated, because this runs on the RT thread.
 constexpr int kMaxBlock = 8192;
 
+// The monitor plays on the output device's clock, which is not the microphone's.
+// The two drift apart, so past this backlog it skips ahead rather than letting
+// the delay on your own voice grow for as long as the app stays open.
+constexpr std::uint32_t kMonitorMaxBacklog = 1920;   // 40 ms
+constexpr std::uint32_t kMonitorSkipTo = 960;        // 20 ms
+
 }  // namespace
 
-MicProcessor::MicProcessor() : ring_(kRingSize, 0.0f), scratch_(kMaxBlock, 0.0f) {
+MicProcessor::MicProcessor()
+    : scratch_(kMaxBlock, 0.0f), ring_(kRingSize, 0.0f), monitorRing_(kRingSize, 0.0f) {
     chain_.prepare(static_cast<float>(kSampleRate));
     noise_.prepare(static_cast<float>(kSampleRate));
     pendingSettings_ = dsp::presetSettings(dsp::MicPreset::Podcast);
@@ -136,7 +143,6 @@ bool MicProcessor::createCapture(pw_core* core, const std::string& captureTarget
         PW_KEY_MEDIA_ROLE, "Communication",
         PW_KEY_NODE_NAME, name.c_str(),
         PW_KEY_NODE_DESCRIPTION, "Sonero microphone input",
-        PW_KEY_NODE_PASSIVE, "true",
         PW_KEY_NODE_LATENCY, kNodeLatency,
         // Both ends of the chain belong to one scheduling group. Without this
         // they are two unrelated islands in the graph: the capture side gets the
@@ -148,8 +154,16 @@ bool MicProcessor::createCapture(pw_core* core, const std::string& captureTarget
         "node.virtual", "true",
         "node.want-driver", "true",
         nullptr);
+    captureKeptRunning_ = live_ || monitor_ != nullptr;
+    if (!captureKeptRunning_) {
+        pw_properties_set(props, PW_KEY_NODE_PASSIVE, "true");
+    }
     if (!captureTarget.empty()) {
         pw_properties_set(props, PW_KEY_TARGET_OBJECT, captureTarget.c_str());
+        // Which device this falls back to is decided in PipeWireManager. Left to
+        // the session manager, a target that has just gone away is replaced by the
+        // default source — which can be Sonero Microphone itself.
+        pw_properties_set(props, "node.dont-fallback", "true");
     }
 
     capture_ = pw_stream_new(core, name.c_str(), props);
@@ -305,7 +319,98 @@ bool MicProcessor::setCaptureTarget(pw_core* core, const std::string& captureTar
     return createCapture(core, captureTarget);
 }
 
+void MicProcessor::setLive(pw_core* core, bool live) {
+    live_ = live;
+    applyKeepRunning(core);
+}
+
+void MicProcessor::applyKeepRunning(pw_core* core) {
+    // Unlike a device change this leaves the chain's state alone: it is the same
+    // microphone in the same room, and only the stream around it is new.
+    const bool wanted = live_ || monitor_ != nullptr;
+    if (core == nullptr || playback_ == nullptr || capture_ == nullptr ||
+        wanted == captureKeptRunning_) {
+        return;
+    }
+    const std::string target = captureTarget();
+    destroyCapture();
+    createCapture(core, target);
+}
+
+bool MicProcessor::createMonitor(pw_core* core) {
+    const std::string name = nodeName_ + ".monitor";
+    pw_properties* props = pw_properties_new(
+        PW_KEY_MEDIA_TYPE, "Audio",
+        PW_KEY_MEDIA_CATEGORY, "Playback",
+        PW_KEY_NODE_NAME, name.c_str(),
+        PW_KEY_NODE_DESCRIPTION, "Sonero microphone monitor",
+        PW_KEY_NODE_LATENCY, kNodeLatency,
+        // Virtual for the same reason as a channel's output stream: a screen
+        // share would otherwise send your own voice a second time.
+        "node.virtual", "true",
+        nullptr);
+
+    monitor_ = pw_stream_new(core, name.c_str(), props);
+    if (monitor_ == nullptr) {
+        log::warn("Microphone: could not create the monitor stream");
+        return false;
+    }
+
+    static const pw_stream_events kMonitorEvents = {
+        .version = PW_VERSION_STREAM_EVENTS,
+        .process = &MicProcessor::onMonitorProcess,
+    };
+    pw_stream_add_listener(monitor_, &monitorListener_, &kMonitorEvents, this);
+
+    std::uint8_t buffer[1024];
+    spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    spa_audio_info_raw format = {};
+    format.format = SPA_AUDIO_FORMAT_F32;
+    format.rate = kSampleRate;
+    format.channels = 1;
+    format.position[0] = SPA_AUDIO_CHANNEL_MONO;
+
+    const spa_pod* params[1];
+    params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &format);
+
+    if (pw_stream_connect(monitor_, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+                          static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT |
+                                                       PW_STREAM_FLAG_MAP_BUFFERS |
+                                                       PW_STREAM_FLAG_RT_PROCESS),
+                          params, 1) < 0) {
+        log::warn("Microphone: could not connect the monitor stream");
+        destroyMonitor();
+        return false;
+    }
+    return true;
+}
+
+void MicProcessor::destroyMonitor() {
+    monitorOn_.store(false, std::memory_order_relaxed);
+    if (monitor_ != nullptr) {
+        spa_hook_remove(&monitorListener_);
+        pw_stream_destroy(monitor_);
+        monitor_ = nullptr;
+    }
+}
+
+void MicProcessor::setMonitor(pw_core* core, bool on, float level) {
+    monitorGain_.store(std::clamp(level, 0.0f, 1.0f), std::memory_order_relaxed);
+    if (core == nullptr || playback_ == nullptr || on == (monitor_ != nullptr)) {
+        return;
+    }
+    if (on) {
+        if (createMonitor(core)) {
+            monitorOn_.store(true, std::memory_order_relaxed);
+        }
+    } else {
+        destroyMonitor();
+    }
+    applyKeepRunning(core);
+}
+
 void MicProcessor::stop() {
+    destroyMonitor();
     destroyCapture();
     if (playback_ != nullptr) {
         spa_hook_remove(&playbackListener_);
@@ -326,6 +431,10 @@ void MicProcessor::onCaptureProcess(void* data) {
 
 void MicProcessor::onPlaybackProcess(void* data) {
     static_cast<MicProcessor*>(data)->processPlayback();
+}
+
+void MicProcessor::onMonitorProcess(void* data) {
+    static_cast<MicProcessor*>(data)->processMonitor();
 }
 
 void MicProcessor::processCapture() {
@@ -400,6 +509,19 @@ void MicProcessor::processCapture() {
                 outputPeak_.store(outPeak, std::memory_order_relaxed);
             }
 
+            if (monitorOn_.load(std::memory_order_relaxed)) {
+                const std::uint32_t mWrite = monitorWrite_.load(std::memory_order_relaxed);
+                const std::uint32_t mRead = monitorRead_.load(std::memory_order_acquire);
+                const auto mWritable = static_cast<int>(std::min<std::uint32_t>(
+                    kRingSize - (mWrite - mRead) - 1, static_cast<std::uint32_t>(block)));
+                for (int i = 0; i < mWritable; ++i) {
+                    monitorRing_[(mWrite + static_cast<std::uint32_t>(i)) % kRingSize] =
+                        scratch_[static_cast<std::size_t>(i)];
+                }
+                monitorWrite_.store(mWrite + static_cast<std::uint32_t>(mWritable),
+                                    std::memory_order_release);
+            }
+
             samples += block;
             count -= block;
         }
@@ -458,6 +580,42 @@ void MicProcessor::processPlayback() {
     }
 
     pw_stream_queue_buffer(playback_, buffer);
+}
+
+void MicProcessor::processMonitor() {
+    pw_buffer* buffer = pw_stream_dequeue_buffer(monitor_);
+    if (buffer == nullptr) {
+        return;
+    }
+
+    spa_data& d = buffer->buffer->datas[0];
+    auto* out = static_cast<float*>(d.data);
+    if (out != nullptr && d.chunk != nullptr) {
+        std::uint32_t frames = std::min<std::uint32_t>(d.maxsize / sizeof(float), kMaxBlock);
+#if PW_CHECK_VERSION(0, 3, 49)
+        if (buffer->requested != 0) {
+            frames = std::min<std::uint32_t>(frames, static_cast<std::uint32_t>(buffer->requested));
+        }
+#endif
+
+        std::uint32_t read = monitorRead_.load(std::memory_order_relaxed);
+        const std::uint32_t write = monitorWrite_.load(std::memory_order_acquire);
+        if (write - read > kMonitorMaxBacklog) {
+            read = write - kMonitorSkipTo;
+        }
+        const std::uint32_t taken = std::min(frames, write - read);
+        const float gain = monitorGain_.load(std::memory_order_relaxed);
+        for (std::uint32_t i = 0; i < frames; ++i) {
+            out[i] = i < taken ? monitorRing_[(read + i) % kRingSize] * gain : 0.0f;
+        }
+        monitorRead_.store(read + taken, std::memory_order_release);
+
+        d.chunk->offset = 0;
+        d.chunk->stride = sizeof(float);
+        d.chunk->size = frames * sizeof(float);
+    }
+
+    pw_stream_queue_buffer(monitor_, buffer);
 }
 
 }  // namespace sonar::audio

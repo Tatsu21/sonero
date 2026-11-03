@@ -195,6 +195,13 @@ bool ChannelProcessor::start(pw_core* core, const std::string& nodeName,
         PW_KEY_NODE_DESCRIPTION, (description + " output").c_str(),
         PW_KEY_NODE_LATENCY, kNodeLatency,
         "audio.position", "[ FL, FR ]",
+        // Not an application, so screen sharing must not treat it as one.
+        // Discord's share captures every playback stream except its own and the
+        // virtual ones; without this it captured this channel too, which carries
+        // the call itself whenever Discord is routed here — so the people in the
+        // call heard themselves through the share — and every other app twice,
+        // once from the app and once again through Sonero.
+        "node.virtual", "true",
         nullptr);
 
     out_ = pw_stream_new(core, outName.c_str(), outProps);

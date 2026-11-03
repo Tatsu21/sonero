@@ -18,6 +18,9 @@ private slots:
     void shutdownResetsState();
     void doubleInitializeIsIdempotent();
     void virtualSinkNamesAreDerivedFromChannel();
+    void micFollowsTheDefaultWhenNothingIsChosen();
+    void micPrefersTheChosenDeviceWhileConnected();
+    void micLeavesABluetoothDefaultAlone();
 };
 
 void PipeWireManagerTest::initialStateIsUninitialized() {
@@ -69,6 +72,31 @@ void PipeWireManagerTest::virtualSinkNamesAreDerivedFromChannel() {
              QStringLiteral("sonero_game"));
     QCOMPARE(QString::fromStdString(PipeWireManager::nodeNameFor(ChannelId::Microphone)),
              QStringLiteral("sonero_microphone"));
+}
+
+void PipeWireManagerTest::micFollowsTheDefaultWhenNothingIsChosen() {
+    const std::vector<std::string> connected{"usb_mic", "builtin"};
+    QCOMPARE(PipeWireManager::resolveMicTarget("", "builtin", connected), std::string("builtin"));
+    // A stale default, announced before or after its device, is not a target.
+    QCOMPARE(PipeWireManager::resolveMicTarget("", "gone", connected), std::string());
+}
+
+void PipeWireManagerTest::micPrefersTheChosenDeviceWhileConnected() {
+    const std::vector<std::string> connected{"usb_mic", "builtin"};
+    QCOMPARE(PipeWireManager::resolveMicTarget("usb_mic", "builtin", connected),
+             std::string("usb_mic"));
+    // Unplugged: the default stands in until it returns.
+    QCOMPARE(PipeWireManager::resolveMicTarget("usb_mic", "builtin", {"builtin"}),
+             std::string("builtin"));
+}
+
+void PipeWireManagerTest::micLeavesABluetoothDefaultAlone() {
+    const std::vector<std::string> connected{"bluez_input.headset", "builtin"};
+    QCOMPARE(PipeWireManager::resolveMicTarget("", "bluez_input.headset", connected),
+             std::string());
+    // Asked for by name, it is what was asked for.
+    QCOMPARE(PipeWireManager::resolveMicTarget("bluez_input.headset", "builtin", connected),
+             std::string("bluez_input.headset"));
 }
 
 QTEST_GUILESS_MAIN(PipeWireManagerTest)

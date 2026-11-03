@@ -16,7 +16,7 @@ namespace sonar::dsp {
 // each step depends on the one before it:
 //
 //   input gain -> high-pass -> noise suppression -> gate -> de-esser
-//               -> equalizer -> compressor -> limiter -> output gain
+//               -> equalizer -> compressor -> output gain -> limiter
 //
 // High-pass first, because rumble and plosives otherwise drive every detector
 // after it — a compressor that ducks the whole voice on a door slam is a
@@ -83,7 +83,7 @@ struct LimiterSettings {
 struct MicSettings {
     bool muted = false;
     float inputGainDb = 0.0f;   // trim, before everything
-    float outputGainDb = 0.0f;  // after the limiter, kept small on purpose
+    float outputGainDb = 0.0f;  // before the limiter, which still has the last word
 
     // The learned noise suppression that runs ahead of this chain. It lives here
     // rather than beside it so the page, the settings file and the audio thread

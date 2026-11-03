@@ -33,6 +33,7 @@ struct pw_metadata;
 struct pw_impl_module;
 struct pw_proxy;
 struct pw_node;
+struct pw_device;
 struct pw_node_info;
 struct pw_stream;
 struct spa_dict;
@@ -106,8 +107,23 @@ public:
     [[nodiscard]] bool micNoiseSuppression() const override;
     [[nodiscard]] bool micNoiseSuppressionAvailable() const override;
     [[nodiscard]] std::string_view micNoiseSuppressionBackend() const override;
+    [[nodiscard]] std::vector<MicInputDevice> micInputDevices() const override;
+    [[nodiscard]] std::uint64_t micInputRevision() const override {
+        return micInputRevision_.load();
+    }
     bool setMicCaptureDevice(const std::string& nodeName) override;
     [[nodiscard]] std::string micCaptureDevice() const override;
+    [[nodiscard]] std::string micActiveCaptureDevice() const override;
+    [[nodiscard]] std::string micDefaultInput() const override;
+    void setMicLive(bool live) override;
+    void setMicMonitor(bool on, float level) override;
+    void setMicEchoCancellation(bool on, const std::string& speakers) override;
+    [[nodiscard]] bool micEchoCancellationActive() const override {
+        return echoActive_.load();
+    }
+    [[nodiscard]] std::string micEchoReference() const override;
+    [[nodiscard]] std::vector<AudioDevice> micEchoOutputs() override { return outputDevices(); }
+    [[nodiscard]] std::string micDefaultOutput() const override;
     [[nodiscard]] float micLatencyMs() const override;
 
     // --- IDeviceFormats ---
@@ -120,6 +136,17 @@ public:
     bool setDeviceProfile(std::uint32_t deviceId, std::uint32_t profileIndex) override;
     [[nodiscard]] float deviceVolume(std::uint32_t nodeId) override;
     void setDeviceVolume(std::uint32_t nodeId, float volume) override;
+    // A plain node's own volume, linear. For our streams, which have no route.
+    void setNodeVolume(std::uint32_t nodeId, float volume);
+    // The output route behind a hardware sink. On success `device` is a bound
+    // proxy the caller destroys. Thread loop held.
+    struct RouteState {
+        pw_device* device = nullptr;
+        std::int32_t index = 0;
+        std::int32_t routeDevice = 0;
+        std::vector<float> volumes;
+    };
+    bool readRouteLocked(std::uint32_t nodeId, RouteState& out);
 
     // Number of biquad bands in the DSP filter-chain (fixed; any UI band count
     // is sampled onto these).
@@ -127,6 +154,14 @@ public:
 
     // Stable node name of a channel's virtual sink, e.g. "sonar_game".
     [[nodiscard]] static std::string nodeNameFor(ChannelId id);
+
+    // Which input the microphone should capture from: the chosen device while it
+    // is connected, otherwise the system default. A Bluetooth default is skipped —
+    // binding it forces the headset into HFP — but one chosen by name is honoured,
+    // because then that is what was asked for. Empty means capture nothing.
+    [[nodiscard]] static std::string resolveMicTarget(
+        const std::string& chosen, const std::string& systemDefault,
+        const std::vector<std::string>& connected);
 
 private:
     // Core listener callbacks (loop thread).
@@ -167,6 +202,12 @@ private:
     // Must be called with the thread loop held (registry callbacks already are).
     void applyChannelRouteLocked(ChannelId id);
     void applyAllRoutesLocked();  // re-resolve every channel (device (dis)connect)
+    [[nodiscard]] std::string micTarget() const;
+    void applyMicRouteLocked();   // re-attach the microphone if its target moved
+    // Load, reload or drop the echo canceller in front of the microphone, and
+    // return what the chain should capture from. Loop thread / lock held.
+    [[nodiscard]] std::string applyEchoCancelLocked(const std::string& micDevice);
+    void destroyEchoCancelLocked();
 
     void bumpRevision() noexcept { revision_.fetch_add(1, std::memory_order_relaxed); }
 
@@ -198,6 +239,12 @@ private:
     std::string realDefaultSink_;                  // last non-virtual default (loop thread)
     std::string realDefaultSource_;                // real hardware mic, for the mic capture target
     std::vector<pw_impl_module*> modules_;         // loaded loopback modules
+    // The echo canceller, when on, and the microphone and output it was built
+    // for: either changing means building it again.
+    pw_impl_module* echoModule_ = nullptr;
+    std::string echoMic_;
+    std::string echoReference_;
+    std::atomic<bool> echoActive_{false};
 
     BackendState state_ = BackendState::Uninitialized;
     AudioServerInfo info_{};
@@ -218,6 +265,12 @@ private:
     std::unordered_map<std::uint32_t, ChannelId> assignments_;
     std::unordered_map<std::string, std::uint64_t> sinkSerials_;  // node name -> serial
     std::unordered_map<std::uint32_t, AudioDevice> devices_;  // node id -> hw output device
+    std::unordered_map<std::uint32_t, MicInputDevice> inputs_;  // node id -> hw input device
+    std::string micChosen_;  // node.name the user picked ("" = follow the default)
+    std::string micDevice_;  // the real input the chain is fed from, echo canceller or not
+    bool micEchoCancel_ = false;
+    std::string micEchoSpeakers_;  // output the speakers are on ("" = the default)
+    std::string realDefaultSinkShared_;  // realDefaultSink_, readable off the loop thread
 
     // Per-channel output routing: the channel's `.out` playback stream (id+serial)
     // and the device node.name the user pinned it to ("" = follow the default).
@@ -230,6 +283,7 @@ private:
 
     std::atomic<std::uint64_t> revision_{0};
     std::atomic<std::uint64_t> devicesRevision_{0};
+    std::atomic<std::uint64_t> micInputRevision_{0};
 
 };
 

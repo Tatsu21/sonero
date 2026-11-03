@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1800" height="600" viewBox="0 0 1800 600">
+  <!-- Snap Store banner, 1800x600 — the store accepts only 3:1. The same card
+       as og.svg, laid out for the wider frame. Regenerate with make-og.sh. -->
+  <defs>
+    <radialGradient id="g" gradientUnits="userSpaceOnUse" cx="470" cy="180" r="1000">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity=".28"/>
+      <stop offset="60%" stop-color="#6366f1" stop-opacity=".06"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="shot"><rect x="860" y="120" width="1000" height="420" rx="14"/></clipPath>
+  </defs>
+
+  <rect width="1800" height="600" fill="#0d0e14"/>
+  <rect width="1800" height="600" fill="url(#g)"/>
+
+  <!-- The product itself, bled off the right edge. -->
+  <g clip-path="url(#shot)">
+    <image xlink:href="mixer.png" x="860" y="120" width="1176" height="735"/>
+  </g>
+  <rect x="860" y="120" width="1000" height="420" rx="14" fill="none"
+        stroke="#2a2f45" stroke-width="1.5"/>
+
+  <image xlink:href="sonero-128.png" x="110" y="117" width="86" height="86"/>
+
+  <text x="110" y="315" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="88" font-weight="900" fill="#ffffff" letter-spacing="-2.5">Sonero</text>
+
+  <text x="110" y="377" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="27" font-weight="600" fill="#c2c7de">Per-application audio mixer,</text>
+  <text x="110" y="413" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="27" font-weight="600" fill="#c2c7de">router and equalizer for Linux</text>
+
+  <text x="110" y="477" font-family="Noto Sans, DejaVu Sans, sans-serif"
+        font-size="19" font-weight="700" fill="#8b90a8" letter-spacing="2.4">PIPEWIRE  ·  OPEN SOURCE  ·  MIT</text>
+</svg>

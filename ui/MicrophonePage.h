@@ -1,7 +1,12 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <vector>
+
 #include <QWidget>
 
+#include "audio/IMicrophoneController.h"
 #include "dsp/Equalizer.h"
 #include "dsp/MicChain.h"
 
@@ -29,11 +34,10 @@ class EqCurve;
 
 // Dedicated microphone page.
 //
-// Live: input gain, mute, the level meter, and the voice equalizer — all of them
-// reaching the virtual microphone source through the same path the channel pages
-// use. Still prepared, and labelled as such: the gate, compressor, de-esser and
-// noise suppression, whose DSP exists and is tested (dsp/MicChain) but has no
-// node to run in yet.
+// Which input the virtual microphone captures from, every stage of the chain that
+// runs on it (dsp/MicChain), and hearing the result. Owns the persisted state; the
+// tray's quick switches go through the public slots here rather than around them,
+// so the page and the settings file cannot disagree with what is running.
 class MicrophonePage : public QWidget {
     Q_OBJECT
 
@@ -43,7 +47,59 @@ public:
                             audio::IMicrophoneController* micController = nullptr,
                             config::SettingsStore* settings = nullptr, QWidget* parent = nullptr);
 
+    [[nodiscard]] std::vector<audio::MicInputDevice> inputDevices() const;
+    [[nodiscard]] QString selectedDevice() const { return device_; }  // empty: system default
+    [[nodiscard]] bool isMuted() const { return mic_.muted; }
+
+public slots:
+    void selectDevice(const QString& nodeName);
+    void setMuted(bool muted);
+
+signals:
+    // The device list, the selection or the mute changed; the tray redraws.
+    void microphoneStateChanged();
+
+protected:
+    // The meters only have something to show while the chain runs, and nothing
+    // else makes it run unless an application happens to be recording.
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
+    struct SliderBinding {
+        QSlider* slider = nullptr;
+        std::function<float&(dsp::MicSettings&)> field;
+        int divisor = 1;
+    };
+    struct CheckBinding {
+        QCheckBox* box = nullptr;
+        std::function<bool&(dsp::MicSettings&)> field;
+        QWidget* panel = nullptr;  // the controls this switch governs
+        bool panelWhenOff = false;  // they apply when it is off, not when it is on
+    };
+    struct StageMeter {
+        QProgressBar* bar = nullptr;
+        QLabel* value = nullptr;
+        std::function<float(const audio::MicLevels&)> read;
+    };
+
+    QVBoxLayout* stageCard(QVBoxLayout* root, const QString& title, const QString& subtitle,
+                           const QString& enableText, std::function<bool&(dsp::MicSettings&)> field);
+    QCheckBox* stageCheck(QVBoxLayout* body, const QString& text,
+                          std::function<bool&(dsp::MicSettings&)> field, QWidget* panel,
+                          bool panelWhenOff);
+    QSlider* stageSlider(QVBoxLayout* body, const QString& label, int min, int max,
+                         const QString& suffix, std::function<float&(dsp::MicSettings&)> field,
+                         int divisor = 1);
+    void addReductionMeter(QVBoxLayout* body, std::function<float(const audio::MicLevels&)> read);
+    void markCustom();  // a stage was edited: this is no longer the preset's sound
+    void buildDeviceRow(QVBoxLayout* input);
+    void buildStageCards(QVBoxLayout* root);
+    void buildMonitorCard(QVBoxLayout* root);
+    void buildEchoCard(QVBoxLayout* root);
+    void showEchoState();
+    void refreshDevices();  // redraw the device list and what it is doing
+    void pushMonitor();
     void refresh();
     void saveMic();  // persist input gain + mute
     void buildEqualizerCard(QVBoxLayout* root);
@@ -59,6 +115,25 @@ private:
     config::SettingsStore* settings_ = nullptr;
     QTimer* timer_ = nullptr;
     QProgressBar* level_ = nullptr;
+    QProgressBar* outputMeter_ = nullptr;
+    QComboBox* deviceBox_ = nullptr;
+    QLabel* deviceStatus_ = nullptr;
+    QString device_;       // node.name the user chose; empty follows the system default
+    QString deviceLabel_;  // its description, to name it while it is unplugged
+    std::uint64_t seenInputRevision_ = 0;
+    std::vector<SliderBinding> sliders_;
+    std::vector<CheckBinding> checks_;
+    std::vector<StageMeter> meters_;
+    QCheckBox* echoEnable_ = nullptr;
+    QComboBox* echoSpeakers_ = nullptr;
+    QString echoSpeakersName_;  // output the speakers are on; empty: the system default
+    void refreshEchoSpeakers();
+    void pushEcho();
+    QLabel* echoState_ = nullptr;
+    bool echoShownActive_ = false;
+    QCheckBox* monitorEnable_ = nullptr;
+    QSlider* monitorLevel_ = nullptr;
+    QLabel* latency_ = nullptr;
     QSlider* gain_ = nullptr;
     QSlider* outputGain_ = nullptr;
     QLabel* gainValue_ = nullptr;

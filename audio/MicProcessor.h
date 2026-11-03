@@ -74,6 +74,14 @@ public:
     bool setCaptureTarget(pw_core* core, const std::string& captureTarget);
     [[nodiscard]] std::string captureTarget() const;
 
+    // Passive by default: an unused microphone must be free to suspend. Both of
+    // these need it running with no application recording, so either one holds it
+    // awake. Call with the thread loop locked.
+    void setLive(pw_core* core, bool live);
+    // The chain's output on the default sink. Created and destroyed with the
+    // switch, so nobody who never uses it has a stream in their graph.
+    void setMonitor(pw_core* core, bool on, float level);
+
     void setSettings(const dsp::MicSettings& settings);
     [[nodiscard]] dsp::MicSettings settings() const;
 
@@ -96,11 +104,16 @@ public:
 private:
     static void onCaptureProcess(void* data);
     static void onPlaybackProcess(void* data);
+    static void onMonitorProcess(void* data);
     void processCapture();
     void processPlayback();
+    void processMonitor();
 
     bool createCapture(pw_core* core, const std::string& captureTarget);
     void destroyCapture();
+    bool createMonitor(pw_core* core);
+    void destroyMonitor();
+    void applyKeepRunning(pw_core* core);  // rebuild the capture if it changed
 
     // The processing thread's own copies. Touched only there.
     dsp::MicChain chain_;
@@ -126,6 +139,14 @@ private:
     std::atomic<std::uint32_t> ringWrite_{0};
     std::atomic<std::uint32_t> ringRead_{0};
 
+    // The same arrangement for the monitor, which is a separate ring because it
+    // has a different reader: the output device's clock, not the source's.
+    std::vector<float> monitorRing_;
+    std::atomic<std::uint32_t> monitorWrite_{0};
+    std::atomic<std::uint32_t> monitorRead_{0};
+    std::atomic<bool> monitorOn_{false};
+    std::atomic<float> monitorGain_{1.0f};
+
     std::atomic<float> inputPeak_{0.0f};
     std::atomic<float> outputPeak_{0.0f};
     std::atomic<float> gateReduction_{0.0f};
@@ -140,8 +161,12 @@ private:
     pw_core* core_ = nullptr;
     pw_stream* capture_ = nullptr;
     pw_stream* playback_ = nullptr;
+    pw_stream* monitor_ = nullptr;
     spa_hook captureListener_{};
     spa_hook playbackListener_{};
+    spa_hook monitorListener_{};
+    bool live_ = false;
+    bool captureKeptRunning_ = false;  // what the current capture stream was made with
     std::string nodeName_;
     std::string description_;
     std::string captureTarget_;

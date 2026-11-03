@@ -5,6 +5,7 @@
 #include <QString>
 
 #include "dsp/Equalizer.h"
+#include "dsp/MicChain.h"
 
 class QTimer;
 
@@ -51,5 +52,11 @@ private:
 // the band count consistent with the number of bands actually stored.
 QJsonObject eqToJson(const dsp::EqSettings& settings);
 dsp::EqSettings eqFromJson(const QJsonObject& obj, const dsp::EqSettings& fallback);
+
+// MicSettings <-> JSON. `micFromJson` takes anything missing from `fallback`, and
+// clamps what it reads: this file can be edited by hand, and a ratio of zero is a
+// division by zero on the audio thread.
+QJsonObject micToJson(const dsp::MicSettings& settings);
+dsp::MicSettings micFromJson(const QJsonObject& obj, const dsp::MicSettings& fallback);
 
 }  // namespace sonar::config

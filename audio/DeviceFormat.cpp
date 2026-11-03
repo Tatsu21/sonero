@@ -66,7 +66,7 @@ std::string OutputFormatManager::configPath() const {
 
 std::string OutputFormatManager::renderConfig(const OutputFormat& fmt) const {
     return fmt::format(
-        "# Managed by Sonero — output format for the SteelSeries base station.\n"
+        "# Managed by Sonero — output format for {0}.\n"
         "# Pins the ALSA open format so the device emits at the chosen rate/bit depth.\n"
         "# Edits here are overwritten when you change the format in the app.\n"
         "monitor.alsa.rules = [\n"

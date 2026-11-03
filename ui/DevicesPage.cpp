@@ -894,6 +894,19 @@ void DevicesPage::applyFormat() {
         formatStatus_->setText(QStringLiteral("Could not write %1.")
                                    .arg(QString::fromStdString(mgr.configPath())));
         setState(formatStatus_, "bad");
+    } else if (fmt.rateHz > 48000 && nodeName.contains(QStringLiteral("iec958"))) {
+        // The sound card can send it, which is all the list above can check; the
+        // receiver at the other end of the cable is another matter. Most optical
+        // speakers, soundbars and receivers take 44.1 / 48 kHz PCM and play
+        // nothing at all above that — no error anywhere, just silence from the
+        // next login on. Saved anyway, but not quietly.
+        formatStatus_->setText(
+            QStringLiteral("Saved %1 for %2 — applies at next login. Careful: this is an "
+                           "optical/S/PDIF output, and most speakers and receivers on one "
+                           "accept only 44.1 or 48 kHz. If it goes silent after the next "
+                           "login, set 48 kHz here.")
+                .arg(what, formatDeviceCombo_->currentText()));
+        setState(formatStatus_, "bad");
     } else {
         formatStatus_->setText(
             QStringLiteral("Saved %1 for %2 — applies at next login (or `systemctl --user "

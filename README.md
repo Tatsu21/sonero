@@ -53,7 +53,7 @@ and the built-in one is compiled in, so nothing you write can leave the app unus
 | 🧠 | **Harmonic bass synthesis, per channel** — a small driver cannot move enough air to reproduce 40 Hz, and boosting 40 Hz only spends excursion distorting everything else. Sonero synthesises the *harmonics* of the bass instead, in the range the driver does reproduce, and your hearing supplies the fundamental that is not there. Crossover, level, how many orders and the even/odd balance are all yours, with an option to replace the lows rather than add to them. |
 | 🔊 | **Per-channel gain, set automatically on request** — it holds the highest gain (up to +6 dB) that keeps the channel's real output clear of full scale: quiet material climbs, a peak that overshoots is taken back by exactly what it overshot. Slow up, immediate down, so nothing breathes. |
 | 🎥 | **Streaming mix for OBS** — a `Sonero Stream` input source with an independent send level per channel, so your viewers hear a different balance than you do. |
-| 🎤 | **A microphone chain, not just a level** — the `Sonero Microphone` source your apps select runs a full voice chain: high-pass, learned noise suppression (RNNoise), gate, de-esser, 10-band voice equalizer, compressor and a brick-wall limiter, with presets for podcasting, streaming and meetings. Every application recording from Sonero hears the processed voice. |
+| 🎤 | **A microphone chain, not just a level** — the `Sonero Microphone` source your apps select runs a full voice chain: high-pass, learned noise suppression (RNNoise), gate, de-esser, 10-band voice equalizer, compressor and a brick-wall limiter, with presets for podcasting, streaming and meetings and a control for every stage. Choose which microphone feeds it and switch from the page or the tray; a device you unplug is picked up again when it returns. Every application recording from Sonero hears the processed voice, and "hear myself" lets you hear it too. On speakers, echo cancellation takes whatever the desktop plays back out of the microphone. |
 | 🎧 | **Any output device** — USB, Bluetooth, HDMI, S/PDIF and analog, each detected and badged automatically, each with its own output selection per channel. |
 | 💿 | **Per-device transmission format** — sample rate and bit depth up to 24-bit / 96 kHz, written as a per-device WirePlumber drop-in, so changing one device never disturbs the others. |
 | 📶 | **Bluetooth done properly** — automatic switch to the best A2DP codec the headset offers, ranked from LDAC (untested — see below) and aptX down to SBC, plus battery level through BlueZ. |
@@ -80,12 +80,6 @@ clickable, so nothing pretends to work:
 
 - **Profiles** — saving whole configurations as named profiles is not implemented; the
   tab is disabled.
-- **Microphone gate, compressor and de-esser have no controls yet.** The whole chain
-  runs — it is what the microphone already sounds like — but only the chain preset, input
-  gain, output level, mute, noise suppression and the voice equalizer are adjustable. The
-  gate, de-esser, compressor and limiter run at the preset's values, and their cards stay
-  marked `PREPARED` until each gets its own controls. Monitoring ("hear myself") is not
-  implemented.
 - **SteelSeries hardware EQ** — the HID writes are accepted by the dock and change nothing
   audible; unsolved, so the card is disabled. Use the per-channel equalizer instead, which
   runs in software and works with any headset.

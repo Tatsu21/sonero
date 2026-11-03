@@ -15,6 +15,8 @@ struct AudioDevice {
     std::uint32_t nodeId = 0;      // registry id of the Audio/Sink node
     std::uint32_t deviceId = 0;    // registry id of the owning PW Device (0 if
                                    // none) — used later for BT codec / profiles
+    std::int32_t routeDevice = -1; // card.profile.device: which of the device's
+                                   // routes this sink is, for its volume
     std::uint64_t serial = 0;      // object.serial of the sink node (routing target)
     std::string name;              // node.name (stable identifier)
     std::string description;       // human-friendly label
@@ -59,8 +61,10 @@ public:
     // the device could not be reached.
     virtual bool setDeviceProfile(std::uint32_t deviceId, std::uint32_t profileIndex) = 0;
 
-    // Linear output volume (0..1) of a device's sink node (AudioDevice::nodeId).
-    // Returns 1.0 when it cannot be read.
+    // Output volume (0..1) of a device's sink node (AudioDevice::nodeId), on the
+    // same cubic scale the desktop's own volume slider uses — so 40% here is 40%
+    // there. Set on the device's route, as the desktop does, which is what the
+    // session manager remembers across a reboot. Returns 1.0 when unreadable.
     [[nodiscard]] virtual float deviceVolume(std::uint32_t nodeId) = 0;
     virtual void setDeviceVolume(std::uint32_t nodeId, float volume) = 0;
 };

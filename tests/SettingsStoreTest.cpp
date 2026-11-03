@@ -22,6 +22,8 @@ private slots:
     void firstRunWhenNoFile();
     void sectionSurvivesReopen();
     void eqRoundTrips();
+    void micRoundTrips();
+    void micFromJsonFallsBackAndClamps();
     void damagedFileIsFirstRun();
 };
 
@@ -78,6 +80,50 @@ void SettingsStoreTest::eqRoundTrips() {
     // An object with no bands returns the fallback untouched.
     const dsp::EqSettings fb = eqFromJson(QJsonObject{}, s);
     QCOMPARE(fb.bands.size(), s.bands.size());
+}
+
+void SettingsStoreTest::micRoundTrips() {
+    dsp::MicSettings s = dsp::presetSettings(dsp::MicPreset::Streaming);
+    s.inputGainDb = 7.0f;
+    s.muted = true;
+    s.gate.thresholdDb = -33.0f;
+    s.gate.ratio = 2.5f;
+    s.deEsser.enabled = false;
+    s.compressor.autoMakeup = false;
+    s.compressor.makeupDb = 4.0f;
+    s.limiter.ceilingDb = -3.0f;
+
+    const dsp::MicSettings back = sonar::config::micFromJson(sonar::config::micToJson(s),
+                                                             dsp::MicSettings{});
+    QCOMPARE(back.inputGainDb, 7.0f);
+    QCOMPARE(back.muted, true);
+    QCOMPARE(back.gate.thresholdDb, -33.0f);
+    QCOMPARE(back.gate.ratio, 2.5f);
+    QCOMPARE(back.deEsser.enabled, false);
+    QCOMPARE(back.compressor.autoMakeup, false);
+    QCOMPARE(back.compressor.makeupDb, 4.0f);
+    QCOMPARE(back.limiter.ceilingDb, -3.0f);
+    QCOMPARE(back.highPass.frequencyHz, s.highPass.frequencyHz);
+}
+
+void SettingsStoreTest::micFromJsonFallsBackAndClamps() {
+    dsp::MicSettings fallback;
+    fallback.gate.thresholdDb = -50.0f;
+
+    // Files saved before the stages had controls carry none of them.
+    QJsonObject old;
+    old[QStringLiteral("inputGainDb")] = 3;
+    dsp::MicSettings s = sonar::config::micFromJson(old, fallback);
+    QCOMPARE(s.inputGainDb, 3.0f);
+    QCOMPARE(s.gate.thresholdDb, -50.0f);
+
+    // A ratio of zero would divide by zero on the audio thread.
+    QJsonObject comp;
+    comp[QStringLiteral("ratio")] = 0;
+    QJsonObject edited;
+    edited[QStringLiteral("compressor")] = comp;
+    s = sonar::config::micFromJson(edited, fallback);
+    QCOMPARE(s.compressor.ratio, 1.0f);
 }
 
 void SettingsStoreTest::damagedFileIsFirstRun() {

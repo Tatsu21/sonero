@@ -251,8 +251,9 @@ void MainWindow::buildUi() {
             }
             pages_->addWidget(channels);
         } else if (titleView == "Microphone") {
-            pages_->addWidget(
-                new MicrophonePage(controller_, eqController_, micController_, settings_));
+            microphonePage_ =
+                new MicrophonePage(controller_, eqController_, micController_, settings_);
+            pages_->addWidget(microphonePage_);
         } else if (titleView == "Devices") {
             devicesPage_ = new DevicesPage(audioDevices_, deviceFormats_, settings_, notifier_);
             // The page already polls both battery sources (USB HID and BlueZ);
@@ -437,6 +438,14 @@ void MainWindow::buildTrayIcon() {
         QAction* volumeAction = menu->addAction(QStringLiteral("Volume…"));
         connect(volumeAction, &QAction::triggered, this, &MainWindow::showTrayMixer);
     }
+    if (microphonePage_ != nullptr) {
+        trayMicMenu_ = menu->addMenu(QStringLiteral("Microphone"));
+        // Queued: picking an entry reaches this through its own triggered signal,
+        // and the rebuild deletes that very action.
+        connect(microphonePage_, &MicrophonePage::microphoneStateChanged, this,
+                &MainWindow::rebuildTrayMicMenu, Qt::QueuedConnection);
+        rebuildTrayMicMenu();
+    }
     QAction* showAction = menu->addAction(QStringLiteral("Show Sonero"));
     connect(showAction, &QAction::triggered, this, [this] {
         showNormal();
@@ -463,6 +472,31 @@ void MainWindow::buildTrayIcon() {
                 }
             });
     trayIcon_->show();
+}
+
+void MainWindow::rebuildTrayMicMenu() {
+    if (trayMicMenu_ == nullptr) {
+        return;
+    }
+    trayMicMenu_->clear();
+
+    QAction* mute = trayMicMenu_->addAction(QStringLiteral("Mute"));
+    mute->setCheckable(true);
+    mute->setChecked(microphonePage_->isMuted());
+    connect(mute, &QAction::triggered, microphonePage_, &MicrophonePage::setMuted);
+    trayMicMenu_->addSeparator();
+
+    const auto addDevice = [this](const QString& text, const QString& name) {
+        QAction* entry = trayMicMenu_->addAction(text);
+        entry->setCheckable(true);
+        entry->setChecked(microphonePage_->selectedDevice() == name);
+        connect(entry, &QAction::triggered, microphonePage_,
+                [this, name] { microphonePage_->selectDevice(name); });
+    };
+    addDevice(QStringLiteral("System default"), QString());
+    for (const audio::MicInputDevice& device : microphonePage_->inputDevices()) {
+        addDevice(QString::fromStdString(device.description), QString::fromStdString(device.name));
+    }
 }
 
 void MainWindow::showTrayMixer() {
