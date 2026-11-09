@@ -136,10 +136,16 @@ endif()
 # Export a compile database for clangd / tooling.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Qt meta-object handling. AUTOMOC is enough for Stage 1 (no .ui / .qrc yet).
+# Qt meta-object handling. Only moc: the project has no .ui or .qrc files, and
+# AUTOUIC / AUTORCC would scan every source for them on every build.
 set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
+
+# Let a target's sources compile while the libraries it links are still being
+# built: they need the headers, not the archives.
+set(CMAKE_OPTIMIZE_DEPENDENCIES ON)
+# moc reads each target's own sources only, so it need not wait for the targets
+# it links either.
+set(CMAKE_AUTOGEN_ORIGIN_DEPENDS OFF)
 
 # --- Dependencies ------------------------------------------------------------
 # Network provides QLocalServer/QLocalSocket, used for the single-instance guard.
@@ -207,6 +213,9 @@ add_library(sonero_core STATIC
     audio/MicProcessor.h
     audio/MicProcessor.cpp
     audio/ChannelProcessor.h
+    audio/FrameRing.h
+    audio/Handoff.h
+    audio/PwStream.h
     audio/ChannelProcessor.cpp
     audio/DeviceFormat.h
     audio/DeviceFormat.cpp
@@ -219,6 +228,7 @@ add_library(sonero_core STATIC
     dsp/AutoGain.h
     dsp/AutoGain.cpp
     dsp/Biquad.h
+    dsp/DspMath.h
     dsp/MicChain.h
     dsp/MicChain.cpp
     dsp/BassStage.h
@@ -259,9 +269,10 @@ else()
     message(STATUS "Sonero: using the built-in logger (no spdlog dependency)")
 endif()
 
-# --- Application executable (Qt UI) ------------------------------------------
-qt_add_executable(Sonero
-    app/main.cpp
+# --- Application library (Qt UI) ---------------------------------------------
+# Everything but main(), as a library, so the executable and the tests compile
+# these sources once instead of each test rebuilding the ones it needs.
+add_library(sonero_app STATIC
     app/Application.h
     app/Application.cpp
     app/SingleInstance.h
@@ -276,6 +287,8 @@ qt_add_executable(Sonero
     config/SettingsStore.cpp
     ui/Theme.h
     ui/Theme.cpp
+    ui/UiKit.h
+    ui/UiKit.cpp
     ui/MainWindow.h
     ui/MainWindow.cpp
     ui/MixerPage.h
@@ -307,13 +320,26 @@ qt_add_executable(Sonero
     ui/widgets/FlowLayout.h
     ui/widgets/FlowLayout.cpp)
 
-
-target_link_libraries(Sonero PRIVATE sonero_core Qt6::Widgets Qt6::DBus Qt6::Network)
+# Widgets, DBus and Network stay private: a test linking this library must not
+# inherit QT_WIDGETS_LIB, or QTEST_MAIN would demand a display.
+target_link_libraries(sonero_app
+    PUBLIC sonero_core Qt6::Core
+    PRIVATE Qt6::Widgets Qt6::DBus Qt6::Network)
 
 # Lets a build-tree run find packaged resources (icons, udev rule) without being
 # installed; packaged builds locate them under the install prefix instead.
-target_compile_definitions(Sonero PRIVATE
+target_compile_definitions(sonero_app PRIVATE
     SONAR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Qt's headers are most of every UI file's compile time; parse them once.
+target_precompile_headers(sonero_app PRIVATE
+    <QApplication> <QCheckBox> <QComboBox> <QDir> <QFile> <QFileInfo> <QFrame>
+    <QHBoxLayout> <QJsonDocument> <QJsonObject> <QLabel> <QPushButton>
+    <QSignalBlocker> <QSlider> <QTimer> <QVBoxLayout> <QWidget>)
+
+# --- Application executable --------------------------------------------------
+qt_add_executable(Sonero app/main.cpp)
+target_link_libraries(Sonero PRIVATE sonero_app Qt6::Widgets)
 
 # --- HID probe (dev tool for the SteelSeries base station) -------------------
 include(GNUInstallDirs)

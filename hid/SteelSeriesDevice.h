@@ -24,12 +24,8 @@ enum class HeadsetState {
     Online,
 };
 
-// Battery status of the Nova Pro Wireless headset. `headsetPercent` is -1 when
-// unknown (including while the headset is offline).
-//
-// The base station reports one battery only — the headset's. The spare battery
-// charging in the dock is shown on the dock's own screen but is not part of this
-// report, so Sonero does not display a figure for it.
+// Battery status of the Nova Pro Wireless headset; -1 when unknown or offline. The
+// base station reports only the headset's battery, not the spare in the dock.
 struct BatteryStatus {
     bool valid = false;
     int headsetPercent = -1;
@@ -37,9 +33,8 @@ struct BatteryStatus {
     std::array<std::uint8_t, 64> raw{};  // raw status report, for calibration
 };
 
-// Talks to the SteelSeries Arctis Nova Pro Wireless base station over its
-// vendor HID control interface (usage page 0xFFC0, report id 6, 64-byte reports)
-// using raw hidraw — no external dependency.
+// The SteelSeries Arctis Nova Pro Wireless base station over raw hidraw (usage page
+// 0xFFC0, report id 6, 64-byte reports).
 class SteelSeriesDevice {
 public:
     static constexpr std::uint16_t kVendorId = 0x1038;
@@ -63,11 +58,6 @@ public:
 
     // Request + parse the dual battery status (sends {0x06, 0xb0}).
     [[nodiscard]] BatteryStatus readBattery();
-
-    // Send a 10-band EQ to the headset's onboard EQ. Gains are in dB (about
-    // -10..+10); encoded as byte = 0x14 + gain*2 (0x14 = 0 dB). Commits with a
-    // save command after a short delay.
-    bool setEqualizer(const std::array<int, 10>& gainsDb);
 
     // Low-level HID I/O. `report[0]` is the report id.
     bool writeReport(const std::vector<std::uint8_t>& report);

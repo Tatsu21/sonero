@@ -5,11 +5,8 @@
 
 #include "core/Format.h"
 
-// Thin logging facade so the rest of the codebase never depends directly on a
-// concrete logging library. When spdlog is available the facade forwards to it;
-// otherwise it falls back to a small stderr/stdout writer. Message formatting
-// uses the project's own brace formatter (see core/Format.h), so the code stays
-// buildable on compilers whose libstdc++ predates std::format.
+// Logging facade: forwards to spdlog when available, else writes to stderr/stdout.
+// Formatting uses core/Format.h.
 namespace sonar::log {
 
 enum class Level { Trace, Debug, Info, Warn, Error, Off };

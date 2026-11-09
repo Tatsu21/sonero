@@ -3,22 +3,14 @@
 namespace sonar::hid {
 
 std::optional<BatteryReading> SteelSeriesBatterySource::read(const std::string& nodeName) {
-    // The base station is one USB device presenting both an audio interface and
-    // a vendor HID control interface, so its audio node name is the hook: only
-    // speak for a device that looks like it.
-    if (nodeName.find("SteelSeries") == std::string::npos) {
-        return std::nullopt;
-    }
-    if (!SteelSeriesDevice::probe().present) {
-        return std::nullopt;
-    }
+    // Speak only for an audio node that looks like the base station.
+    if (nodeName.find("SteelSeries") == std::string::npos) return std::nullopt;
+    if (!SteelSeriesDevice::probe().present) return std::nullopt;
     if (!device_.isOpen() && !device_.open()) {
         return std::nullopt;  // present but not readable (udev rule not installed)
     }
     const BatteryStatus status = device_.readBattery();
-    if (!status.valid) {
-        return std::nullopt;
-    }
+    if (!status.valid) return std::nullopt;
 
     BatteryReading reading;
     reading.source = std::string(name());

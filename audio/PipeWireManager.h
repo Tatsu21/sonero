@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <initializer_list>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -35,24 +36,16 @@ struct pw_proxy;
 struct pw_node;
 struct pw_device;
 struct pw_node_info;
-struct pw_stream;
 struct spa_dict;
+struct spa_pod;
 
 namespace sonar::audio {
 
-// PipeWire backend.
-//
-// Responsibilities:
-//   * own a threaded PipeWire main loop and a connection to the server;
-//   * create one virtual sink per channel (via module-loopback) that apps can
-//     target and that forwards to the default output;
-//   * watch the registry for application streams and route them onto the
-//     virtual sinks (via the "default" metadata target.object key).
-//
-// All libpipewire access happens on, or is synchronized against, the thread
-// loop. Shared state read by the UI thread is guarded by a mutex. The class
-// owns raw C resources and installs listeners pointing at `this`, so it is
-// non-copyable and non-movable.
+// PipeWire backend: owns the thread loop and connection, one ChannelProcessor per
+// channel (a virtual sink forwarding to the default or a pinned device), and routes
+// application streams onto them via the "default" metadata target.object key.
+// All libpipewire access happens on, or under, the thread loop; state the UI reads
+// is guarded by stateMutex_. Non-copyable: listeners point at `this`.
 class PipeWireManager final : public IAudioBackend,
                               public IAppRouter,
                               public IChannelController,
@@ -136,29 +129,12 @@ public:
     bool setDeviceProfile(std::uint32_t deviceId, std::uint32_t profileIndex) override;
     [[nodiscard]] float deviceVolume(std::uint32_t nodeId) override;
     void setDeviceVolume(std::uint32_t nodeId, float volume) override;
-    // A plain node's own volume, linear. For our streams, which have no route.
-    void setNodeVolume(std::uint32_t nodeId, float volume);
-    // The output route behind a hardware sink. On success `device` is a bound
-    // proxy the caller destroys. Thread loop held.
-    struct RouteState {
-        pw_device* device = nullptr;
-        std::int32_t index = 0;
-        std::int32_t routeDevice = 0;
-        std::vector<float> volumes;
-    };
-    bool readRouteLocked(std::uint32_t nodeId, RouteState& out);
 
-    // Number of biquad bands in the DSP filter-chain (fixed; any UI band count
-    // is sampled onto these).
-    static constexpr int kEqBands = 31;
-
-    // Stable node name of a channel's virtual sink, e.g. "sonar_game".
+    // Stable node name of a channel's virtual sink, e.g. "sonero_game".
     [[nodiscard]] static std::string nodeNameFor(ChannelId id);
 
-    // Which input the microphone should capture from: the chosen device while it
-    // is connected, otherwise the system default. A Bluetooth default is skipped —
-    // binding it forces the headset into HFP — but one chosen by name is honoured,
-    // because then that is what was asked for. Empty means capture nothing.
+    // Which input the microphone captures: the chosen device while connected, else the
+    // system default — unless that is Bluetooth (binding it forces HFP). "" = nothing.
     [[nodiscard]] static std::string resolveMicTarget(
         const std::string& chosen, const std::string& systemDefault,
         const std::vector<std::string>& connected);
@@ -179,16 +155,36 @@ private:
     void onGlobal(std::uint32_t id, const char* type, const spa_dict* props);
     void onGlobalRemove(std::uint32_t id);
 
-    // Default-sink metadata guard: our virtual sinks must never become the
-    // system default (that would funnel every app — and our own loopbacks — into
-    // one channel). Runs on the loop thread.
+    // Default-sink guard: our virtual sinks must never become the system default.
+    // Loop thread.
     static int onMetadataProperty(void* data, std::uint32_t subject, const char* key,
                                   const char* type, const char* value);
     void onMetaProperty(std::uint32_t subject, const char* key, const char* value);
 
+    // --- Bound proxies (all: thread loop held) ---
+    using ParamCallback = void (*)(void* data, int seq, std::uint32_t id, std::uint32_t index,
+                                   std::uint32_t next, const spa_pod* param);
+    [[nodiscard]] pw_proxy* bindLocked(std::uint32_t id, const char* type, std::uint32_t version);
+    // Enumerate `params` on a bound node or device and wait until every answer
+    // has been delivered to `onParam`.
+    void enumParamsLocked(pw_proxy* proxy, bool isDevice,
+                          std::initializer_list<std::uint32_t> params,
+                          ParamCallback onParam, void* data);
+    // A plain node's own volume, linear. For our streams, which have no route.
+    void setNodeVolumeLocked(std::uint32_t nodeId, float volume);
+    // The output route behind a hardware sink. On success `device` is a bound
+    // proxy the caller destroys.
+    struct RouteState {
+        pw_device* device = nullptr;
+        std::int32_t index = 0;
+        std::int32_t routeDevice = 0;
+        std::vector<float> volumes;
+    };
+    bool readRouteLocked(std::uint32_t nodeId, RouteState& out);
 
-    // Metering stream process callback (real-time thread).
-    // Sink-node ready callback; applies the desired volume/mute once (loop thread).
+    // Read-modify-write of one output channel's chain settings.
+    template <typename Change>
+    void updateChannelSettings(ChannelId id, Change&& change);
 
     bool doRoundtrip();       // blocks (with timeout) until the server answers
     void setupGraph();        // registry listener + virtual sinks (lock held)
@@ -211,17 +207,21 @@ private:
 
     void bumpRevision() noexcept { revision_.fetch_add(1, std::memory_order_relaxed); }
 
-    // PipeWire connection.
+    // A copy of one field guarded by stateMutex_.
+    template <typename T>
+    [[nodiscard]] T readLocked(const T& field) const {
+        const std::lock_guard<std::mutex> lock(stateMutex_);
+        return field;
+    }
+
     // The microphone's own node pair and DSP. Not a filter-chain module like the
     // other channels: the chain it runs is ours, and the meters come out of it.
     MicProcessor mic_;
 
-    // One per channel, indexed by channelIndex(). The Microphone slot is unused —
-    // that channel is a source and runs through mic_ instead — and is left in
-    // place so every other index still matches channelIndex() directly.
+    // One per channel, indexed by channelIndex(); the Microphone slot is unused (mic_).
     std::array<ChannelProcessor, kAllChannels.size()> processor_;
 
-
+    // PipeWire connection.
     pw_thread_loop* loop_ = nullptr;
     pw_context* context_ = nullptr;
     pw_core* core_ = nullptr;
@@ -256,12 +256,8 @@ private:
     std::string errorMessage_;
 
     // Shared graph state (guarded by stateMutex_).
-    struct AppInfo {
-        std::string name;
-        std::uint64_t serial = 0;
-    };
     mutable std::mutex stateMutex_;
-    std::unordered_map<std::uint32_t, AppInfo> apps_;
+    std::unordered_map<std::uint32_t, std::string> apps_;  // node id -> display name
     std::unordered_map<std::uint32_t, ChannelId> assignments_;
     std::unordered_map<std::string, std::uint64_t> sinkSerials_;  // node name -> serial
     std::unordered_map<std::uint32_t, AudioDevice> devices_;  // node id -> hw output device
@@ -284,7 +280,6 @@ private:
     std::atomic<std::uint64_t> revision_{0};
     std::atomic<std::uint64_t> devicesRevision_{0};
     std::atomic<std::uint64_t> micInputRevision_{0};
-
 };
 
 }  // namespace sonar::audio

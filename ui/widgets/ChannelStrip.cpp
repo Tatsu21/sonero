@@ -31,13 +31,6 @@ using audio::ChannelId;
 using audio::ChannelState;
 
 namespace {
-
-[[nodiscard]] QColor mixed(const QColor& a, const QColor& b, double t) {
-    const double u = 1.0 - t;
-    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
-                            a.blueF() * u + b.blueF() * t);
-}
-
 constexpr int kStripWidth = 144;
 }  // namespace
 
@@ -46,10 +39,8 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     setObjectName(QStringLiteral("ChannelStrip"));
     setAttribute(Qt::WA_StyledBackground, true);  // let the QSS card style paint
     setAcceptDrops(true);                         // app chips can be dropped here
-    // A floor, not a fixed size. Six strips at a fixed width left a third of a
-    // 1440-pixel window empty to their right, which reads as a layout that gave
-    // up rather than one that was designed. The ceiling keeps a very wide window
-    // from stretching six channels into six billboards.
+    // A floor and a ceiling, not a fixed size, so the strips fill a wide window
+    // without turning into billboards.
     setMinimumWidth(kStripWidth);
     setMaximumWidth(kStripWidth * 3 / 2);
 
@@ -60,12 +51,8 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
             "silences the whole mix."));
     }
     glyph->setStyleSheet(QStringLiteral("font-size:17px;"));
-    // A fixed height, because the glyphs are not all the same kind of character:
-    // some channels use a colour emoji and some a plain text symbol, and the two
-    // have different ascents. Left to themselves the labels size to their own
-    // glyph, the header row grows for some strips and not others, and everything
-    // below — fader, percentage, Mute and Solo — sits a few pixels lower on
-    // Master and Aux than on the rest.
+    // A fixed height: emoji and text glyphs have different ascents, which otherwise
+    // shift some strips down by a few pixels.
     constexpr int kHeaderHeight = 22;
     glyph->setFixedHeight(kHeaderHeight);
     glyph->setAlignment(Qt::AlignCenter);
@@ -141,11 +128,8 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     stream_->setFixedHeight(14);
     stream_->setRange(0, 100);
     stream_->setValue(100);
+    // The level reads out in the slider's tooltip.
     stream_->setToolTip(QStringLiteral("How loud this channel is for the stream"));
-    // The level reads out in the slider's tooltip; a widget with no place in the
-    // layout would otherwise paint at the origin, on top of the caption.
-    streamValue_ = new QLabel(streamRow_);
-    streamValue_->hide();
     streamCol->addWidget(streamCaption);
     streamCol->addWidget(stream_);
 
@@ -157,7 +141,6 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
         emit streamLevelChanged(id_, static_cast<float>(v) / 100.0f);
     });
 
-
     auto* appsHost = new QFrame(this);
     appsHost->setObjectName(QStringLiteral("AppsHost"));
     appsHost_ = appsHost;
@@ -167,12 +150,10 @@ ChannelStrip::ChannelStrip(ChannelId id, const QString& name, QWidget* parent)
     appsBody_->setSpacing(5);
     appsBody_->setAlignment(Qt::AlignTop);
 
-
     appsEmpty_ = new QLabel(QStringLiteral("drop an app here"), this);
     appsEmpty_->setObjectName(QStringLiteral("Hint"));
     appsEmpty_->setAlignment(Qt::AlignHCenter);
     appsBody_->addWidget(appsEmpty_);
-
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(11, 11, 11, 11);
@@ -226,9 +207,7 @@ void ChannelStrip::setLevel(float left, float right) {
 }
 
 void ChannelStrip::applyAccent() {
-    if (restyling_) {
-        return;
-    }
+    if (restyling_) return;
     restyling_ = true;
     const QString accent = accentFor(id_);
     if (title_ != nullptr) {
@@ -247,7 +226,7 @@ void ChannelStrip::applyAccent() {
         // contained. Derived from the theme, which is why it is re-done here.
         appsHost_->setStyleSheet(
             QStringLiteral("#AppsHost { background:%1; border-radius:8px; }")
-                .arg(mixed(currentTheme().surface, currentTheme().bg, 0.72)
+                .arg(mixColors(currentTheme().surface, currentTheme().bg, 0.72)
                          .name(QColor::HexRgb)));
     }
     restyling_ = false;
@@ -262,13 +241,8 @@ void ChannelStrip::changeEvent(QEvent* event) {
 }
 
 QString ChannelStrip::accentFor(ChannelId id) {
-    // Each channel keeps its own hue, because that is identity: green has meant
-    // Game since the first build, and someone glancing at the mixer finds their
-    // strip by colour before they read the label.
-    //
-    // Saturation and lightness come from the active theme's accent instead of
-    // being fixed, so the row follows the theme's mood — muted in a pastel theme,
-    // vivid in a loud one — without losing which strip is which.
+    // Each channel keeps its own hue (its identity); saturation and lightness follow
+    // the theme's accent.
     int hue = 219;  // blue
     switch (id) {
         case ChannelId::System:     hue = 219; break;  // blue
@@ -351,9 +325,7 @@ void ChannelStrip::dragLeaveEvent(QDragLeaveEvent* /*event*/) {
 
 void ChannelStrip::dropEvent(QDropEvent* event) {
     setDropActive(false);
-    if (!event->mimeData()->hasFormat(QString::fromLatin1(kAppMimeType))) {
-        return;
-    }
+    if (!event->mimeData()->hasFormat(QString::fromLatin1(kAppMimeType))) return;
     event->acceptProposedAction();
     // Read the id from AppChip (not the MIME pipe) to avoid Wayland self-drop
     // read timeouts.

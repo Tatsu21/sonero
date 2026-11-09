@@ -13,16 +13,13 @@
 #include <QVBoxLayout>
 
 #include "audio/IMixer.h"
+#include "ui/UiKit.h"
 
 namespace sonar::ui {
 
 using audio::ChannelId;
 
 namespace {
-QString toQString(std::string_view sv) {
-    return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size()));
-}
-
 int toPercent(float volume) { return static_cast<int>(std::lround(volume * 100.0F)); }
 
 // The channel whose fader scales all the others, as MixerPage defines it.
@@ -32,22 +29,15 @@ constexpr ChannelId kMasterChannel = ChannelId::System;
 TrayMixer::TrayMixer(audio::IMixer& mixer, QWidget* parent)
     : QWidget(parent, Qt::Window | Qt::WindowTitleHint | Qt::WindowCloseButtonHint),
       mixer_(mixer) {
-    // A title bar the compositor draws, so there is always a close button — and
-    // no WindowStaysOnTopHint, so a window left open can never sit over the whole
-    // desktop. See the header for what the frameless version cost.
+    // A compositor-drawn title bar (always a close button) and no stay-on-top hint.
     setWindowTitle(QStringLiteral("Sonero — Volume"));
 
-    // Qt quits when the last window with this attribute closes. Opened from the
-    // tray while the main window is hidden, this is the only visible window —
-    // so without this, closing the volume window shut the whole app down.
+    // Opened while the main window is hidden, this is the only window; closing it must
+    // not quit the app.
     setAttribute(Qt::WA_QuitOnClose, false);
 
-    // The window itself is the surface. The first version put a bordered Card
-    // inside it, which drew a second frame a pixel inside the compositor's own —
-    // two nested boxes around six sliders.
-    // No sheet of its own: these object names are styled in the application
-    // sheet (ui/Theme.cpp) so that a theme reaches the tray window too. A local
-    // setStyleSheet() here would have been immune to it.
+    // The window itself is the surface, styled by the application sheet so themes
+    // reach it.
     setObjectName(QStringLiteral("TrayMixer"));
 
     auto* body = new QVBoxLayout(this);
@@ -68,11 +58,9 @@ TrayMixer::TrayMixer(audio::IMixer& mixer, QWidget* parent)
 
         // The name sits over the fader, not beside it: a left column wide enough
         // for "Microphone" would push the sliders into a narrow strip.
-        auto* name = new QLabel(toQString(audio::channelName(id)), this);
-        name->setObjectName(QStringLiteral("TrayMixerName"));
+        QLabel* name = makeLabel(toQString(audio::channelName(id)), "TrayMixerName");
 
-        auto* value = new QLabel(QStringLiteral("%1%").arg(percent), this);
-        value->setObjectName(QStringLiteral("TrayMixerValue"));
+        QLabel* value = makeLabel(QStringLiteral("%1%").arg(percent), "TrayMixerValue");
         value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
         auto* head = new QHBoxLayout;
@@ -81,8 +69,7 @@ TrayMixer::TrayMixer(audio::IMixer& mixer, QWidget* parent)
         if (id == kMasterChannel) {
             // Moving this one scales every other channel; without a mark the
             // window gives no hint why the whole mix followed.
-            auto* tag = new QLabel(QStringLiteral("MASTER"), this);
-            tag->setObjectName(QStringLiteral("TrayMixerTag"));
+            QLabel* tag = makeLabel(QStringLiteral("MASTER"), "TrayMixerTag");
             head->addWidget(tag);
         }
         head->addStretch(1);
@@ -118,9 +105,7 @@ TrayMixer::TrayMixer(audio::IMixer& mixer, QWidget* parent)
 
 void TrayMixer::showVolume(ChannelId id, float volume) {
     const auto it = rows_.find(static_cast<int>(id));
-    if (it == rows_.end()) {
-        return;
-    }
+    if (it == rows_.end()) return;
     const int percent = toPercent(volume);
     const QSignalBlocker block(it->second.slider);  // model -> UI, not user intent
     it->second.slider->setValue(percent);
@@ -146,9 +131,7 @@ void TrayMixer::popUp() {
         screen = QGuiApplication::primaryScreen();
     }
     if (screen != nullptr) {
-        // Below and left of the pointer — where a tray icon's menu would drop —
-        // kept inside the screen. Wayland ignores the position and places the
-        // window itself; nothing else here depends on it landing exactly.
+        // Below-left of the pointer, inside the screen (Wayland places it itself).
         const QRect area = screen->availableGeometry();
         const QSize own = sizeHint();
         QPoint at(cursor.x() - own.width() / 2, cursor.y() + 12);

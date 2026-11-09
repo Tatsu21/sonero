@@ -26,33 +26,25 @@ constexpr float kLogMin = 1.30103f;   // log10(20)
 constexpr float kLogMax = 4.30103f;   // log10(20000)
 constexpr int kNodeRadius = 7;
 
-// Read from the active theme rather than fixed, so a theme reaches the curve too.
-// A plot is not a stylable widget — every pixel of it is painted here — so the
-// colours have to be fetched rather than inherited from the style sheet.
-[[nodiscard]] QColor mixed(const QColor& a, const QColor& b, double t) {
-    const double u = 1.0 - t;
-    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
-                            a.blueF() * u + b.blueF() * t);
-}
-
 [[nodiscard]] QColor withAlpha(QColor c, int alpha) {
     c.setAlpha(alpha);
     return c;
 }
 
+// Colours come from the active theme: every pixel of the plot is painted here.
 [[nodiscard]] QColor plotBg() {
     // A shade below the card it sits on, so the plot reads as recessed.
     const ThemeTokens& t = currentTheme();
-    return mixed(t.surface, t.bg, 0.55);
+    return mixColors(t.surface, t.bg, 0.55);
 }
 [[nodiscard]] QColor plotBorder() { return currentTheme().border; }
 [[nodiscard]] QColor grid() {
     const ThemeTokens& t = currentTheme();
-    return mixed(plotBg(), t.border, 0.55);
+    return mixColors(plotBg(), t.border, 0.55);
 }
 [[nodiscard]] QColor zeroLine() {
     const ThemeTokens& t = currentTheme();
-    return mixed(t.border, t.textDim, 0.28);
+    return mixColors(t.border, t.textDim, 0.28);
 }
 [[nodiscard]] QColor accent() { return currentTheme().accent; }
 [[nodiscard]] QColor accentHi() { return currentTheme().accentHi; }
@@ -72,9 +64,7 @@ QString readoutText(float freq, float gain) {
     const QString g = QStringLiteral("%1%2 dB")
                           .arg(gain >= 0 ? QStringLiteral("+") : QStringLiteral(""))
                           .arg(gain, 0, 'f', 1);
-    if (freq >= 1000.0f) {
-        return QStringLiteral("%1 kHz  %2").arg(freq / 1000.0f, 0, 'f', 1).arg(g);
-    }
+    if (freq >= 1000.0f) return QStringLiteral("%1 kHz  %2").arg(freq / 1000.0f, 0, 'f', 1).arg(g);
     return QStringLiteral("%1 Hz  %2").arg(static_cast<int>(std::round(freq))).arg(g);
 }
 }  // namespace
@@ -99,9 +89,7 @@ QRectF EqCurve::plotRect() const {
 float EqCurve::freqToX(float freq) const {
     const QRectF r = plotRect();
     const float t = (std::log10(freq) - kLogMin) / (kLogMax - kLogMin);
-    // The rectangle is in qreal; the curve is drawn in float. The cast is
-    // here so the narrowing is a decision rather than something the compiler
-    // does quietly.
+    // The rect is qreal, the curve float: the narrowing is explicit.
     return static_cast<float>(r.left() + t * r.width());
 }
 
@@ -132,9 +120,7 @@ int EqCurve::nearestBand(const QPointF& pos) const {
 }
 
 void EqCurve::applyDrag(const QPointF& pos) {
-    if (dragBand_ < 0 || dragBand_ >= static_cast<int>(settings_.bands.size())) {
-        return;
-    }
+    if (dragBand_ < 0 || dragBand_ >= static_cast<int>(settings_.bands.size())) return;
     const float gain = std::clamp(yToGain(static_cast<float>(pos.y())), kMinGainDb, kMaxGainDb);
     settings_.bands[dragBand_].gainDb = gain;
     emit bandChanged(dragBand_, gain);
@@ -142,9 +128,7 @@ void EqCurve::applyDrag(const QPointF& pos) {
 }
 
 void EqCurve::mousePressEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) {
-        return;
-    }
+    if (event->button() != Qt::LeftButton) return;
     dragBand_ = nearestBand(event->position());
     applyDrag(event->position());
 }
@@ -171,11 +155,8 @@ void EqCurve::leaveEvent(QEvent* /*event*/) {
 void EqCurve::paintEvent(QPaintEvent* /*event*/) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    // Disabled means the curve is not editable (Qt already withholds the mouse
-    // events); fading it is what says so. Every setOpacity below multiplies by
-    // this factor instead of replacing it, or the later layers — the response
-    // curve and the band nodes, the two things that look most clickable — would
-    // paint back at full strength.
+    // Disabled fades the curve. Every setOpacity below multiplies this factor rather
+    // than replacing it, or the nodes would paint back at full strength.
     const qreal dim = isEnabled() ? 1.0 : 0.3;
     p.setOpacity(dim);
 

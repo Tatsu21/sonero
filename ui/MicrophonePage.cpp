@@ -12,7 +12,6 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -24,6 +23,7 @@
 #include "audio/IEqualizerController.h"
 #include "audio/IMicrophoneController.h"
 #include "config/SettingsStore.h"
+#include "ui/UiKit.h"
 #include "ui/widgets/EqCurve.h"
 
 namespace sonar::ui {
@@ -32,50 +32,31 @@ using audio::ChannelId;
 
 namespace {
 constexpr ChannelId kMic = ChannelId::Microphone;
+constexpr int kShownRefreshMs = 45;
+constexpr int kHiddenRefreshMs = 1000;
 
-QLabel* caption(const QString& text, QWidget* parent = nullptr) {
-    auto* label = new QLabel(text, parent);
-    label->setObjectName(QStringLiteral("CardKey"));
+QLabel* caption(const QString& text) {
+    QLabel* label = makeLabel(text, "CardKey");
     label->setMinimumWidth(120);
     return label;
 }
 
-// A titled card; returns the body layout to fill.
-QVBoxLayout* makeCard(QVBoxLayout* root, const QString& title, const QString& subtitle,
-                      bool soon) {
-    auto* frame = new QFrame;
-    frame->setObjectName(QStringLiteral("Card"));
-    auto* body = new QVBoxLayout(frame);
-    body->setContentsMargins(22, 18, 22, 20);
-    body->setSpacing(8);
-
-    auto* headRow = new QHBoxLayout;
-    auto* t = new QLabel(title);
-    t->setObjectName(QStringLiteral("SectionTitle"));
-    headRow->addWidget(t);
-    headRow->addStretch(1);
-    if (soon) {
-        auto* badge = new QLabel(QStringLiteral("PREPARED"));
-        badge->setObjectName(QStringLiteral("SoonBadge"));
-        headRow->addWidget(badge);
+// A caption + level bar row; `value`, when given, gets a readout beside the bar.
+QProgressBar* meterRow(QVBoxLayout* body, const QString& label, QLabel** value = nullptr) {
+    auto* row = new QHBoxLayout;
+    row->addWidget(caption(label));
+    QProgressBar* bar = makeLevelBar("MicLevel");
+    row->addWidget(bar, 1);
+    if (value != nullptr) {
+        *value = makeValueLabel(QStringLiteral("0 dB"));
+        row->addWidget(*value);
     }
-    body->addLayout(headRow);
-
-    if (!subtitle.isEmpty()) {
-        auto* s = new QLabel(subtitle);
-        s->setObjectName(QStringLiteral("Hint"));
-        s->setWordWrap(true);
-        body->addWidget(s);
-    }
-    body->addSpacing(4);
-    root->addWidget(frame);
-    return body;
+    body->addLayout(row);
+    return bar;
 }
 
-// A caption + horizontal slider + value label row.
-//
-// `divisor` is for values a slider cannot hold directly: at 10 it steps in tenths,
-// so a ratio of 2.5:1 is the slider position 25.
+// A caption + horizontal slider + value label row. `divisor` steps in fractions:
+// at 10, a ratio of 2.5:1 is slider position 25.
 QSlider* sliderRow(QVBoxLayout* body, const QString& label, int min, int max, int value,
                    const QString& suffix, bool enabled = true, int divisor = 1) {
     const auto format = [suffix, divisor](int v) {
@@ -90,18 +71,13 @@ QSlider* sliderRow(QVBoxLayout* body, const QString& label, int min, int max, in
     slider->setRange(min, max);
     slider->setValue(value);
     slider->setEnabled(enabled);
-    auto* val = new QLabel(format(slider->value()));
-    val->setObjectName(QStringLiteral("VolumeValue"));
-    val->setMinimumWidth(52);
-    val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    QLabel* val = makeValueLabel(format(slider->value()));
     // The caption and the readout are part of the control: a live-looking value
     // beside a dead slider is the one thing that would still read as usable.
     key->setEnabled(enabled);
     val->setEnabled(enabled);
-    // The readout lives on this signal, so wrapping the slider in a
-    // QSignalBlocker to set it silently desynchronises the two: the handle moves
-    // and the number does not. Use showMicSettings(), which guards the handlers
-    // with syncing_ instead of silencing the slider.
+    // The readout rides this signal, so never set the slider under a QSignalBlocker;
+    // showMicSettings() guards the handlers with syncing_ instead.
     QObject::connect(slider, &QSlider::valueChanged, val,
                      [val, format](int v) { val->setText(format(v)); });
     row->addWidget(slider, 1);
@@ -145,105 +121,51 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     // audio rather than resetting it on every visit.
     mic_ = micController_ != nullptr ? micController_->micSettings()
                                      : dsp::presetSettings(dsp::MicPreset::Podcast);
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    outer->addWidget(scroll);
-
-    auto* page = new QWidget;
-    scroll->setWidget(page);
-    auto* root = new QVBoxLayout(page);
-    root->setContentsMargins(40, 34, 40, 34);
-    root->setSpacing(16);
-
-    auto* title = new QLabel(QStringLiteral("Microphone"), page);
-    title->setObjectName(QStringLiteral("PageTitle"));
-    auto* subtitle = new QLabel(
-        QStringLiteral("Pick your microphone here, then select \"Sonero Microphone\" in your "
-                       "apps. Every app recording from it hears this chain."), page);
-    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
-    auto* head = new QVBoxLayout;
-    head->setSpacing(4);
-    head->addWidget(title);
-    head->addWidget(subtitle);
-    root->addLayout(head);
+    QVBoxLayout* root = makeScrollPage(this, 16);
+    addPageHeader(root,
+                  QStringLiteral("Microphone"),
+                  QStringLiteral("Pick your microphone here, then select \"Sonero Microphone\" in "
+                                 "your apps. Every app recording from it hears this chain."));
 
     // --- Chain preset ---
-    // First, because it is the control that answers "what is this doing to my
-    // voice" fastest: Raw switches every stage off, which is the A/B that makes
-    // the rest of the page audible.
+    // First, because Raw (every stage off) is the A/B that makes the page audible.
     auto* presetRow = new QHBoxLayout;
     presetRow->addWidget(caption(QStringLiteral("Chain preset")));
     chainPreset_ = new QComboBox;
     for (const dsp::MicPreset preset :
          {dsp::MicPreset::Raw, dsp::MicPreset::Podcast, dsp::MicPreset::Streaming,
           dsp::MicPreset::Meeting, dsp::MicPreset::Custom}) {
-        const std::string_view name = dsp::micPresetName(preset);
-        chainPreset_->addItem(QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size())),
-                              static_cast<int>(preset));
+        chainPreset_->addItem(toQString(dsp::micPresetName(preset)), static_cast<int>(preset));
     }
     chainPreset_->setCurrentIndex(1);  // Podcast, which is what the chain starts on
-    // Sized to its contents rather than stretched: a four-item list spread across
-    // the whole window reads as a text field, and the room belongs to the
-    // sentence explaining it.
+    // Sized to its contents; a stretched combo reads as a text field.
     chainPreset_->setMinimumWidth(180);
     presetRow->addWidget(chainPreset_);
-    auto* presetHint = new QLabel(
-        QStringLiteral("Raw = every stage off, the microphone as the device delivers it. "
-                       "Changing any stage below makes it Custom."));
-    presetHint->setObjectName(QStringLiteral("Hint"));
-    presetHint->setWordWrap(true);
-    presetRow->addWidget(presetHint, 1);
+    presetRow->addWidget(
+        makeLabel(QStringLiteral("Raw = every stage off, the microphone as the device delivers "
+                                 "it. Changing any stage below makes it Custom."),
+                  "Hint", true),
+        1);
     root->addLayout(presetRow);
 
     // --- Input (live) ---
     QVBoxLayout* input = makeCard(root, QStringLiteral("Input"),
-                                  QStringLiteral("The device, its gain, mute and level."),
-                                  false);
+                                  QStringLiteral("The device, its gain, mute and level."));
     buildDeviceRow(input);
 
-    // Decibels, not per cent: this is a trim on the way into the chain, and the
-    // gate and the compressor below it have thresholds in decibels. A per-cent
-    // fader would leave the user converting in their head.
+    // Decibels, not per cent: the gate and compressor below think in decibels too.
     gain_ = sliderRow(input, QStringLiteral("Input gain"), -12, 24,
                       static_cast<int>(mic_.inputGainDb), QStringLiteral(" dB"), true);
 
-    // Two gains, because they do different things and conflating them is why the
-    // input fader felt broken. Input gain decides how hard the chain is driven —
-    // raise it and the compressor simply works harder, so the result barely gets
-    // louder, which is exactly what a compressor is for. Output level sits after
-    // the compressor and before the limiter, and is the one that changes how loud
-    // the other end hears you.
+    // Two gains: input gain sets how hard the chain is driven (the compressor evens it
+    // out); output level, after the compressor, is how loud the other end hears you.
     outputGain_ = sliderRow(input, QStringLiteral("Output level"), -12, 12,
                             static_cast<int>(mic_.outputGainDb), QStringLiteral(" dB"), true);
 
-
-    gainValue_ = nullptr;  // handled inside sliderRow
-
-    auto* levelRow = new QHBoxLayout;
-    levelRow->addWidget(caption(QStringLiteral("Input level")));
-    level_ = new QProgressBar;
-    level_->setObjectName(QStringLiteral("MicLevel"));
-    level_->setRange(0, 100);
-    level_->setValue(0);
-    level_->setTextVisible(false);
-    levelRow->addWidget(level_, 1);
-    input->addLayout(levelRow);
-
+    level_ = meterRow(input, QStringLiteral("Input level"));
     // What leaves the chain, because the input meter stands before every stage and
     // so cannot show what the gain, the gate or the mute did.
-    auto* outputRow = new QHBoxLayout;
-    outputRow->addWidget(caption(QStringLiteral("Output")));
-    outputMeter_ = new QProgressBar;
-    outputMeter_->setObjectName(QStringLiteral("MicLevel"));
-    outputMeter_->setRange(0, 100);
-    outputMeter_->setValue(0);
-    outputMeter_->setTextVisible(false);
-    outputRow->addWidget(outputMeter_, 1);
-    input->addLayout(outputRow);
+    outputMeter_ = meterRow(input, QStringLiteral("Output"));
 
     auto* muteRow = new QHBoxLayout;
     mute_ = new QCheckBox(QStringLiteral("Mute microphone"));
@@ -251,17 +173,13 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     muteRow->addStretch(1);
     input->addLayout(muteRow);
 
-    // Below the controls it describes, not between two of them: a paragraph in
-    // the middle of a column of key/value rows breaks the rhythm that makes them
-    // scannable.
-    auto* gainHint = new QLabel(
+    // Below the controls it describes, keeping the key/value rows scannable.
+    input->addSpacing(4);
+    input->addWidget(makeLabel(
         QStringLiteral("Input gain sets how hard the processing is driven; the compressor "
                        "evens out whatever you feed it, so this changes the character more "
-                       "than the volume. Output level is the loudness applications hear."));
-    gainHint->setObjectName(QStringLiteral("Hint"));
-    gainHint->setWordWrap(true);
-    input->addSpacing(4);
-    input->addWidget(gainHint);
+                       "than the volume. Output level is the loudness applications hear."),
+        "Hint", true));
 
     buildEchoCard(root);
     buildEqualizerCard(root);
@@ -278,9 +196,8 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     if (settings_ != nullptr) {
         const QJsonObject m = settings_->section(QStringLiteral("microphone"));
         if (!m.isEmpty()) {
-            // The preset first, because it decides the stages. They are only read
-            // back for Custom: a named preset means whatever it means in this
-            // version, not what it happened to mean when it was last saved.
+            // The preset first, since it decides the stages; stages are read back only for
+            // Custom (a named preset means what it means in this version).
             const int storedPreset = m.value(QStringLiteral("preset"))
                                          .toInt(static_cast<int>(dsp::MicPreset::Podcast));
             const int index = chainPreset_->findData(storedPreset);
@@ -319,37 +236,27 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     showMicSettings();
 
     connect(gain_, &QSlider::valueChanged, this, [this](int v) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         mic_.inputGainDb = static_cast<float>(v);
         pushMicSettings();
     });
     connect(outputGain_, &QSlider::valueChanged, this, [this](int v) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         mic_.outputGainDb = static_cast<float>(v);
         pushMicSettings();
     });
     connect(mute_, &QCheckBox::toggled, this, [this](bool on) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         setMuted(on);
     });
     connect(chainPreset_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         const auto preset = static_cast<dsp::MicPreset>(chainPreset_->itemData(index).toInt());
         if (preset == dsp::MicPreset::Custom) {
             saveMic();  // "Custom" describes what the user did, it does not set anything
             return;
         }
-        // The preset owns the processing, not the levels: someone who set their
-        // trim and their output does not expect a preset to move them, and being
-        // muted is a state, not a sound.
+        // The preset owns the processing, not the levels or the mute.
         const float in = mic_.inputGainDb;
         const float out = mic_.outputGainDb;
         const bool muted = mic_.muted;
@@ -381,24 +288,24 @@ MicrophonePage::MicrophonePage(audio::IChannelController* controller,
     connect(deviceBox_, &QComboBox::activated, this,
             [this](int index) { selectDevice(deviceBox_->itemData(index).toString()); });
 
+    // Meters at 22 fps while shown; hidden, only the device list matters (the
+    // tray menu shows it), and once a second is plenty for that.
     timer_ = new QTimer(this);
-    timer_->setInterval(45);
+    timer_->setInterval(kHiddenRefreshMs);
     connect(timer_, &QTimer::timeout, this, &MicrophonePage::refresh);
     timer_->start();
 }
 
 void MicrophonePage::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    if (micController_ != nullptr) {
-        micController_->setMicLive(true);
-    }
+    timer_->setInterval(kShownRefreshMs);
+    if (micController_ != nullptr) micController_->setMicLive(true);
 }
 
 void MicrophonePage::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
-    if (micController_ != nullptr) {
-        micController_->setMicLive(false);
-    }
+    timer_->setInterval(kHiddenRefreshMs);
+    if (micController_ != nullptr) micController_->setMicLive(false);
 }
 
 std::vector<audio::MicInputDevice> MicrophonePage::inputDevices() const {
@@ -435,23 +342,17 @@ void MicrophonePage::buildDeviceRow(QVBoxLayout* input) {
     row->addWidget(deviceBox_, 1);
     input->addLayout(row);
 
-    deviceStatus_ = new QLabel;
-    deviceStatus_->setObjectName(QStringLiteral("Hint"));
-    deviceStatus_->setWordWrap(true);
+    deviceStatus_ = makeLabel(QString(), "Hint", true);
     deviceStatus_->hide();
     input->addWidget(deviceStatus_);
 }
 
 void MicrophonePage::refreshDevices() {
-    if (deviceBox_ == nullptr) {
-        return;
-    }
+    if (deviceBox_ == nullptr) return;
     const std::vector<audio::MicInputDevice> devices = inputDevices();
     const auto describe = [&devices](const std::string& name) {
         for (const audio::MicInputDevice& device : devices) {
-            if (device.name == name) {
-                return QString::fromStdString(device.description);
-            }
+            if (device.name == name) return QString::fromStdString(device.description);
         }
         return QString::fromStdString(name);
     };
@@ -461,28 +362,21 @@ void MicrophonePage::refreshDevices() {
     const std::string active =
         micController_ != nullptr ? micController_->micActiveCaptureDevice() : std::string();
 
-    const QSignalBlocker block(deviceBox_);
-    deviceBox_->clear();
-    deviceBox_->addItem(
-        defaultInput.empty()
-            ? QStringLiteral("System default")
-            : QStringLiteral("System default (%1)").arg(describe(defaultInput)),
-        QString());
+    std::vector<std::pair<QString, QString>> items;
     bool chosenConnected = device_.isEmpty();
     for (const audio::MicInputDevice& device : devices) {
-        deviceBox_->addItem(deviceText(device), QString::fromStdString(device.name));
-        if (QString::fromStdString(device.name) == device_) {
-            chosenConnected = true;
-        }
+        items.emplace_back(deviceText(device), QString::fromStdString(device.name));
+        chosenConnected = chosenConnected || items.back().second == device_;
     }
     // Unplugged, but still the choice: dropping it from the list would silently
     // turn "my USB mic" into "whatever is the default" the next time it is saved.
-    if (!chosenConnected) {
-        deviceBox_->addItem(QStringLiteral("%1 (not connected)")
-                                .arg(deviceLabel_.isEmpty() ? device_ : deviceLabel_),
-                            device_);
-    }
-    deviceBox_->setCurrentIndex(std::max(0, deviceBox_->findData(device_)));
+    fillDeviceCombo(deviceBox_,
+                    defaultInput.empty()
+                        ? QStringLiteral("System default")
+                        : QStringLiteral("System default (%1)").arg(describe(defaultInput)),
+                    items, device_,
+                    QStringLiteral("%1 (not connected)")
+                        .arg(deviceLabel_.isEmpty() ? device_ : deviceLabel_));
 
     QString status;
     if (!chosenConnected) {
@@ -509,7 +403,7 @@ void MicrophonePage::refreshDevices() {
 QVBoxLayout* MicrophonePage::stageCard(QVBoxLayout* root, const QString& title,
                                        const QString& subtitle, const QString& enableText,
                                        std::function<bool&(dsp::MicSettings&)> field) {
-    QVBoxLayout* body = makeCard(root, title, subtitle, false);
+    QVBoxLayout* body = makeCard(root, title, subtitle);
     QVBoxLayout* panelLayout = nullptr;
     QWidget* panel = makePanel(&panelLayout);
     stageCheck(body, enableText, std::move(field), panel, false);
@@ -527,9 +421,7 @@ QCheckBox* MicrophonePage::stageCheck(QVBoxLayout* body, const QString& text,
     connect(box, &QCheckBox::toggled, panel,
             [panel, panelWhenOff](bool on) { panel->setEnabled(on != panelWhenOff); });
     connect(box, &QCheckBox::toggled, this, [this, field](bool on) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         field(mic_) = on;
         markCustom();
     });
@@ -543,9 +435,7 @@ QSlider* MicrophonePage::stageSlider(QVBoxLayout* body, const QString& label, in
     QSlider* slider = sliderRow(body, label, min, max, value, suffix, true, divisor);
     sliders_.push_back({slider, field, divisor});
     connect(slider, &QSlider::valueChanged, this, [this, field, divisor](int v) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         field(mic_) = static_cast<float>(v) / static_cast<float>(divisor);
         markCustom();
     });
@@ -554,20 +444,8 @@ QSlider* MicrophonePage::stageSlider(QVBoxLayout* body, const QString& label, in
 
 void MicrophonePage::addReductionMeter(QVBoxLayout* body,
                                        std::function<float(const audio::MicLevels&)> read) {
-    auto* row = new QHBoxLayout;
-    row->addWidget(caption(QStringLiteral("Reduction")));
-    auto* bar = new QProgressBar;
-    bar->setObjectName(QStringLiteral("MicLevel"));
-    bar->setRange(0, 100);
-    bar->setValue(0);
-    bar->setTextVisible(false);
-    row->addWidget(bar, 1);
-    auto* value = new QLabel(QStringLiteral("0 dB"));
-    value->setObjectName(QStringLiteral("VolumeValue"));
-    value->setMinimumWidth(52);
-    value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    row->addWidget(value);
-    body->addLayout(row);
+    QLabel* value = nullptr;
+    QProgressBar* bar = meterRow(body, QStringLiteral("Reduction"), &value);
     meters_.push_back({bar, value, std::move(read)});
 }
 
@@ -662,8 +540,7 @@ void MicrophonePage::buildEchoCard(QVBoxLayout* root) {
         root, QStringLiteral("Echo cancellation"),
         QStringLiteral("For speakers: whatever your default output plays — music, games, the "
                        "people in your call — is taken back out of the microphone, so the "
-                       "other end hears you and not your desktop. Not needed with headphones."),
-        false);
+                       "other end hears you and not your desktop. Not needed with headphones."));
 
     // Not part of any preset: it depends on what is on your desk, not on how you
     // want your voice to sound.
@@ -678,9 +555,7 @@ void MicrophonePage::buildEchoCard(QVBoxLayout* root) {
     speakersRow->addWidget(echoSpeakers_, 1);
     body->addLayout(speakersRow);
 
-    echoState_ = new QLabel;
-    echoState_->setObjectName(QStringLiteral("Hint"));
-    echoState_->setWordWrap(true);
+    echoState_ = makeLabel(QString(), "Hint", true);
     body->addWidget(echoState_);
 
     connect(echoEnable_, &QCheckBox::toggled, this, [this] {
@@ -698,39 +573,28 @@ void MicrophonePage::pushEcho() {
 }
 
 void MicrophonePage::refreshEchoSpeakers() {
-    if (echoSpeakers_ == nullptr || micController_ == nullptr) {
-        return;
-    }
+    if (echoSpeakers_ == nullptr || micController_ == nullptr) return;
     const std::vector<audio::AudioDevice> outputs = micController_->micEchoOutputs();
     const std::string defaultOutput = micController_->micDefaultOutput();
     QString defaultLabel;
+    std::vector<std::pair<QString, QString>> items;
     for (const audio::AudioDevice& output : outputs) {
+        items.emplace_back(QString::fromStdString(output.description),
+                           QString::fromStdString(output.name));
         if (output.name == defaultOutput) {
-            defaultLabel = QString::fromStdString(output.description);
+            defaultLabel = items.back().first;
         }
     }
-
-    const QSignalBlocker block(echoSpeakers_);
-    echoSpeakers_->clear();
-    echoSpeakers_->addItem(defaultLabel.isEmpty()
-                               ? QStringLiteral("System default output")
-                               : QStringLiteral("System default output (%1)").arg(defaultLabel),
-                           QString());
-    for (const audio::AudioDevice& output : outputs) {
-        echoSpeakers_->addItem(QString::fromStdString(output.description),
-                               QString::fromStdString(output.name));
-    }
-    if (echoSpeakers_->findData(echoSpeakersName_) < 0) {
-        echoSpeakers_->addItem(QStringLiteral("%1 (not connected)").arg(echoSpeakersName_),
-                               echoSpeakersName_);
-    }
-    echoSpeakers_->setCurrentIndex(std::max(0, echoSpeakers_->findData(echoSpeakersName_)));
+    fillDeviceCombo(echoSpeakers_,
+                    defaultLabel.isEmpty()
+                        ? QStringLiteral("System default output")
+                        : QStringLiteral("System default output (%1)").arg(defaultLabel),
+                    items, echoSpeakersName_,
+                    QStringLiteral("%1 (not connected)").arg(echoSpeakersName_));
 }
 
 void MicrophonePage::showEchoState() {
-    if (echoState_ == nullptr) {
-        return;
-    }
+    if (echoState_ == nullptr) return;
     const bool active = micController_ != nullptr && micController_->micEchoCancellationActive();
     echoShownActive_ = active;
     if (!echoEnable_->isChecked()) {
@@ -752,8 +616,7 @@ void MicrophonePage::buildMonitorCard(QVBoxLayout* root) {
     QVBoxLayout* body = makeCard(
         root, QStringLiteral("Monitoring"),
         QStringLiteral("Hear what your apps hear, on your default output. Use headphones: on "
-                       "speakers the microphone picks itself up and howls."),
-        false);
+                       "speakers the microphone picks itself up and howls."));
 
     // Off on every first run and never tied to a preset, for the same reason.
     monitorEnable_ = new QCheckBox(QStringLiteral("Hear myself"));
@@ -761,14 +624,11 @@ void MicrophonePage::buildMonitorCard(QVBoxLayout* root) {
     monitorLevel_ = sliderRow(body, QStringLiteral("Monitor level"), 0, 100, 50,
                               QStringLiteral("%"));
 
-    latency_ = new QLabel;
-    latency_->setObjectName(QStringLiteral("Hint"));
+    latency_ = makeLabel(QString(), "Hint");
     body->addWidget(latency_);
 
     const auto changed = [this] {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         pushMonitor();
         saveMic();
     };
@@ -796,12 +656,9 @@ void MicrophonePage::buildEqualizerCard(QVBoxLayout* root) {
     QVBoxLayout* body = makeCard(
         root, QStringLiteral("Voice equalizer"),
         QStringLiteral("Shapes the microphone before anything else hears it — every "
-                       "application recording from Sonero gets this curve, not just one."),
-        false);
+                       "application recording from Sonero gets this curve, not just one."));
 
-    // Ten bands rather than the thirty-one a channel gets. A voice is one source
-    // in a narrow range, and thirty-one handles on a microphone is a way to make
-    // it sound worse with more effort.
+    // Ten bands, not thirty-one: a voice is one source in a narrow range.
     dsp::resetBands(eq_, dsp::BandCount::Bands10);
     eq_.enabled = false;
     eq_.preset = dsp::EqPreset::Flat;
@@ -826,16 +683,13 @@ void MicrophonePage::buildEqualizerCard(QVBoxLayout* root) {
     for (const dsp::EqPreset preset :
          {dsp::EqPreset::Flat, dsp::EqPreset::Voice, dsp::EqPreset::Podcast,
           dsp::EqPreset::Warm, dsp::EqPreset::Bright, dsp::EqPreset::Custom}) {
-        preset_->addItem(QString::fromUtf8(dsp::presetName(preset).data(),
-                                           static_cast<qsizetype>(dsp::presetName(preset).size())),
-                         static_cast<int>(preset));
+        preset_->addItem(toQString(dsp::presetName(preset)), static_cast<int>(preset));
     }
     preset_->setMinimumWidth(150);
     topRow->addWidget(preset_);
     topRow->addStretch(1);
 
-    auto* reset = new QPushButton(QStringLiteral("Flat"));
-    reset->setCursor(Qt::PointingHandCursor);
+    auto* reset = makeButton(QStringLiteral("Flat"));
     topRow->addWidget(reset);
     body->addLayout(topRow);
 
@@ -863,9 +717,7 @@ void MicrophonePage::buildEqualizerCard(QVBoxLayout* root) {
     // Dragging a band is what makes a curve the user's rather than a preset's, so
     // the preset name follows the curve instead of contradicting it.
     connect(curve_, &EqCurve::bandChanged, this, [this](int index, float gainDb) {
-        if (index < 0 || index >= static_cast<int>(eq_.bands.size())) {
-            return;
-        }
+        if (index < 0 || index >= static_cast<int>(eq_.bands.size())) return;
         eq_.bands[static_cast<std::size_t>(index)].gainDb = gainDb;
         eq_.preset = dsp::EqPreset::Custom;
         showEq();
@@ -876,7 +728,6 @@ void MicrophonePage::buildEqualizerCard(QVBoxLayout* root) {
     applyEq();
 }
 
-
 void MicrophonePage::buildNoiseCard(QVBoxLayout* root) {
     const bool available =
         micController_ != nullptr && micController_->micNoiseSuppressionAvailable();
@@ -886,37 +737,25 @@ void MicrophonePage::buildNoiseCard(QVBoxLayout* root) {
         QStringLiteral("Removes keyboards, fans and the room with a trained model, "
                        "before the gate and the compressor ever see the signal — so "
                        "their thresholds sit against silence rather than against noise."),
-        !available);
+        8, available ? QString() : QStringLiteral("PREPARED"));
 
     noiseEnable_ = new QCheckBox(QStringLiteral("Enable noise suppression"));
     noiseEnable_->setChecked(available && mic_.noiseSuppression);
     noiseEnable_->setEnabled(available);
     connect(noiseEnable_, &QCheckBox::toggled, this, [this](bool on) {
-        if (syncing_) {
-            return;
-        }
+        if (syncing_) return;
         mic_.noiseSuppression = on;
         markCustom();
     });
     body->addWidget(noiseEnable_);
 
-    // There is no "strength" slider, and that is deliberate: the model decides per
-    // frequency band how much of each frame is voice. A percentage on top of it
-    // would be a second guess layered over a trained one.
-    noiseState_ = new QLabel;
-    noiseState_->setObjectName(QStringLiteral("Hint"));
-    noiseState_->setWordWrap(true);
+    // No "strength" slider: the model decides per band how much of each frame is voice.
+    noiseState_ = makeLabel(QString(), "Hint", true);
     if (available) {
-        noiseState_->setText(
-            QStringLiteral("Model: %1 · adds 10 ms of latency while it is on.")
-                .arg(QString::fromUtf8(micController_->micNoiseSuppressionBackend().data(),
-                                       static_cast<qsizetype>(
-                                           micController_->micNoiseSuppressionBackend().size()))));
+        noiseState_->setText(QStringLiteral("Model: %1 · adds 10 ms of latency while it is on.")
+                                 .arg(toQString(micController_->micNoiseSuppressionBackend())));
     } else {
-        // Say exactly how to get it, rather than greying a switch out and leaving
-        // the user to wonder whether their microphone is at fault. Naming a
-        // package is not enough: only Arch ships one, so on nearly every system
-        // the answer is the script this project carries for that reason.
+        // Say exactly how to get it: almost no distribution packages RNNoise.
         noiseState_->setText(QStringLiteral(
             "Not in this build: RNNoise was not found when Sonero was compiled, and "
             "almost no distribution packages it — Arch has <code>rnnoise</code>, "
@@ -929,33 +768,16 @@ void MicrophonePage::buildNoiseCard(QVBoxLayout* root) {
     }
     body->addWidget(noiseState_);
 
-    auto* meterRow = new QHBoxLayout;
-    meterRow->addWidget(caption(QStringLiteral("Removing")));
-    noiseMeter_ = new QProgressBar;
-    noiseMeter_->setObjectName(QStringLiteral("MicLevel"));
-    noiseMeter_->setRange(0, 100);
-    noiseMeter_->setValue(0);
-    // The number goes in a label beside the bar, not inside it: the styled bar
-    // draws its text hard against the left edge, while every other row on this
-    // page puts its value in a right-aligned label. One of them had to give.
-    noiseMeter_->setTextVisible(false);
+    // The number goes in a right-aligned label, like every other row on the page.
+    noiseMeter_ = meterRow(body, QStringLiteral("Removing"), &noiseValue_);
+    noiseValue_->setText(QStringLiteral("0%"));
     noiseMeter_->setEnabled(available);
-    meterRow->addWidget(noiseMeter_, 1);
-
-    noiseValue_ = new QLabel(QStringLiteral("0%"));
-    noiseValue_->setObjectName(QStringLiteral("VolumeValue"));
-    noiseValue_->setMinimumWidth(52);
-    noiseValue_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     noiseValue_->setEnabled(available);
-    meterRow->addWidget(noiseValue_);
-    body->addLayout(meterRow);
 }
 
 void MicrophonePage::showMicSettings() {
-    // The signals are left alone on purpose. Each slider's readout is kept in
-    // step by a connection of its own, so silencing the slider would move it
-    // without moving the number beside it; `syncing_` stops only the handlers
-    // that would push these values straight back to the audio thread.
+    // Signals are not blocked: each readout follows its slider through its own
+    // connection. `syncing_` only stops the handlers that push back to the audio thread.
     syncing_ = true;
     if (gain_ != nullptr) {
         gain_->setValue(static_cast<int>(mic_.inputGainDb));
@@ -988,6 +810,7 @@ void MicrophonePage::pushMicSettings() {
     }
     saveMic();
 }
+
 void MicrophonePage::showEq() {
     if (curve_ != nullptr) {
         curve_->setSettings(eq_);
@@ -1011,9 +834,7 @@ void MicrophonePage::applyEq() {
 }
 
 void MicrophonePage::refresh() {
-    if (micController_ == nullptr) {
-        return;
-    }
+    if (micController_ == nullptr) return;
     // One reader, because reading clears the peak holds: a second poller
     // elsewhere would see half the transients and so would this one.
     const audio::MicLevels levels = micController_->micLevels();
@@ -1043,9 +864,7 @@ void MicrophonePage::refresh() {
     }
 
     if (noiseMeter_ != nullptr) {
-        // 0 dB of reduction reads as nothing removed, 24 dB as everything the
-        // model is willing to take out. Beyond that the scale stops meaning
-        // anything to a person watching a bar.
+        // 0 dB of reduction reads as nothing removed, 24 dB as the most the model takes out.
         const float removed = std::clamp(-levels.noiseReductionDb / 24.0f, 0.0f, 1.0f);
         const int percent = static_cast<int>(removed * 100.0f);
         noiseMeter_->setValue(percent);
@@ -1056,9 +875,7 @@ void MicrophonePage::refresh() {
 }
 
 void MicrophonePage::saveMic() {
-    if (settings_ == nullptr) {
-        return;
-    }
+    if (settings_ == nullptr) return;
     QJsonObject m = config::micToJson(mic_);
     m[QStringLiteral("device")] = device_;
     m[QStringLiteral("deviceLabel")] = deviceLabel_;

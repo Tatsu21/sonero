@@ -43,7 +43,8 @@ private:
     Notifier* notifier_ = nullptr;
     config::SettingsStore* settings_ = nullptr;
     update::Updater* updater_ = nullptr;
-    QVBoxLayout* systemBody_ = nullptr;  // rows are rebuilt in place
+    QVBoxLayout* systemBody_ = nullptr;
+    QVBoxLayout* systemRows_ = nullptr;  // rebuilt by refreshSystemChecks()
 
     // Update card, kept as members because the updater's signals repaint them.
     QLabel* updateStatus_ = nullptr;

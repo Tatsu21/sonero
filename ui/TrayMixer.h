@@ -15,23 +15,11 @@ class IMixer;
 
 namespace sonar::ui {
 
-// The volume faders, as a small window the tray opens.
-//
-// They cannot live in the tray menu itself: a desktop with a StatusNotifier host
-// (GNOME with AppIndicator, KDE) receives the menu over DBusMenu, which carries
-// only text, icons and checkmarks — a slider embedded as a QWidgetAction arrives
-// there as an empty row. A real window has no such limit and behaves the same on
-// every desktop.
-//
-// A decorated window, not a frameless pop-up. The first version was frameless and
-// closed only by losing focus, which on Wayland it may never be told it did —
-// leaving a window with no title bar, no close button and no Escape, pinned above
-// everything by WindowStaysOnTopHint. That is indistinguishable from a hung
-// desktop. Whatever else changes here, the user must always have a way out.
-//
-// Deliberately dumb, like ChannelStrip: it emits intent and reflects what it is
-// told, so the one place that knows how a volume change reaches PipeWire stays
-// MixerPage::applyChannelVolume().
+// The volume faders as a small window the tray opens — a tray menu travels over
+// DBusMenu, where an embedded slider arrives as an empty row. A decorated window,
+// not a frameless pop-up: on Wayland a pop-up closed only by focus loss could get
+// stuck on top with no way out. It only emits intent and reflects state;
+// MixerPage::applyChannelVolume() applies it.
 class TrayMixer : public QWidget {
     Q_OBJECT
 

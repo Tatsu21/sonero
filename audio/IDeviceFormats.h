@@ -17,9 +17,8 @@ class IDeviceFormats {
 public:
     virtual ~IDeviceFormats() = default;
 
-    // Returns the formats advertised by the first Audio/Sink node whose node.name
-    // contains `nameContains`. `valid` is false if no such node exists or the
-    // backend is offline.
+    // Formats of the first Audio/Sink whose node.name contains `nameContains`;
+    // `valid` is false when there is none or the backend is offline.
     [[nodiscard]] virtual DeviceFormats supportedFormats(const std::string& nameContains) = 0;
 };
 

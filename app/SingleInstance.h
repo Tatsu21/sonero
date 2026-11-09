@@ -7,14 +7,9 @@ class QLocalServer;
 
 namespace sonar {
 
-// Enforces a single running instance and lets a second launch wake the first.
-//
-// A primary instance owns a named QLocalServer socket. Any later launch calls
-// pingPrimary(): if the socket answers, an instance is already alive — the caller
-// forwards an "activate" ping and exits *before* it ever builds the PipeWire graph,
-// so we never end up with two audio backends fighting over the same sinks. The
-// primary reacts to that ping by emitting activationRequested() (used to raise and
-// focus the window).
+// Single running instance: the primary owns a QLocalServer socket; a later launch
+// pings it and exits before building the PipeWire graph, and the primary emits
+// activationRequested() to raise its window.
 class SingleInstance : public QObject {
     Q_OBJECT
 

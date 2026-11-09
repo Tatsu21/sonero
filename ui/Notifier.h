@@ -11,13 +11,8 @@ class SettingsStore;
 
 namespace sonar::ui {
 
-// Sends desktop notifications via the freedesktop D-Bus service
-// (org.freedesktop.Notifications) — natively handled by GNOME Shell, KDE, etc.
-// The "show notifications" preference is persisted in the settings store.
-//
-// Notifications can optionally carry a "default" action so that clicking the
-// notification does something: the service reports the click back over the
-// ActionInvoked D-Bus signal, which we surface as the activated() signal.
+// Desktop notifications over org.freedesktop.Notifications; the on/off preference
+// is persisted. A clickable notification's action comes back as activated().
 class Notifier : public QObject {
     Q_OBJECT
 
@@ -29,12 +24,8 @@ public:
     [[nodiscard]] bool enabled() const { return enabled_; }
     void setEnabled(bool on);  // persists to the settings store
 
-    // Fire-and-forget a notification (no-op when disabled). `icon` is a themed
-    // icon name; a sensible default is used when empty. When `clickable` is true
-    // the notification gets a default action and clicking it emits activated().
-    // A non-empty `key` marks a status update rather than an event: it replaces
-    // the previous notification posted with the same key and is sent as
-    // transient, so it is not kept in the notification history.
+    // Fire-and-forget (no-op when disabled). `icon` is a themed name; `clickable` adds an
+    // action that emits activated(); a non-empty `key` replaces the previous status.
     void notify(const QString& title, const QString& body, Urgency urgency = Normal,
                 const QString& icon = QString(), bool clickable = false,
                 const QString& key = QString());

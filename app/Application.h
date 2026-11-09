@@ -22,10 +22,7 @@ class MainWindow;
 
 namespace sonar {
 
-// Composition root of the program. It receives its dependencies (the audio
-// backend and the mixer) via the constructor and owns the top-level UI. Keeping
-// wiring here — rather than in main() — makes the object graph explicit and
-// testable.
+// Composition root: receives the backend and mixer, owns the top-level UI.
 class Application {
 public:
     Application(std::unique_ptr<audio::IAudioBackend> backend,

@@ -34,45 +34,32 @@ struct Check {
 // True when the process is running from an AppImage bundle.
 [[nodiscard]] bool runningFromAppImage();
 
-// Locate a packaged resource ("udev/70-...rules", "icons/sonero-256.png"),
-// searching the AppImage mount, the system prefix, then the source tree.
-// Returns an empty string when not found.
+// Locate a packaged resource in the AppImage mount, the system prefix, then the
+// source tree; "" when not found.
 [[nodiscard]] QString resourcePath(const QString& relative);
 
 // --- Fixes -------------------------------------------------------------------
 
-// Install the menu entry and icons into ~/.local/share so the AppImage shows up
-// like a normal app. User-level, no privileges, idempotent, safe to call on every
-// start. Returns true when the entry is present afterwards.
+// Install the menu entry and icons into ~/.local/share. User-level, idempotent;
+// true when the entry is present afterwards.
 bool installDesktopIntegration();
 
 // The bundle the menu entry currently points at — the one that ran last. Read it
 // *before* installDesktopIntegration(), which overwrites that entry.
 [[nodiscard]] QString previousBundlePath();
 
-// Deletes `previous`, the bundle superseded by the one running now — updating
-// means downloading a new file, so without this every version stays on disk
-// forever.
-//
-// Call it only *after* installDesktopIntegration() has succeeded. Deleting first
-// leaves a window in which the launcher still names a file that is already gone,
-// and if the rewrite then fails the launcher stays broken for good — the user
-// gets "Failed to launch Sonero" and no way to start it from the menu again.
-//
-// Deliberately narrow, because it removes a file the user downloaded. It acts
-// only when: this run is from an AppImage; `previous` differs from the running
-// bundle, compared canonically so a symlink or a "../" cannot point back at it;
-// and the target is a regular file whose name ends in .AppImage. Anything else is
-// left alone. Returns the path removed, or an empty string.
+// Deletes `previous`, the bundle the running one superseded. Call only after
+// installDesktopIntegration() succeeded, or the launcher names a missing file.
+// Acts only when this run is an AppImage and `previous` is a different (compared
+// canonically) regular *.AppImage file. Returns the path removed, or "".
 QString removeSupersededBundle(const QString& previous);
 
 // The exact shell commands a privileged fix would run, for display *and* for
 // execution — the user sees precisely what will happen before approving.
 [[nodiscard]] QString privilegedFixScript(CheckId id);
 
-// Runs the fix through pkexec, which shows the desktop's own authentication
-// dialog. Returns false if the user cancelled or the command failed; `error`
-// receives a human-readable reason.
+// Run the fix through pkexec (the desktop's own password dialog). False when
+// cancelled or failed, with the reason in `error`.
 bool runPrivilegedFix(CheckId id, QString* error = nullptr);
 
 }  // namespace sonar::setup

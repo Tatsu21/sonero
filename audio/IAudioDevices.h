@@ -52,19 +52,16 @@ public:
     // polls this and only rebuilds when it moves.
     [[nodiscard]] virtual std::uint64_t devicesRevision() const = 0;
 
-    // A2DP codecs offered by a Bluetooth device, plus the active one. `deviceId`
-    // is AudioDevice::deviceId; returns an invalid set for non-Bluetooth or
-    // unreachable devices.
+    // A Bluetooth device's A2DP codecs and the active one (`deviceId` is
+    // AudioDevice::deviceId); invalid for anything else.
     [[nodiscard]] virtual DeviceCodecs deviceCodecs(std::uint32_t deviceId) = 0;
 
     // Switch a Bluetooth device to a codec by its profile index. Returns false if
     // the device could not be reached.
     virtual bool setDeviceProfile(std::uint32_t deviceId, std::uint32_t profileIndex) = 0;
 
-    // Output volume (0..1) of a device's sink node (AudioDevice::nodeId), on the
-    // same cubic scale the desktop's own volume slider uses — so 40% here is 40%
-    // there. Set on the device's route, as the desktop does, which is what the
-    // session manager remembers across a reboot. Returns 1.0 when unreadable.
+    // A device sink's output volume (0..1), on the desktop slider's cubic scale and set
+    // on the route, as the desktop does, so it survives a reboot. 1.0 when unreadable.
     [[nodiscard]] virtual float deviceVolume(std::uint32_t nodeId) = 0;
     virtual void setDeviceVolume(std::uint32_t nodeId, float volume) = 0;
 };

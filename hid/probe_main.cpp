@@ -51,9 +51,8 @@ int main(int argc, char** argv) {
     }
 
     if (watch) {
-        // Print a line only when the report actually changes, so you can power the
-        // headset on/off or pull the spare battery and see exactly which byte moves.
-        // That is how the decode offsets were calibrated in the first place.
+        // Print only when the report changes, so you can see which byte moves (how the
+        // offsets were calibrated).
         std::printf("\nwatching for changes (Ctrl-C to stop) — change headset state now:\n");
         std::array<std::uint8_t, 16> previous{};
         bool havePrevious = false;

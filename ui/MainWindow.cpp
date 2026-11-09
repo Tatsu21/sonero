@@ -1,8 +1,6 @@
 #include "ui/MainWindow.h"
 
 #include <cstdlib>
-#include <string>
-#include <string_view>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -14,7 +12,6 @@
 #include <QIcon>
 #include <QJsonObject>
 #include <QLabel>
-#include <QListWidget>
 #include <QAction>
 #include <QMenu>
 #include <QPixmap>
@@ -35,6 +32,7 @@
 #include "ui/DevicesPage.h"
 #include "ui/EqualizerPage.h"
 #include "ui/Notifier.h"
+#include "ui/UiKit.h"
 #include "ui/ProfilesPage.h"
 #include "ui/SettingsPage.h"
 #include "ui/MicrophonePage.h"
@@ -44,36 +42,21 @@
 namespace sonar::ui {
 
 namespace {
-
-// Linear mix, for the handful of shades this window derives from the theme's
-// tokens rather than taking literally.
-[[nodiscard]] QColor mixColors(const QColor& a, const QColor& b, double t) {
-    const double u = 1.0 - t;
-    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
-                            a.blueF() * u + b.blueF() * t);
-}
-
-
 struct PageDef {
     const char* title;
-    const char* subtitle;
-    bool ready;  // false -> placeholder page, and a nav pill that cannot be clicked
+    const char* tooltip;
 };
 
-// Order here defines both the sidebar order and the stacked-page order.
+// The navigation pills, in the order buildUi() adds the pages to the stack.
 constexpr PageDef kPages[] = {
-    {"Dashboard", "Overview of your audio engine", true},
-    {"Mixer",     "Per-channel volume, mute, solo, balance and live VU meters", true},
-    {"Channels",  "Per-channel gain, output device and equalizer", true},
-    {"Microphone", "Mic input gain, level, noise suppression, gate and monitoring", true},
-    {"Devices",   "USB, Bluetooth, HDMI and external DAC detection & routing", true},
-    {"Profiles",  "Themes and how Sonero looks", true},
-    {"Settings",  "Application preferences, themes and performance options", true},
+    {"Dashboard", "Overview of your audio engine"},
+    {"Mixer",     "Per-channel volume, mute, solo, balance and live VU meters"},
+    {"Channels",  "Per-channel gain, output device and equalizer"},
+    {"Microphone", "Mic input gain, level, noise suppression, gate and monitoring"},
+    {"Devices",   "USB, Bluetooth, HDMI and external DAC detection & routing"},
+    {"Profiles",  "Themes and how Sonero looks"},
+    {"Settings",  "Application preferences, themes and performance options"},
 };
-
-QString toQString(std::string_view sv) {
-    return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size()));
-}
 
 // A never-null application icon: prefer themed audio icons, fall back to a
 // guaranteed style icon so a tray/window icon is never blank.
@@ -81,24 +64,16 @@ QIcon appIcon() {
     for (const char* name :
          {"Sonero", "audio-headphones", "audio-card", "multimedia-volume-control"}) {
         QIcon icon = QIcon::fromTheme(QString::fromLatin1(name));
-        if (!icon.isNull()) {
-            return icon;
-        }
+        if (!icon.isNull()) return icon;
     }
     return QApplication::style()->standardIcon(QStyle::SP_MediaVolume);
 }
 
-// Icon for the system tray. Trays render at 16-24px over a panel background whose
-// colour we cannot know, so we ship a separate flat, high-contrast icon rather
-// than shrinking the dark app tile into an unreadable smudge.
-//
-// Preferred by theme name (KDE and Cinnamon pass the name over D-Bus and let the
-// theme pick the size); falls back to the packaged files, then to the app icon.
+// Tray icon: a flat, high-contrast icon, since trays draw 16-24 px on an unknown
+// background. By theme name first, then the packaged files, then the app icon.
 QIcon trayIcon() {
     QIcon themed = QIcon::fromTheme(QStringLiteral("Sonero-tray"));
-    if (!themed.isNull()) {
-        return themed;
-    }
+    if (!themed.isNull()) return themed;
     QIcon fromFiles;
     for (const int size : {16, 22, 24, 32, 48}) {
         const QString path =
@@ -110,7 +85,8 @@ QIcon trayIcon() {
     return fromFiles.isNull() ? appIcon() : fromFiles;
 }
 
-QFrame* makeCard() {
+// A card with no title, for the dashboard's tiles.
+QFrame* makePlainCard() {
     auto* card = new QFrame;
     card->setObjectName(QStringLiteral("Card"));
     auto* layout = new QVBoxLayout(card);
@@ -120,19 +96,17 @@ QFrame* makeCard() {
 }
 
 QFrame* makeStatCard(const QString& caption, const QString& value, const char* valueObj) {
-    auto* card = makeCard();
+    auto* card = makePlainCard();
     auto* layout = static_cast<QVBoxLayout*>(card->layout());
 
-    auto* cap = new QLabel(caption);
-    cap->setObjectName(QStringLiteral("CardKey"));
+    QLabel* cap = makeLabel(caption, "CardKey");
     QFont capFont = cap->font();
     capFont.setPointSize(9);
     capFont.setBold(true);
     capFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
     cap->setFont(capFont);
 
-    auto* val = new QLabel(value);
-    val->setObjectName(QString::fromLatin1(valueObj));
+    QLabel* val = makeLabel(value, valueObj);
     QFont valFont = val->font();
     valFont.setPointSize(19);
     valFont.setBold(true);
@@ -145,13 +119,9 @@ QFrame* makeStatCard(const QString& caption, const QString& value, const char* v
 
 QHBoxLayout* keyValue(const QString& key, const QString& value) {
     auto* row = new QHBoxLayout;
-    auto* k = new QLabel(key);
-    k->setObjectName(QStringLiteral("CardKey"));
-    auto* v = new QLabel(value);
-    v->setObjectName(QStringLiteral("CardVal"));
-    row->addWidget(k);
+    row->addWidget(makeLabel(key, "CardKey"));
     row->addStretch(1);
-    row->addWidget(v);
+    row->addWidget(makeLabel(value, "CardVal"));
     return row;
 }
 
@@ -185,9 +155,7 @@ void MainWindow::buildUi() {
 
     // ---- Settings persistence (auto-loaded here, saved on change by the pages) ----
     settings_ = new config::SettingsStore(this);
-    // Before any page exists, so a custom theme is never preceded by a flash of
-    // the built-in one. main() has already applied the built-in theme, which is
-    // what stays if there is nothing remembered or the file has since broken.
+    // Before any page exists, so a custom theme never flashes the built-in one first.
     ProfilesPage::applySavedTheme(settings_);
     notifier_ = new Notifier(settings_, this);  // desktop notifications
     // Checks GitHub for a newer release once a day (unless switched off); it
@@ -195,83 +163,56 @@ void MainWindow::buildUi() {
     updater_ = new update::Updater(settings_, this);
     connect(updater_, &update::Updater::updateFound, this,
             [this](const update::Release& release) {
-                if (notifier_ == nullptr) {
-                    return;
-                }
-                // Not clickable: clicking a notification restores the window,
-                // which says nothing about the update. The Settings page is
-                // where the decision is made, and it is already painted.
+                if (notifier_ == nullptr) return;
+                // Not clickable: the decision is made on the Settings page.
                 notifier_->notify(QStringLiteral("Sonero %1 is available").arg(release.version),
                                   QStringLiteral("Open Settings → Updates to install it."),
                                   Notifier::Low);
             });
     // Clicking the "running in background" notification brings the window back.
-    connect(notifier_, &Notifier::activated, this, [this] {
-        showNormal();
-        raise();
-        activateWindow();
-    });
+    connect(notifier_, &Notifier::activated, this, &MainWindow::bringToFront);
 
-    // ---- Pages ----
+    // ---- Pages, in kPages order ----
     pages_ = new QStackedWidget(this);
-    for (const auto& page : kPages) {
-        const std::string_view titleView(page.title);
-        if (titleView == "Dashboard") {
-            pages_->addWidget(createDashboardPage());
-        } else if (titleView == "Mixer") {
-            mixerPage_ = new MixerPage(mixer_, router_, controller_, audioDevices_, settings_);
-            pages_->addWidget(mixerPage_);
-        } else if (titleView == "Channels") {
-            auto* channels = new EqualizerPage(eqController_, settings_, audioDevices_);
-            // Trim / auto-gain / output are edited here but owned by the mixer,
-            // whose metering loop drives auto-gain. Route the intent across.
-            if (mixerPage_ != nullptr) {
-                connect(channels, &EqualizerPage::channelGainChanged, mixerPage_,
-                        &MixerPage::applyChannelGainDb);
-                connect(channels, &EqualizerPage::channelAutoGainToggled, mixerPage_,
-                        &MixerPage::applyChannelAutoGain);
-                connect(channels, &EqualizerPage::channelOutputChanged, mixerPage_,
-                        &MixerPage::applyChannelOutput);
-                connect(channels, &EqualizerPage::channelSelected, this,
-                        [this, channels](audio::ChannelId id) {
-                            channels->showChannelGain(mixerPage_->channelGainDb(id),
-                                                      mixerPage_->channelAutoGain(id));
-                            channels->showChannelOutput(mixerPage_->channelOutput(id));
-                        });
-                // ...and back: while auto-gain runs it, not the user, owns the value.
-                connect(mixerPage_, &MixerPage::channelGainDbChanged, channels,
-                        &EqualizerPage::showAutoGainValue);
-                // Nothing has been clicked yet, so seed the controls with the
-                // channel the page opens on — otherwise a restored gain or an
-                // enabled Auto only appears after switching channels once.
-                const audio::ChannelId first = channels->selectedChannel();
-                channels->showChannelGain(mixerPage_->channelGainDb(first),
-                                          mixerPage_->channelAutoGain(first));
-                channels->showChannelOutput(mixerPage_->channelOutput(first));
-            }
-            pages_->addWidget(channels);
-        } else if (titleView == "Microphone") {
-            microphonePage_ =
-                new MicrophonePage(controller_, eqController_, micController_, settings_);
-            pages_->addWidget(microphonePage_);
-        } else if (titleView == "Devices") {
-            devicesPage_ = new DevicesPage(audioDevices_, deviceFormats_, settings_, notifier_);
-            // The page already polls both battery sources (USB HID and BlueZ);
-            // the tray reads its results rather than polling them a second time.
-            connect(devicesPage_, &DevicesPage::batteriesChanged, this,
-                    &MainWindow::showBatteries);
-            pages_->addWidget(devicesPage_);
-        } else if (titleView == "Profiles") {
-            pages_->addWidget(new ProfilesPage(settings_));
-        } else if (titleView == "Settings") {
-            pages_->addWidget(new SettingsPage(notifier_, settings_, updater_));
-        } else {
-            pages_->addWidget(createPlaceholderPage(QString::fromUtf8(page.title),
-                                                    QString::fromUtf8(page.subtitle)));
-        }
-    }
+    pages_->addWidget(createDashboardPage());
 
-    // ---- Sidebar ----
+    mixerPage_ = new MixerPage(mixer_, router_, controller_, settings_);
+    pages_->addWidget(mixerPage_);
+
+    auto* channels = new EqualizerPage(eqController_, settings_, audioDevices_);
+    // Trim / auto-gain / output are edited here but owned by the mixer, whose
+    // metering loop drives auto-gain. Route the intent across.
+    connect(channels, &EqualizerPage::channelGainChanged, mixerPage_,
+            &MixerPage::applyChannelGainDb);
+    connect(channels, &EqualizerPage::channelAutoGainToggled, mixerPage_,
+            &MixerPage::applyChannelAutoGain);
+    connect(channels, &EqualizerPage::channelOutputChanged, mixerPage_,
+            &MixerPage::applyChannelOutput);
+    const auto showChannel = [this, channels](audio::ChannelId id) {
+        channels->showChannelGain(mixerPage_->channelGainDb(id), mixerPage_->channelAutoGain(id));
+        channels->showChannelOutput(mixerPage_->channelOutput(id));
+    };
+    connect(channels, &EqualizerPage::channelSelected, this, showChannel);
+    // ...and back: while auto-gain runs it, not the user, owns the value.
+    connect(mixerPage_, &MixerPage::channelGainDbChanged, channels,
+            &EqualizerPage::showAutoGainValue);
+    // Seed the controls with the channel the page opens on.
+    showChannel(channels->selectedChannel());
+    pages_->addWidget(channels);
+
+    microphonePage_ = new MicrophonePage(controller_, eqController_, micController_, settings_);
+    pages_->addWidget(microphonePage_);
+
+    devicesPage_ = new DevicesPage(audioDevices_, deviceFormats_, settings_, notifier_);
+    // The page already polls both battery sources (USB HID and BlueZ); the tray
+    // reads its results rather than polling them a second time.
+    connect(devicesPage_, &DevicesPage::batteriesChanged, this, &MainWindow::showBatteries);
+    pages_->addWidget(devicesPage_);
+
+    pages_->addWidget(new ProfilesPage(settings_));
+    pages_->addWidget(new SettingsPage(notifier_, settings_, updater_));
+    Q_ASSERT(pages_->count() == static_cast<int>(std::size(kPages)));
+
     // ---- Top bar: logo, then one pill per page ----
     auto* topBar = new QWidget(this);
     auto* topRow = new QHBoxLayout(topBar);
@@ -290,8 +231,7 @@ void MainWindow::buildUi() {
                                 : QPixmap(iconPath).scaled(28, 28, Qt::KeepAspectRatio,
                                                            Qt::SmoothTransformation));
     }
-    auto* logoText = new QLabel(QStringLiteral("Sonero"), topBar);
-    logoText->setObjectName(QStringLiteral("AppLogo"));
+    QLabel* logoText = makeLabel(QStringLiteral("Sonero"), "AppLogo");
     // Mark and wordmark share one vertical centre line; without the explicit
     // alignment the label sits on its own baseline and drifts off the icon.
     logoMark->setFixedSize(28, 28);
@@ -309,16 +249,12 @@ void MainWindow::buildUi() {
     for (int i = 0; i < static_cast<int>(std::size(kPages)); ++i) {
         auto* tab = new QPushButton(QString::fromUtf8(kPages[i].title), topBar);
         tab->setCheckable(true);
-        tab->setCursor(kPages[i].ready ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        tab->setToolTip(QString::fromUtf8(kPages[i].subtitle));
-        // Styled by the application sheet, not here: a pill with its own sheet
-        // could not follow a theme change. The `tab` property is what selects
-        // its tint there.
+        tab->setCursor(Qt::PointingHandCursor);
+        tab->setToolTip(QString::fromUtf8(kPages[i].tooltip));
+        // Styled by the application sheet so it follows the theme; `tab` selects its tint.
         tab->setObjectName(QStringLiteral("NavPill"));
         tab->setProperty("tab", i % 7);
         tab->setFixedHeight(38);
-        // Opening a placeholder only promises a module that is not there.
-        tab->setEnabled(kPages[i].ready);
         navGroup_->addButton(tab, i);
         topRow->addWidget(tab, 1, Qt::AlignVCenter);
     }
@@ -328,8 +264,7 @@ void MainWindow::buildUi() {
     if (const char* p = std::getenv("SONAR_PAGE")) {  // dev hook for screenshots
         startRow = QString::fromLatin1(p).toInt();
     }
-    const QAbstractButton* startTab = navGroup_->button(startRow);
-    if (startTab == nullptr || !startTab->isEnabled()) {  // SONAR_PAGE may name a placeholder
+    if (navGroup_->button(startRow) == nullptr) {  // SONAR_PAGE out of range
         startRow = 0;
     }
     if (QAbstractButton* first = navGroup_->button(startRow)) {
@@ -408,17 +343,13 @@ void MainWindow::buildUi() {
 
     buildTrayIcon();  // enables running in the background
 
-    // The page polled once while it was being constructed — before the connect
-    // above existed and before there was a tray to draw into — and it stays quiet
-    // until a level moves. Without this seeding, the menu shows no batteries at
-    // all until one of them happens to change.
+    // The page polled once before the connect above existed; seed the tray from it.
     if (devicesPage_ != nullptr) {
         showBatteries(devicesPage_->batteries());
     }
 
-    // The automatic update check, if the user asked for one — after a delay, so
-    // it never competes with the audio graph coming up, and throttled to once a
-    // day inside the updater itself. Does nothing at all when switched off.
+    // The automatic update check (if enabled), delayed past the audio graph coming up;
+    // the updater itself throttles it to once a day.
     QTimer::singleShot(8000, updater_, [this] { updater_->checkOnStartupIfDue(); });
 }
 
@@ -432,9 +363,7 @@ void MainWindow::buildTrayIcon() {
     auto* menu = new QMenu(this);
     trayMenu_ = menu;  // showBatteries() inserts its entries at the top
     if (mixerPage_ != nullptr) {
-        // The faders open as a window rather than living in this menu: a desktop
-        // that takes the menu over DBusMenu (GNOME with AppIndicator, KDE) drops
-        // embedded widgets, so a slider here would arrive as an empty row.
+        // The faders open as a window: over DBusMenu an embedded slider arrives as an empty row.
         QAction* volumeAction = menu->addAction(QStringLiteral("Volume…"));
         connect(volumeAction, &QAction::triggered, this, &MainWindow::showTrayMixer);
     }
@@ -447,11 +376,7 @@ void MainWindow::buildTrayIcon() {
         rebuildTrayMicMenu();
     }
     QAction* showAction = menu->addAction(QStringLiteral("Show Sonero"));
-    connect(showAction, &QAction::triggered, this, [this] {
-        showNormal();
-        raise();
-        activateWindow();
-    });
+    connect(showAction, &QAction::triggered, this, &MainWindow::bringToFront);
     menu->addSeparator();
     QAction* quitAction = menu->addAction(QStringLiteral("Quit"));
     connect(quitAction, &QAction::triggered, this, &MainWindow::quitApplication);
@@ -465,9 +390,7 @@ void MainWindow::buildTrayIcon() {
                     if (isVisible() && !isMinimized()) {
                         hide();
                     } else {
-                        showNormal();
-                        raise();
-                        activateWindow();
+                        bringToFront();
                     }
                 }
             });
@@ -475,9 +398,7 @@ void MainWindow::buildTrayIcon() {
 }
 
 void MainWindow::rebuildTrayMicMenu() {
-    if (trayMicMenu_ == nullptr) {
-        return;
-    }
+    if (trayMicMenu_ == nullptr) return;
     trayMicMenu_->clear();
 
     QAction* mute = trayMicMenu_->addAction(QStringLiteral("Mute"));
@@ -500,9 +421,7 @@ void MainWindow::rebuildTrayMicMenu() {
 }
 
 void MainWindow::showTrayMixer() {
-    if (mixerPage_ == nullptr) {
-        return;
-    }
+    if (mixerPage_ == nullptr) return;
     if (trayMixer_ != nullptr && trayMixer_->isVisible()) {
         trayMixer_->close();  // the menu entry toggles: a second click puts it away
         return;
@@ -516,18 +435,13 @@ void MainWindow::showTrayMixer() {
         connect(mixerPage_, &MixerPage::channelVolumeChanged, trayMixer_.get(),
                 &TrayMixer::showVolume);
     }
-    // Off the menu-activation stack. A StatusNotifier host (gnome-shell here)
-    // still holds its own input grab while it runs this action; showing and
-    // focusing a window inside that window leaves the grab hanging, and the whole
-    // desktop stops responding to clicks. Let the shell finish closing the menu
-    // first.
+    // Off the menu-activation stack: gnome-shell still holds an input grab while it
+    // runs the action, and showing a window inside it froze the desktop.
     QTimer::singleShot(0, this, [this] { trayMixer_->popUp(); });
 }
 
 void MainWindow::showBatteries(const QList<BatteryLevel>& levels) {
-    if (trayMenu_ == nullptr) {
-        return;  // no system tray on this desktop
-    }
+    if (trayMenu_ == nullptr) return;  // no system tray on this desktop
     // Rebuild rather than edit in place: devices come and go, so the count
     // changes, not just the numbers.
     for (QAction* action : batteryActions_) {
@@ -535,9 +449,7 @@ void MainWindow::showBatteries(const QList<BatteryLevel>& levels) {
         delete action;
     }
     batteryActions_.clear();
-    if (levels.isEmpty()) {
-        return;  // nothing with a battery is connected: no entries, no separator
-    }
+    if (levels.isEmpty()) return;  // nothing with a battery is connected: no entries, no separator
 
     // Above "Show Sonero", so the reading is the first thing the menu shows.
     QAction* before = trayMenu_->actions().value(0);
@@ -555,25 +467,27 @@ void MainWindow::showBatteries(const QList<BatteryLevel>& levels) {
     batteryActions_.append(trayMenu_->insertSeparator(before));
 }
 
+void MainWindow::bringToFront() {
+    showNormal();
+    raise();
+    activateWindow();
+}
+
 void MainWindow::quitApplication() {
     forceQuit_ = true;  // let closeEvent through instead of hiding to the tray
     QApplication::quit();
 }
 
 bool MainWindow::runInBackgroundEnabled() const {
-    if (settings_ == nullptr) {
-        return false;
-    }
-    return settings_->section(QStringLiteral("general"))
-        .value(QStringLiteral("runInBackground"))
-        .toBool(true);  // background daemon behavior is the default
+    if (settings_ == nullptr) return false;
+    // Background daemon behaviour is the default.
+    return settings_->value(QStringLiteral("general"), QStringLiteral("runInBackground"))
+        .toBool(true);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
-    // Hide instead of exiting, keeping the PipeWire graph alive. This does not
-    // depend on a system tray (GNOME/Wayland has none by default) — the window is
-    // brought back either from the tray, or by simply launching Sonero again
-    // (the single-instance guard forwards that to us as an activation request).
+    // Hide instead of exiting, keeping the PipeWire graph alive. Brought back from the
+    // tray, or by launching Sonero again (the single-instance guard forwards that).
     if (!forceQuit_ && runInBackgroundEnabled()) {
         hide();
         event->ignore();
@@ -584,11 +498,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::showBackgroundHintOnce() {
-    if (settings_ == nullptr) {
-        return;
-    }
-    QJsonObject g = settings_->section(QStringLiteral("general"));
-    if (g.value(QStringLiteral("backgroundHintShown")).toBool(false)) {
+    if (settings_ == nullptr) return;
+    if (settings_->value(QStringLiteral("general"), QStringLiteral("backgroundHintShown"))
+            .toBool(false)) {
         return;
     }
     const QString body =
@@ -604,8 +516,7 @@ void MainWindow::showBackgroundHintOnce() {
         notifier_->notify(QStringLiteral("Sonero"), body, Notifier::Low, QString(),
                           /*clickable=*/true);
     }
-    g[QStringLiteral("backgroundHintShown")] = true;
-    settings_->putSection(QStringLiteral("general"), g);
+    settings_->putValue(QStringLiteral("general"), QStringLiteral("backgroundHintShown"), true);
 }
 
 QWidget* MainWindow::createDashboardPage() {
@@ -614,15 +525,8 @@ QWidget* MainWindow::createDashboardPage() {
     layout->setContentsMargins(40, 34, 40, 34);
     layout->setSpacing(22);
 
-    auto* title = new QLabel(QStringLiteral("Dashboard"));
-    title->setObjectName(QStringLiteral("PageTitle"));
-    auto* subtitle = new QLabel(QStringLiteral("Overview of your audio engine"));
-    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
-    auto* head = new QVBoxLayout;
-    head->setSpacing(4);
-    head->addWidget(title);
-    head->addWidget(subtitle);
-    layout->addLayout(head);
+    addPageHeader(layout, QStringLiteral("Dashboard"),
+                  QStringLiteral("Overview of your audio engine"));
 
     const bool available = backend_.isAvailable();
     const auto info = backend_.serverInfo();
@@ -636,10 +540,9 @@ QWidget* MainWindow::createDashboardPage() {
     cards->addWidget(makeStatCard(QStringLiteral("BACKEND"), QStringLiteral("PipeWire"), "CardVal"));
     layout->addLayout(cards);
 
-    auto* card = makeCard();
+    auto* card = makePlainCard();
     auto* cardLayout = static_cast<QVBoxLayout*>(card->layout());
-    auto* connTitle = new QLabel(QStringLiteral("Connection"));
-    connTitle->setObjectName(QStringLiteral("SectionTitle"));
+    QLabel* connTitle = makeLabel(QStringLiteral("Connection"), "SectionTitle");
     cardLayout->addWidget(connTitle);
 
     if (available) {
@@ -652,40 +555,11 @@ QWidget* MainWindow::createDashboardPage() {
             QStringLiteral("%1@%2").arg(QString::fromStdString(info.userName),
                                         QString::fromStdString(info.hostName))));
     } else {
-        auto* hint = new QLabel(
-            QStringLiteral("Start the PipeWire service to enable audio features."));
-        hint->setObjectName(QStringLiteral("Hint"));
+        QLabel* hint = makeLabel(
+            QStringLiteral("Start the PipeWire service to enable audio features."), "Hint");
         cardLayout->addWidget(hint);
     }
 
-    layout->addWidget(card);
-    layout->addStretch(1);
-    return page;
-}
-
-QWidget* MainWindow::createPlaceholderPage(const QString& title, const QString& subtitle) {
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setContentsMargins(40, 34, 40, 34);
-    layout->setSpacing(10);
-    layout->setAlignment(Qt::AlignTop);
-
-    auto* titleLabel = new QLabel(title);
-    titleLabel->setObjectName(QStringLiteral("PageTitle"));
-
-    auto* subLabel = new QLabel(subtitle);
-    subLabel->setObjectName(QStringLiteral("PageSubtitle"));
-    subLabel->setWordWrap(true);
-
-    auto* card = makeCard();
-    auto* cardLayout = static_cast<QVBoxLayout*>(card->layout());
-    auto* badge = new QLabel(QStringLiteral("This module arrives in a later stage."));
-    badge->setObjectName(QStringLiteral("Hint"));
-    cardLayout->addWidget(badge);
-
-    layout->addWidget(titleLabel);
-    layout->addWidget(subLabel);
-    layout->addSpacing(10);
     layout->addWidget(card);
     layout->addStretch(1);
     return page;

@@ -9,6 +9,8 @@
 #include "dsp/Equalizer.h"
 
 namespace dsp = sonar::dsp;
+using sonar::config::bassFromJson;
+using sonar::config::bassToJson;
 using sonar::config::eqFromJson;
 using sonar::config::eqToJson;
 using sonar::config::SettingsStore;
@@ -24,6 +26,7 @@ private slots:
     void eqRoundTrips();
     void micRoundTrips();
     void micFromJsonFallsBackAndClamps();
+    void bassRoundTripsAndFallsBack();
     void damagedFileIsFirstRun();
 };
 
@@ -124,6 +127,41 @@ void SettingsStoreTest::micFromJsonFallsBackAndClamps() {
     edited[QStringLiteral("compressor")] = comp;
     s = sonar::config::micFromJson(edited, fallback);
     QCOMPARE(s.compressor.ratio, 1.0f);
+}
+
+void SettingsStoreTest::bassRoundTripsAndFallsBack() {
+    dsp::BassStageSettings b;
+    b.bass.enabled = !b.bass.enabled;
+    b.bass.crossoverHz = 95.0f;
+    b.bass.amountDb = 7.0f;
+    b.bass.harmonics = 3;
+    b.bass.evenWeight = 0.25f;
+    b.bass.attackMs = 4.0f;
+    b.bass.releaseMs = 120.0f;
+    b.bass.replaceLows = !b.bass.replaceLows;
+    b.limiterEnabled = !b.limiterEnabled;
+    b.limiterCeilingDb = -2.0f;
+
+    const dsp::BassStageSettings back = bassFromJson(bassToJson(b), dsp::BassStageSettings{});
+    QCOMPARE(back.bass.enabled, b.bass.enabled);
+    QCOMPARE(back.bass.crossoverHz, b.bass.crossoverHz);
+    QCOMPARE(back.bass.amountDb, b.bass.amountDb);
+    QCOMPARE(back.bass.harmonics, b.bass.harmonics);
+    QCOMPARE(back.bass.evenWeight, b.bass.evenWeight);
+    QCOMPARE(back.bass.attackMs, b.bass.attackMs);
+    QCOMPARE(back.bass.releaseMs, b.bass.releaseMs);
+    QCOMPARE(back.bass.replaceLows, b.bass.replaceLows);
+    QCOMPARE(back.limiterEnabled, b.limiterEnabled);
+    QCOMPARE(back.limiterCeilingDb, b.limiterCeilingDb);
+
+    // Missing and mistyped keys keep the fallback.
+    QJsonObject partial;
+    partial[QStringLiteral("amountDb")] = 3.0;
+    partial[QStringLiteral("harmonics")] = QStringLiteral("many");
+    const dsp::BassStageSettings merged = bassFromJson(partial, b);
+    QCOMPARE(merged.bass.amountDb, 3.0f);
+    QCOMPARE(merged.bass.harmonics, b.bass.harmonics);
+    QCOMPARE(merged.bass.crossoverHz, b.bass.crossoverHz);
 }
 
 void SettingsStoreTest::damagedFileIsFirstRun() {

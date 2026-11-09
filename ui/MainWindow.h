@@ -37,16 +37,14 @@ class QAction;
 class QMenu;
 
 class QButtonGroup;
-class QListWidget;
 class QStackedWidget;
 class QSystemTrayIcon;
 class QCloseEvent;
 
 namespace sonar::ui {
 
-// Top-level window: a navigation sidebar on the left and a stack of pages on the
-// right. For Stage 1 only the Dashboard is functional (it reports the audio
-// backend status); the other pages are placeholders for later stages.
+// Top-level window: a bar of navigation pills over a stack of pages, plus the
+// tray icon and its menu.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -59,6 +57,9 @@ public:
                audio::IMicrophoneController* micController = nullptr,
                QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // Show, un-minimise and focus the window (tray, notification, second launch).
+    void bringToFront();
 
 protected:
     // Closing the window hides it to the tray (keeping PipeWire sinks alive) when
@@ -76,7 +77,6 @@ private:
     [[nodiscard]] bool runInBackgroundEnabled() const;
     void quitApplication();
     QWidget* createDashboardPage();
-    QWidget* createPlaceholderPage(const QString& title, const QString& subtitle);
 
     const audio::IAudioBackend& backend_;
     audio::IMixer& mixer_;

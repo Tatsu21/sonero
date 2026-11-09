@@ -17,14 +17,8 @@
 int main(int argc, char* argv[]) {
     sonar::log::init(sonar::log::Level::Debug);
 
-    // Identity before the application object, not after. These are static and
-    // documented as settable beforehand, and on Wayland it matters: the platform
-    // plugin registers the process with the desktop portal while QApplication is
-    // being constructed, taking the desktop file name as the app id. Setting the
-    // name afterwards made Qt ask the portal a second time on the same bus
-    // connection, which it refuses — "Connection already associated with an
-    // application ID" — leaving the registration that stuck as the one made
-    // before the name was known.
+    // Identity before QApplication: on Wayland the platform plugin registers the app id
+    // with the portal during construction, and a later rename is refused.
     QApplication::setApplicationName(QStringLiteral("Sonero"));
     QApplication::setOrganizationName(QStringLiteral("Sonero"));
     QApplication::setApplicationVersion(QString::fromStdString(sonar::versionString()));
@@ -45,19 +39,15 @@ int main(int argc, char* argv[]) {
     // Single instance: if one is already running, wake it and bail out *before*
     // touching PipeWire, so a second launch never spins up a duplicate audio graph.
     sonar::SingleInstance instance(QStringLiteral("Sonero.instance"));
-    if (instance.pingPrimary()) {
-        return 0;
-    }
+    if (instance.pingPrimary()) return 0;
     instance.listen();
 
     sonar::ui::applyTheme(qtApp);
 
     int code = 0;
     {
-        // Dependency injection: concrete implementations are chosen here and
-        // passed in as their abstractions. Scoped so the whole object graph
-        // (including PipeWireManager, which logs while shutting down) is
-        // destroyed before the logger is shut down below.
+        // Concrete implementations are chosen here. Scoped so the whole graph is destroyed
+        // before the logger shuts down.
         auto backend = std::make_unique<sonar::audio::PipeWireManager>();
         auto mixer = std::make_unique<sonar::audio::Mixer>();
         sonar::Application app(std::move(backend), std::move(mixer));
@@ -75,9 +65,8 @@ int main(int argc, char* argv[]) {
         code = qtApp.exec();
     }
 
-    // An installed update restarts into the new build only now: the audio graph
-    // is torn down, and once the socket is closed the new process becomes the
-    // primary instead of waking this one on its way out.
+    // Start an installed update only now: with the socket closed, the new process
+    // becomes the primary instead of waking this one.
     const QString relaunch = sonar::update::takeScheduledRelaunch();
     if (!relaunch.isEmpty()) {
         instance.close();

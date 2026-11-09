@@ -13,24 +13,18 @@ target_link_libraries(DeviceFormatTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME DeviceFormatTest COMMAND DeviceFormatTest)
 
 # SettingsStore lives in the app target, so compile its source into the test.
-add_executable(SettingsStoreTest SettingsStoreTest.cpp
-    ${CMAKE_SOURCE_DIR}/config/SettingsStore.cpp)
-target_link_libraries(SettingsStoreTest PRIVATE sonero_core Qt6::Test)
+add_executable(SettingsStoreTest SettingsStoreTest.cpp)
+target_link_libraries(SettingsStoreTest PRIVATE sonero_app Qt6::Test)
 add_test(NAME SettingsStoreTest COMMAND SettingsStoreTest)
 
 # Likewise for the autostart helper.
-add_executable(AutoStartTest AutoStartTest.cpp
-    ${CMAKE_SOURCE_DIR}/app/AutoStart.cpp)
-target_link_libraries(AutoStartTest PRIVATE sonero_core Qt6::Test)
+add_executable(AutoStartTest AutoStartTest.cpp)
+target_link_libraries(AutoStartTest PRIVATE sonero_app Qt6::Test)
 add_test(NAME AutoStartTest COMMAND AutoStartTest)
 
 # System integration checks — most importantly, what the privileged fixes run.
-add_executable(SystemSetupTest SystemSetupTest.cpp
-    ${CMAKE_SOURCE_DIR}/app/SystemSetup.cpp
-    ${CMAKE_SOURCE_DIR}/app/AutoStart.cpp)
-target_link_libraries(SystemSetupTest PRIVATE sonero_core Qt6::Test)
-target_compile_definitions(SystemSetupTest PRIVATE
-    SONAR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_executable(SystemSetupTest SystemSetupTest.cpp)
+target_link_libraries(SystemSetupTest PRIVATE sonero_app Qt6::Test)
 add_test(NAME SystemSetupTest COMMAND SystemSetupTest)
 
 # Equalizer gain staging — guards against feeding the summed display curve into
@@ -52,10 +46,8 @@ add_test(NAME FormatTest COMMAND FormatTest)
 # Update logic: version comparison, the GitHub payload, which bundle is offered
 # and — the one that decides whether the app may write anything at all — which
 # kind of install this is. All pure; the network path is not exercised here.
-add_executable(UpdaterTest UpdaterTest.cpp
-    ${CMAKE_SOURCE_DIR}/app/Updater.cpp
-    ${CMAKE_SOURCE_DIR}/config/SettingsStore.cpp)
-target_link_libraries(UpdaterTest PRIVATE sonero_core Qt6::Test Qt6::Network)
+add_executable(UpdaterTest UpdaterTest.cpp)
+target_link_libraries(UpdaterTest PRIVATE sonero_app Qt6::Test Qt6::Network)
 add_test(NAME UpdaterTest COMMAND UpdaterTest)
 
 # The microphone chain: gate, de-esser, compressor and limiter, each checked
@@ -84,27 +76,12 @@ add_executable(LimiterTest LimiterTest.cpp)
 target_link_libraries(LimiterTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME LimiterTest COMMAND LimiterTest)
 
-
-
 # Themes. The substitution must leave no placeholder behind (Qt would reject the
 # sheet), a partial or broken theme file must fall back rather than paint the app
 # black, and a theme must not be able to replace the built-in sheet — which is
 # what guarantees there is always a way back from a bad one.
-add_executable(ThemeTest ThemeTest.cpp
-    ${CMAKE_SOURCE_DIR}/ui/Theme.cpp
-    ${CMAKE_SOURCE_DIR}/app/SystemSetup.cpp
-    ${CMAKE_SOURCE_DIR}/app/AutoStart.cpp
-    # The two widgets that restyle themselves on a palette change, so the
-    # re-entrancy case can be built and switched.
-    ${CMAKE_SOURCE_DIR}/ui/widgets/AppChip.cpp
-    ${CMAKE_SOURCE_DIR}/ui/widgets/ChannelStrip.cpp
-    ${CMAKE_SOURCE_DIR}/ui/widgets/VuMeter.cpp
-    ${CMAKE_SOURCE_DIR}/ui/widgets/FlowLayout.cpp)
-target_link_libraries(ThemeTest PRIVATE sonero_core Qt6::Test Qt6::Widgets)
-# SystemSetup is compiled in for resourcePath(), which is how the theme loader
-# finds the examples that ship with an install. It wants the same define the
-# SystemSetup suite passes it.
-target_compile_definitions(ThemeTest PRIVATE SONAR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_executable(ThemeTest ThemeTest.cpp)
+target_link_libraries(ThemeTest PRIVATE sonero_app Qt6::Test Qt6::Widgets)
 add_test(NAME ThemeTest COMMAND ThemeTest)
 # The only test that needs a graphics platform. It links Qt6::Widgets, so
 # QTEST_MAIN gives it a QApplication rather than the QCoreApplication the other
@@ -129,3 +106,14 @@ add_test(NAME ChannelChainTest COMMAND ChannelChainTest)
 add_executable(BatterySourceTest BatterySourceTest.cpp)
 target_link_libraries(BatterySourceTest PRIVATE sonero_core Qt6::Test)
 add_test(NAME BatterySourceTest COMMAND BatterySourceTest)
+
+# One precompiled <QtTest>, shared: the header is most of each test's compile.
+# Only tests built with identical options can share it — ThemeTest (Widgets) and
+# UpdaterTest (Network) define other Qt modules, so they keep their own compile.
+target_precompile_headers(MixerTest PRIVATE <QtTest>)
+foreach(t PipeWireManagerTest DeviceFormatTest SettingsStoreTest AutoStartTest
+          SystemSetupTest EqualizerTest AutoGainTest FormatTest MicChainTest
+          NoiseSuppressorTest HarmonicBassTest LimiterTest ChannelChainTest
+          BatterySourceTest)
+    target_precompile_headers(${t} REUSE_FROM MixerTest)
+endforeach()

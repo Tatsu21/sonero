@@ -17,21 +17,10 @@ struct OutputFormat {
     }
 };
 
-// Pins the sample rate / bit depth of one ALSA output node. Construct it with the
-// exact device node.name so each output keeps its own drop-in; Bluetooth outputs
-// have no ALSA format (their codec is the "format") and are not managed here.
-//
-// Hardware ALSA nodes pick their open format at negotiation time from the
-// `audio.format` / `audio.rate` node properties, which WirePlumber applies from
-// its monitor rules. There is no reliable *live* param to change this once the
-// PCM is open (setting SPA_PARAM_PortConfig only reconfigures the graph side,
-// not the hardware format). So we persist a per-device WirePlumber drop-in; it is
-// honoured when WirePlumber next loads its config (next login or a manual
-// restart). We do NOT restart WirePlumber ourselves — that drops Bluetooth links.
-//
-// Note: the rate is only honoured up to what the hardware advertises. The Nova
-// Pro Wireless analog output only exposes 48 kHz, so requesting 96 kHz is
-// clamped back to 48 kHz by ALSA — the option is offered for completeness.
+// Pins the rate / bit depth of one ALSA output via a per-device WirePlumber
+// drop-in, applied when WirePlumber next loads its config (Sonero never restarts
+// it: that drops Bluetooth). There is no live param for the hardware format, and
+// ALSA clamps rates the device does not support. Bluetooth is not managed here.
 class OutputFormatManager {
 public:
     // `nodeNamePattern` is a WirePlumber match value (a leading '~' makes it a
@@ -50,10 +39,8 @@ public:
     // The format pinned by a previously-written drop-in, or nullopt if none.
     [[nodiscard]] std::optional<OutputFormat> current() const;
 
-    // Write (or overwrite) the per-device drop-in pinning `fmt`. Returns false if
-    // the file could not be written. Intentionally does NOT restart WirePlumber
-    // (a global restart drops Bluetooth); the format applies when WirePlumber next
-    // loads its config (next login, or a manual restart).
+    // Write the per-device drop-in pinning `fmt`; false if it could not be written.
+    // Applies at the next WirePlumber load, never by restarting it.
     bool apply(const OutputFormat& fmt);
 
     // The SPA-JSON body written to the drop-in for `fmt` and the node pattern.

@@ -4,9 +4,8 @@
 
 namespace sonar::ui {
 
-// A vertical stereo peak meter with fast attack, slow release and a peak-hold
-// marker. Levels are linear in the range 0.0 .. 1.0. The widget only paints;
-// it is fed by whoever owns it (the mixer page timer).
+// Vertical stereo peak meter (fast attack, slow release, peak hold), linear 0..1.
+// Paint only; fed by the mixer page's timer.
 class VuMeter : public QWidget {
     Q_OBJECT
 

@@ -4,19 +4,12 @@
 
 namespace sonar::dsp {
 
-// Everything the harmonic bass plugin is configured by, in one struct: the
-// synthesis itself plus the brick-wall limiter that follows it.
-//
-// The two live together because they are one stage of a channel's chain: the
-// limiter exists to catch what the synthesis adds, and switching the synthesis
-// on without it would be asking for the clipping it prevents.
+// The harmonic bass stage's settings plus the limiter that catches what it adds.
 struct BassStageSettings {
     HarmonicBassSettings bass;
 
-    // Not a gain limit and not a sound-shaping tool: it bounds what leaves the
-    // channel, never what the equalizer ahead of it may do. It is on by default
-    // because the Lab channel's equalizer has no gain ceiling, so without it a
-    // boosted band goes to the driver exactly as asked.
+    // Bounds what leaves the channel, not what the equalizer may do. On by default,
+    // because the channel equalizer has no gain ceiling.
     bool limiterEnabled = true;
     float limiterCeilingDb = -1.0f;
 };

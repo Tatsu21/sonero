@@ -3,28 +3,20 @@
 #include <algorithm>
 #include <cmath>
 
+#include "dsp/DspMath.h"
+
 namespace sonar::dsp {
 
 namespace {
-
-constexpr float kTinyLinear = 1e-6f;
-
-// Even a flat biquad cascade overshoots slightly, and material mastered to full
-// scale then clips on conversion to the device's integer format. The old
-// filter-chain path reserved the same margin in the sink's channelVolumes.
+// Even a flat cascade overshoots slightly, which clips mastered material.
 constexpr float kFlatReserveDb = -0.5f;
-
-[[nodiscard]] float dbToLin(float db) { return std::pow(10.0f, db * 0.05f); }
-
 }  // namespace
 
 ChannelChain::ChannelChain() { prepare(48000.0f); }
 
 void ChannelChain::prepare(float sampleRate) {
     sampleRate_ = sampleRate > 0.0f ? sampleRate : 48000.0f;
-    // Room for the widest equalizer this chain can be given, taken here where
-    // allocating is allowed, so rebuildEqualizer() never has to ask the
-    // allocator for anything on the audio thread.
+    // Reserve the widest equalizer now, so rebuildEqualizer() never allocates.
     for (std::vector<Biquad>& bands : eqBands_) {
         bands.reserve(static_cast<std::size_t>(BandCount::Bands31));
     }
@@ -77,9 +69,7 @@ void ChannelChain::reset() {
 int ChannelChain::latencySamples() const { return limiter_[0].latencySamples(); }
 
 void ChannelChain::rebuildEqualizer() {
-    // Runs on the audio thread whenever a slider moves, so it must not allocate:
-    // the reference avoids copying the frequency table and prepare() reserved
-    // room for the largest band count.
+    // Audio thread, on every slider move: must not allocate (prepare() reserved room).
     const std::vector<float>& freqs = standardFrequenciesRef(eq_.bandCount);
     const float q = bandQ(eq_.bandCount);
 
@@ -90,9 +80,8 @@ void ChannelChain::rebuildEqualizer() {
             bands.resize(freqs.size());
         }
         for (std::size_t i = 0; i < freqs.size(); ++i) {
-            // bandGainAt, not responseDbAt: the filters are in series and their
-            // responses already add, so feeding the summed display curve into
-            // each one would apply the overlap between neighbours twice.
+            // bandGainAt, not responseDbAt: the filters are in series, so the summed curve
+            // would apply the overlap twice.
             const float gainDb =
                 eq_.enabled ? std::clamp(bandGainAt(eq_, freqs[i]), kMinGainDb, kMaxGainDb)
                             : 0.0f;
@@ -106,17 +95,13 @@ void ChannelChain::rebuildEqualizer() {
         }
     }
 
-    // Attenuate ahead of the filters by exactly what the curve boosts, so the
-    // loudest equalized frequency lands back at unity and the fader stays usable
-    // across its whole range.
+    // Attenuate by exactly what the curve boosts, so its loudest frequency lands at unity.
     const float boost = eq_.enabled ? peakBoostDb(eq_) : 0.0f;
     eqHeadroom_ = dbToLin(-boost + kFlatReserveDb);
 }
 
 void ChannelChain::process(float* interleaved, int frames) {
-    if (interleaved == nullptr || frames <= 0) {
-        return;
-    }
+    if (interleaved == nullptr || frames <= 0) return;
 
     if (s_.muted) {
         std::fill(interleaved, interleaved + static_cast<std::size_t>(frames) * 2, 0.0f);
@@ -124,74 +109,57 @@ void ChannelChain::process(float* interleaved, int frames) {
         return;
     }
 
-    const float trim = dbToLin(s_.trimDb);
+    // Per block, constant across it.
+    const float preGain = dbToLin(s_.trimDb) * eqHeadroom_;
     // Balance pans by attenuating one side rather than boosting the other, so it
     // can never add gain to a channel that was already at full scale.
-    const float leftGain = s_.volume * (s_.balance > 0.0f ? 1.0f - s_.balance : 1.0f);
-    const float rightGain = s_.volume * (s_.balance < 0.0f ? 1.0f + s_.balance : 1.0f);
+    const float fader[2] = {s_.volume * (s_.balance > 0.0f ? 1.0f - s_.balance : 1.0f),
+                            s_.volume * (s_.balance < 0.0f ? 1.0f + s_.balance : 1.0f)};
 
     float inputPeak = 0.0f;
-
-    // --- Trim and equalizer, per channel ------------------------------------
-    for (int i = 0; i < frames; ++i) {
-        for (int c = 0; c < 2; ++c) {
-            const std::size_t idx = static_cast<std::size_t>(2 * i + c);
-            float x = interleaved[idx];
-            if (!std::isfinite(x)) {
-                x = 0.0f;  // a decoder handing us a NaN must not poison the filters
-            }
-            inputPeak = std::max(inputPeak, std::abs(x));
-            x *= trim * eqHeadroom_;
-            if (eq_.enabled) {
-                for (Biquad& bq : eqBands_[c]) {
-                    x = bq.process(x);
-                }
-            }
-            interleaved[idx] = x;
-        }
-    }
-
-    // --- Harmonic bass and limiter, per channel -----------------------------
-    // Both stages work on a contiguous mono block, so each side is deinterleaved
-    // into the scratch, processed whole, and written back. A buffer longer than
-    // the scratch is done in several passes rather than reallocating.
-    // Accumulated across passes: the limiter reports per call, so with a buffer
-    // long enough to be split, only the last pass would otherwise be counted.
+    float outputPeak[2] = {0.0f, 0.0f};
     int clipped = 0;
     float worstReduction = 0.0f;
+
+    // One trip per side and block: pull the side out of the interleaved buffer,
+    // run the whole chain on the contiguous mono block, write it back through the
+    // fader. Every stage is a recurrence on its own side, so this is the same
+    // arithmetic in the same order as stage-by-stage over the whole buffer.
+    float* x = scratch_.data();
     for (int c = 0; c < 2; ++c) {
         for (int done = 0; done < frames; done += kMaxBlock) {
             const int block = std::min(kMaxBlock, frames - done);
-            float* work = scratch_.data();
+            float* side = interleaved + 2 * static_cast<std::size_t>(done) + c;
+
             for (int i = 0; i < block; ++i) {
-                work[i] = interleaved[static_cast<std::size_t>(2 * (done + i) + c)];
+                float v = side[2 * i];
+                if (!std::isfinite(v)) v = 0.0f;  // a NaN must not poison the filters
+                inputPeak = std::max(inputPeak, std::abs(v));
+                x[i] = v * preGain;
             }
-            bass_[c].process(work, block);
-            limiter_[c].process(work, work, block);
-            for (int i = 0; i < block; ++i) {
-                interleaved[static_cast<std::size_t>(2 * (done + i) + c)] = work[i];
+            if (eq_.enabled) {
+                // Filter by filter over the block: one coefficient set in registers
+                // at a time, instead of the whole cascade for every sample.
+                for (Biquad& bq : eqBands_[c]) {
+                    for (int i = 0; i < block; ++i) x[i] = bq.process(x[i]);
+                }
             }
+            bass_[c].process(x, block);
+            limiter_[c].process(x, x, block);
             clipped += limiter_[c].clipped();
             worstReduction = std::min(worstReduction, limiter_[c].reductionDb());
+
+            for (int i = 0; i < block; ++i) {
+                const float v = x[i] * fader[c];
+                side[2 * i] = v;
+                outputPeak[c] = std::max(outputPeak[c], std::abs(v));
+            }
         }
     }
 
-    // --- Fader ---------------------------------------------------------------
-    float peakL = 0.0f;
-    float peakR = 0.0f;
-    for (int i = 0; i < frames; ++i) {
-        const std::size_t li = static_cast<std::size_t>(2 * i);
-        const float l = interleaved[li] * leftGain;
-        const float r = interleaved[li + 1] * rightGain;
-        interleaved[li] = l;
-        interleaved[li + 1] = r;
-        peakL = std::max(peakL, std::abs(l));
-        peakR = std::max(peakR, std::abs(r));
-    }
-
     meters_.inputPeak = inputPeak;
-    meters_.peakLeft = peakL;
-    meters_.peakRight = peakR;
+    meters_.peakLeft = outputPeak[0];
+    meters_.peakRight = outputPeak[1];
     meters_.limiterReductionDb = worstReduction;
     meters_.clippedSamples = clipped;
     meters_.bass = bass_[0].meters();

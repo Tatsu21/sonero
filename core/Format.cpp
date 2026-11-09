@@ -6,9 +6,8 @@ namespace sonar::fmt::detail {
 
 namespace {
 
-// Parse the inside of a replacement field: "", "3", ":.4f", "2:.1f".
-// Returns false when it does not look like a field we understand, so the caller
-// can copy the text through untouched.
+// Parse a field's inside ("", "3", ":.4f", "2:.1f"); false when unrecognised, so
+// the caller copies the text through.
 bool parseField(std::string_view body, std::size_t& index, int& precision,
                 bool& hasIndex) {
     hasIndex = false;
@@ -20,16 +19,10 @@ bool parseField(std::string_view body, std::size_t& index, int& precision,
         hasIndex = true;
         ++i;
     }
-    if (i == body.size()) {
-        return true;  // "{}" or "{2}"
-    }
-    if (body[i] != ':') {
-        return false;
-    }
+    if (i == body.size()) return true;  // "{}" or "{2}"
+    if (body[i] != ':') return false;
     ++i;
-    if (i >= body.size() || body[i] != '.') {
-        return false;  // only precision specs are supported
-    }
+    if (i >= body.size() || body[i] != '.') return false;  // only precision specs are supported
     ++i;
     int value = 0;
     bool anyDigit = false;
@@ -38,16 +31,12 @@ bool parseField(std::string_view body, std::size_t& index, int& precision,
         anyDigit = true;
         ++i;
     }
-    if (!anyDigit) {
-        return false;
-    }
+    if (!anyDigit) return false;
     // Accept "{:.4f}" and "{:.4}" alike; anything else is not ours.
     if (i < body.size() && (body[i] == 'f' || body[i] == 'F')) {
         ++i;
     }
-    if (i != body.size()) {
-        return false;
-    }
+    if (i != body.size()) return false;
     precision = value;
     return true;
 }

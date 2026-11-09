@@ -59,10 +59,7 @@ bool Mixer::anySolo() const noexcept {
 
 bool Mixer::isAudible(ChannelId id) const {
     const ChannelState& s = strips_[channelIndex(id)].state;
-    if (s.muted) {
-        return false;
-    }
-    return !anySolo() || s.solo;
+    return !s.muted && (!anySolo() || s.solo);
 }
 
 void Mixer::setLevel(ChannelId id, ChannelLevel value) {

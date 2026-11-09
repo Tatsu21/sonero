@@ -8,9 +8,7 @@
 
 namespace sonar::ui {
 
-// A layout that arranges its items left-to-right and wraps to the next line when
-// it runs out of horizontal space (adapted from the classic Qt FlowLayout
-// example). Used for the draggable application chips.
+// Left-to-right layout that wraps (after Qt's FlowLayout example), for the app chips.
 class FlowLayout : public QLayout {
 public:
     explicit FlowLayout(QWidget* parent, int margin = 0, int hSpacing = 8, int vSpacing = 8);

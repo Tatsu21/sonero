@@ -19,12 +19,8 @@ struct MicInputDevice {
     DeviceType type = DeviceType::Other;
 };
 
-// The microphone's processing chain, as the UI sees it.
-//
-// Separate from IChannelController because the microphone is not a channel with
-// a fader on it: it is a signal path with stages that can each be switched on,
-// each reporting how hard they are working. Implemented by the backend, which
-// owns the node the chain runs in.
+// The microphone's processing chain as the UI sees it: switchable stages, each
+// reporting how hard it works. Implemented by the backend that owns the node.
 class IMicrophoneController {
 public:
     virtual ~IMicrophoneController() = default;
@@ -49,9 +45,8 @@ public:
     // The UI polls this and only rebuilds when it moves.
     [[nodiscard]] virtual std::uint64_t micInputRevision() const = 0;
 
-    // The input device the user chose; empty means follow the system default. The
-    // choice survives its device being unplugged: the chain falls back to the
-    // default meanwhile and returns as soon as the device does.
+    // The chosen input ("" = system default). Survives unplugging: the default stands
+    // in until the device returns.
     virtual bool setMicCaptureDevice(const std::string& nodeName) = 0;
     [[nodiscard]] virtual std::string micCaptureDevice() const = 0;
     // What the chain is actually attached to right now; empty means nothing.
@@ -66,12 +61,8 @@ public:
     // "Hear myself": the processed voice on the default output. `level` is 0..1.
     virtual void setMicMonitor(bool on, float level) = 0;
 
-    // Echo cancellation: whatever the speakers are playing is removed from the
-    // microphone before the chain sees it. `speakers` is the output device they
-    // are on (node.name); empty means the system default. It has to be the right
-    // one — Sonero's channels can each play to a different device, and only what
-    // plays on this one is removed. Active is false while it is off, while there
-    // is no microphone or no output to listen to, and when PipeWire's
+    // Echo cancellation: what plays on `speakers` (node.name, "" = default) is removed
+    // from the microphone. Inactive while off, with no mic or output, or when PipeWire's
     // echo-cancel module could not be loaded.
     virtual void setMicEchoCancellation(bool on, const std::string& speakers) = 0;
     [[nodiscard]] virtual bool micEchoCancellationActive() const = 0;

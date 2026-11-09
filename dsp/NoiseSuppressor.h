@@ -7,21 +7,10 @@ struct DenoiseState;
 
 namespace sonar::dsp {
 
-// Learned noise suppression: the one stage of the microphone chain that is a
-// model rather than arithmetic, and the reason a keyboard, a fan and a room stop
-// being audible while the voice does not change.
-//
-// The model is RNNoise — a small recurrent network, trained on the standard
-// speech/noise corpora, that decides per frequency band how much of each 10 ms
-// frame is voice. It is not written here and it is not trained here: matching it
-// from scratch needs a corpus measured in hundreds of gigabytes and weeks of GPU
-// time, and the result would lose. What this class does is own the state, feed
-// the model frames of the size and scale it expects, and keep the signal intact
-// when no model is available.
-//
-// When the build has no RNNoise, `available()` is false and `process()` passes
-// the audio through untouched — the UI then says the stage is unavailable rather
-// than showing a switch that does nothing.
+// Learned noise suppression with RNNoise, which decides per band how much of each
+// 10 ms frame is voice. This class owns the state and feeds frames of the size and
+// scale the model expects. Without RNNoise in the build, `available()` is false and
+// `process()` passes audio through.
 class NoiseSuppressor {
 public:
     NoiseSuppressor();
@@ -34,9 +23,7 @@ public:
     [[nodiscard]] static bool available();
     [[nodiscard]] static std::string_view backendName();
 
-    // RNNoise is a 48 kHz model, full stop — there is no resampling inside it.
-    // At any other rate the stage reports itself unusable rather than quietly
-    // processing at the wrong pitch.
+    // RNNoise runs only at 48 kHz; at any other rate the stage reports itself unusable.
     void prepare(float sampleRate);
     [[nodiscard]] bool usable() const { return usable_; }
 
@@ -58,9 +45,7 @@ public:
     [[nodiscard]] float speechProbability() const { return speechProbability_; }
 
 private:
-    // RNNoise works in frames of 480 samples at 48 kHz, in the scale of 16-bit
-    // integers rather than the -1..1 the rest of the chain uses. Both of those
-    // are the model's, not ours.
+    // RNNoise's frame (480 samples at 48 kHz) and scale (16-bit integers, not -1..1).
     static constexpr int kFrameSize = 480;
     static constexpr float kInt16Scale = 32768.0f;
 

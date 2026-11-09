@@ -6,9 +6,7 @@
 
 namespace sonar::audio {
 
-// Applies channel controls to the real audio path (the virtual sink nodes) and
-// reports real metering back. Implemented by the PipeWire backend; kept separate
-// from IAppRouter so the UI depends only on the capabilities it uses.
+// Applies channel controls to the real audio path and reports real meters back.
 class IChannelController {
 public:
     virtual ~IChannelController() = default;
@@ -18,15 +16,12 @@ public:
 
     virtual void setChannelBalance(ChannelId id, float balance) = 0;
 
-    // How loud this channel is in the stream mix — the separate mix a capture
-    // application records. Independent of what the user hears, which is the point:
-    // you can keep game audio loud in your headphones and quiet on stream.
+    // The channel's level in the stream mix a capture app records, independent of what
+    // the user hears.
     virtual void setStreamLevel(ChannelId id, float level) = 0;
     [[nodiscard]] virtual float streamLevel(ChannelId id) const = 0;
 
-    // Per-channel trim (linear, 1.0 = unity), independent of the volume fader.
-    // Use it to tame a source that is far louder or quieter than the others; it
-    // multiplies with the fader rather than replacing it.
+    // Per-channel trim (linear, 1.0 = unity), multiplied with the fader.
     virtual void setChannelGain(ChannelId id, float gain) = 0;
     // Mute/unmute a channel's virtual sink.
     virtual void setChannelMute(ChannelId id, bool muted) = 0;
@@ -35,10 +30,8 @@ public:
     // call (the accumulator is reset on read). Zero when no audio is flowing.
     virtual ChannelLevel channelLevel(ChannelId id) = 0;
 
-    // Route a channel's output to a specific device by its node.name (as in
-    // AudioDevice::name); an empty name follows the system default output. The
-    // choice is remembered and re-applied when the device (re)connects, and falls
-    // back to the default while the device is gone.
+    // Route a channel to a device by node.name ("" = the default output). Remembered and
+    // re-applied when the device reconnects; falls back to the default meanwhile.
     virtual void setChannelOutput(ChannelId id, const std::string& deviceName) = 0;
 
     // The device node.name a channel is pinned to, or empty for the default.

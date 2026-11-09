@@ -10,27 +10,11 @@
 
 namespace sonar::dsp {
 
-// Everything one output channel does to audio, in one place.
-//
+// Everything one output channel does to audio:
 //   trim -> equalizer -> harmonic bass -> limiter -> fader (volume, balance, mute)
-//
-// This replaces what used to be split across three mechanisms: a PipeWire
-// module-filter-chain for the equalizer, a LADSPA plugin dlopened into it for the
-// bass, and the sink node's own channelVolumes for the fader. One chain in our
-// own code is simpler than three, and it removes the parts that were awkward
-// about the old arrangement — a plugin binary to find and install, an ABI header
-// borrowed from another project, and a round trip through node properties to set
-// a slider.
-//
-// The order is not a preference. The equalizer comes first because the bass
-// stage's crossover should see the signal as it will be heard. The limiter comes
-// after the bass because it is the only thing standing between what those two
-// produce and a driver. The fader comes last, so pulling a channel down never
-// changes what the limiter was protecting against — a channel at 10% is the same
-// sound as one at 100%, quieter, rather than a differently-limited one.
-//
-// Stereo, interleaved. Allocation-free after prepare(), so process() is safe on
-// a realtime thread.
+// EQ first, so the crossover sees what will be heard; limiter after the bass, as
+// the last guard before the driver; fader last, so a channel at 10% is the same
+// sound as at 100%, only quieter. Stereo interleaved, allocation-free after prepare().
 
 struct ChannelChainSettings {
     // The Channels page's gain slider: a trim for a source that is mixed too
@@ -43,10 +27,7 @@ struct ChannelChainSettings {
     bool muted = false;
 };
 
-// What the mixer's meters and the Channels page draw, sampled at the end of each
-// processed block. Peaks are linear and are what left the chain — post-fader, so
-// a channel pulled down reads quiet, which is what someone looking at a mixer
-// expects.
+// What the meters draw, sampled per block. Peaks are linear and post-fader.
 struct ChannelMeters {
     float peakLeft = 0.0f;
     float peakRight = 0.0f;
@@ -65,11 +46,8 @@ public:
     void setSettings(const ChannelChainSettings& settings);
     [[nodiscard]] const ChannelChainSettings& settings() const { return s_; }
 
-    // The channel's graphic equalizer. Band gains are clamped to
-    // [kMinGainDb, kMaxGainDb] and the curve's peak boost is compensated for by
-    // an equal attenuation ahead of the filters — a boosting cascade multiplies
-    // material already mastered near full scale, and without this a +6 dB band
-    // clips on the way out to the device's integer format.
+    // Band gains are clamped to [kMinGainDb, kMaxGainDb], and the curve's peak boost is
+    // attenuated ahead of the filters so a boosted band cannot clip the output.
     void setEqualizer(const EqSettings& eq);
     [[nodiscard]] const EqSettings& equalizer() const { return eq_; }
 
@@ -103,17 +81,12 @@ private:
     float eqHeadroom_ = 1.0f;
 
     BassStageSettings bassSettings_;
-    // One per channel. The filter-chain arrangement replicated a mono graph
-    // across the channels and this keeps that behaviour, which also means each
-    // side's envelope follows its own low end.
+    // One per channel side, so each follows its own low end.
     HarmonicBass bass_[2];
     Limiter limiter_[2];
 
-    // One channel's worth of deinterleaved samples. The bass stage and the
-    // limiter both work on a contiguous mono block, and calling them per sample
-    // instead would be a function call and a loop setup for every frame on the
-    // realtime thread. Allocated once in prepare(); a block larger than this is
-    // processed in several passes.
+    // One side's deinterleaved samples: the whole chain runs on this contiguous
+    // block. Allocated in prepare(); larger buffers go in several passes.
     std::vector<float> scratch_;
     static constexpr int kMaxBlock = 4096;
 };

@@ -70,9 +70,7 @@ void VuMeter::drawBar(QPainter& painter, const QRectF& area, float value,
     const qreal filled = std::clamp(value, 0.0f, 1.0f) * area.height();
     if (filled > 0.5) {
         QLinearGradient gradient(area.bottomLeft(), area.topLeft());
-        // The three state colours a theme already defines: healthy, approaching,
-        // over. A meter that kept its own green would be the one part of the
-        // interface a theme could not reach.
+        // The theme's ok / warn / danger colours: healthy, approaching, over.
         const ThemeTokens& t = currentTheme();
         gradient.setColorAt(0.00, t.ok);
         gradient.setColorAt(0.62, t.ok);

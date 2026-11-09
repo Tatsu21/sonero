@@ -4,20 +4,10 @@
 
 namespace sonar::dsp {
 
-// A brick-wall lookahead limiter, mono, one instance per channel.
-//
-// It exists because of what sits in front of it. The Lab channel's equalizer has
-// no gain ceiling — a band is applied exactly as the user set it, with none of
-// the +-12 dB clamp or the headroom compensation the other channels get — and
-// harmonic bass synthesis adds signal that was not there before. Either can push
-// a track that was already mastered near full scale past it, where the float
-// graph clips on conversion to the device's integer format and the result is
-// gritty distortion rather than "too loud".
-//
-// Not a sound-shaping tool, and not a gain limit: it bounds what leaves the
-// chain, never what the equalizer may do. Switchable, because seeing what the
-// cascade does unprotected is a legitimate thing to want — `clipped()` is what
-// you get instead.
+// A brick-wall lookahead limiter, mono, one per channel side. The channel EQ has no
+// gain ceiling and harmonic bass adds signal, so either can push mastered material
+// past full scale. Bounds what leaves the chain, never what the EQ may do;
+// switchable, with `clipped()` reporting what got through unprotected.
 
 class Limiter {
 public:
@@ -42,9 +32,7 @@ public:
     // (never positive), from the most recently processed block.
     [[nodiscard]] float reductionDb() const { return reductionDb_; }
 
-    // Samples that left past full scale. Always zero while enabled; with the
-    // limiter off this is the number that turns "it sounds wrong" into "it is
-    // clipping". Counted, never corrected.
+    // Samples that left past full scale: zero while enabled, counted (never fixed) when off.
     [[nodiscard]] int clipped() const { return clipped_; }
 
     // The delay the lookahead costs, in samples. Fixed by prepare() and never

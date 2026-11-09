@@ -5,9 +5,8 @@
 
 namespace sonar::dsp {
 
-// A graphic equalizer: a set of bands at fixed ISO frequencies, each with an
-// adjustable gain. This is the pure model — no Qt, no audio backend — so it can
-// be unit-tested and later fed into a PipeWire filter-chain.
+// A graphic equalizer: bands at fixed ISO frequencies with adjustable gains. Pure
+// model, no Qt or audio backend.
 
 enum class BandCount : int { Bands10 = 10, Bands15 = 15, Bands31 = 31 };
 
@@ -58,16 +57,11 @@ struct EqSettings {
 // Standard ISO centre frequencies for each band configuration.
 std::vector<float> standardFrequencies(BandCount count);
 
-// The same table without the copy. Callers that rebuild filter coefficients do
-// it on the audio thread, where allocating — which is what returning a vector by
-// value does — can block on the allocator's lock and cost a buffer.
+// The same table without the copy, for the audio thread, where allocating can block.
 [[nodiscard]] const std::vector<float>& standardFrequenciesRef(BandCount count);
 
-// The Q a peaking filter needs so that neighbouring bands of this configuration
-// meet instead of leaving holes between them. It follows the spacing: 10 bands
-// sit an octave apart, 31 a third of an octave, so the same Q cannot be right for
-// both — a third-octave Q on octave-spaced bands gives ten narrow spikes, and
-// dragging one of them barely changes what a voice sounds like.
+// The Q that makes neighbouring bands meet without holes: it follows the spacing
+// (an octave for 10 bands, a third for 31).
 [[nodiscard]] float bandQ(BandCount count);
 
 // Rebuild `bands` for the requested count, keeping every gain at 0 dB.
@@ -79,23 +73,16 @@ void applyPreset(EqSettings& settings, EqPreset preset);
 [[nodiscard]] std::string_view presetName(EqPreset preset);
 [[nodiscard]] std::string_view bandCountName(BandCount count);
 
-// Combined magnitude response (dB) at a frequency, approximated as a sum of
-// per-band bell curves — good enough for the on-screen curve and stable to draw.
-// Combined response of the whole curve at a frequency: the sum of every band's
-// contribution. This is what the curve widget draws — it is NOT the gain to give
-// an individual filter, because feeding a summed curve into each filter of a
-// cascade applies the overlap between bands a second time.
+// Combined response at a frequency (the sum of every band's bell), for drawing —
+// not for driving a filter cascade.
 [[nodiscard]] float responseDbAt(const EqSettings& settings, float freqHz);
 
-// Gain a single filter centred at `freqHz` should apply, interpolated between the
-// user's band gains in log-frequency space. Use this — not responseDbAt — when
-// driving a cascade of filters, so bands are not counted twice.
+// The gain one filter at `freqHz` should apply, interpolated in log frequency. Use
+// this, not responseDbAt, for a cascade.
 [[nodiscard]] float bandGainAt(const EqSettings& settings, float freqHz);
 
-// Peak boost (dB, never negative) the settings produce anywhere in the audible
-// range. Used to attenuate the signal by the same amount so that boosting an EQ
-// band cannot push the output past full scale, where it would clip on conversion
-// to the device's sample format.
+// Peak boost (dB, >= 0) anywhere in the audible range, attenuated up front so a
+// boosted band cannot clip on conversion to the device format.
 [[nodiscard]] float peakBoostDb(const EqSettings& settings);
 
 }  // namespace sonar::dsp

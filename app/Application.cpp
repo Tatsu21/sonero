@@ -35,14 +35,11 @@ Application::~Application() = default;
 void Application::start(bool background) {
     log::info("Sonero {} starting{}", versionString(), background ? " (background)" : "");
 
-    // Portable (AppImage) runs register themselves with the desktop on first
-    // start: menu entry + icons under ~/.local/share. Purely user-level and
-    // idempotent — anything needing root is offered on the Settings page instead.
+    // AppImage runs register a menu entry and icons under ~/.local/share (user-level,
+    // idempotent); anything needing root is offered on the Settings page.
     if (setup::runningFromAppImage()) {
-        // Read the old bundle's path first — installDesktopIntegration() is about
-        // to overwrite the entry that holds it — but delete it only once the entry
-        // names this bundle instead. The other order leaves the app menu pointing
-        // at a file that no longer exists.
+        // Read the old bundle's path before installDesktopIntegration() overwrites the
+        // entry, but delete it only after the entry names this bundle.
         const QString previous = setup::previousBundlePath();
         if (setup::installDesktopIntegration()) {
             log::info("Desktop integration installed (menu entry + icons)");
@@ -55,9 +52,7 @@ void Application::start(bool background) {
         }
     }
 
-    // The autostart entry holds a path, and a newer AppImage lives at a different
-    // one. Without this, "start at login" keeps launching the bundle it was
-    // switched on with — or silently stops working once that file is deleted.
+    // A newer AppImage lives at another path: keep "start at login" pointing at it.
     if (autostart::refreshExecPath()) {
         log::info("Autostart entry re-pointed at {}",
                   autostart::executablePath().toStdString());

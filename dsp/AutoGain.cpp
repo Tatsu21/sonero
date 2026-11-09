@@ -22,15 +22,12 @@ void AutoGain::reset(float gainDb) {
 }
 
 float AutoGain::update(float outputPeak, float dtSeconds) {
-    if (!(dtSeconds > 0.0f)) {
-        return gainDb_;
-    }
+    if (!(dtSeconds > 0.0f)) return gainDb_;
     dtSeconds = std::min(dtSeconds, 0.25f);  // a stalled UI must not cause a jump
     outputPeak = std::max(outputPeak, 0.0f);
 
-    // Silence proves nothing about how much room there is; climbing through it
-    // would boost the noise floor and then slam on the first note back. Long
-    // enough silence means the material is over, so the old peaks stop counting.
+    // Silence says nothing about headroom: don't climb through it, and after long
+    // enough silence forget the old peaks.
     if (outputPeak < config_.silenceFloor) {
         silentFor_ += dtSeconds;
         if (silentFor_ >= config_.memoryResetSeconds) {
@@ -64,9 +61,7 @@ float AutoGain::update(float outputPeak, float dtSeconds) {
     peakMemory_ = std::max(outputPeak, peakMemory_ * decay);
     sinceDuck_ += dtSeconds;
 
-    if (sinceDuck_ < config_.climbDelaySeconds) {
-        return gainDb_;  // still settling after a reduction
-    }
+    if (sinceDuck_ < config_.climbDelaySeconds) return gainDb_;  // still settling after a reduction
     const float allowed =
         std::clamp(gainFor(gainDb_, peakMemory_, config_.climbTargetPeak),
                    config_.minGainDb, config_.maxGainDb);

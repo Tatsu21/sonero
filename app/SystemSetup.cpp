@@ -31,9 +31,7 @@ QString desktopEntryPath() {
 bool udevRuleInstalled() {
     for (const char* dir : {"/etc/udev/rules.d/", "/usr/lib/udev/rules.d/",
                             "/lib/udev/rules.d/"}) {
-        if (QFileInfo::exists(QLatin1String(dir) + QLatin1String(kUdevRuleName))) {
-            return true;
-        }
+        if (QFileInfo::exists(QLatin1String(dir) + QLatin1String(kUdevRuleName))) return true;
     }
     return false;
 }
@@ -51,12 +49,8 @@ bool bluezExperimentalEnabled() {
     if (conf.open(QIODevice::ReadOnly | QIODevice::Text)) {
         for (const QByteArray& raw : conf.readAll().split('\n')) {
             const QByteArray line = raw.trimmed();
-            if (line.startsWith('#') || !line.startsWith("Experimental")) {
-                continue;
-            }
-            if (line.toLower().contains("true")) {
-                return true;
-            }
+            if (line.startsWith('#') || !line.startsWith("Experimental")) continue;
+            if (line.toLower().contains("true")) return true;
         }
     }
     QProcess p;
@@ -86,9 +80,7 @@ QString bluetoothDaemonPath() {
     }
     for (const char* candidate : {"/usr/libexec/bluetooth/bluetoothd",
                                   "/usr/lib/bluetooth/bluetoothd"}) {
-        if (QFileInfo::exists(QLatin1String(candidate))) {
-            return QLatin1String(candidate);
-        }
+        if (QFileInfo::exists(QLatin1String(candidate))) return QLatin1String(candidate);
     }
     return QStringLiteral("/usr/libexec/bluetooth/bluetoothd");
 }
@@ -118,11 +110,8 @@ QString resourcePath(const QString& relative) {
         roots << snap + QStringLiteral("/usr/share");
     }
     roots << QStringLiteral("/usr/share/sonero") << QStringLiteral("/usr/local/share/sonero");
-    // Development: run straight from the build tree. Both the packaging
-    // directory (icons, udev rules, the desktop file) and the source root
-    // itself, because not every shipped resource lives under packaging — the
-    // example themes are at the top level, and looking only under packaging is
-    // why they were invisible in a build tree.
+    // Development: the build tree. Both packaging/ and the source root, because the
+    // example themes live at the top level.
     roots << QCoreApplication::applicationDirPath() + QStringLiteral("/../packaging");
     roots << QStringLiteral(SONAR_SOURCE_DIR "/packaging");
     roots << QCoreApplication::applicationDirPath() + QStringLiteral("/..");
@@ -130,9 +119,7 @@ QString resourcePath(const QString& relative) {
 
     for (const QString& root : roots) {
         const QString candidate = root + QLatin1Char('/') + relative;
-        if (QFileInfo::exists(candidate)) {
-            return QFileInfo(candidate).absoluteFilePath();
-        }
+        if (QFileInfo::exists(candidate)) return QFileInfo(candidate).absoluteFilePath();
     }
     return {};
 }
@@ -197,14 +184,10 @@ std::vector<Check> runChecks() {
 
 bool installDesktopIntegration() {
     // Only meaningful for a portable bundle; installed builds ship these files.
-    if (!runningFromAppImage()) {
-        return true;
-    }
+    if (!runningFromAppImage()) return true;
 
     const QString appsDir = localShare() + QStringLiteral("/applications");
-    if (!QDir().mkpath(appsDir)) {
-        return false;
-    }
+    if (!QDir().mkpath(appsDir)) return false;
 
     QString exec = autostart::executablePath();
     exec.replace(QLatin1Char('"'), QLatin1String("\\\""));
@@ -225,20 +208,14 @@ bool installDesktopIntegration() {
             .arg(exec);
 
     QSaveFile file(desktopEntryPath());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return false;
-    }
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
     file.write(entry.toUtf8());
-    if (!file.commit()) {
-        return false;
-    }
+    if (!file.commit()) return false;
 
     // Icons, so the menu entry, window and notifications all show the app icon —
     // plus the separate panel icon the system tray looks up by name.
     const auto installIcon = [](const QString& src, int size, const QString& name) {
-        if (src.isEmpty()) {
-            return;
-        }
+        if (src.isEmpty()) return;
         const QString dstDir = QStringLiteral("%1/icons/hicolor/%2x%2/apps")
                                    .arg(localShare())
                                    .arg(size);
@@ -268,12 +245,8 @@ QString previousBundlePath() { return autostart::execPathIn(desktopEntryPath());
 
 QString removeSupersededBundle(const QString& previous) {
     const QString current = qEnvironmentVariable("APPIMAGE");
-    if (current.isEmpty()) {
-        return {};  // not a bundle run: nothing here supersedes anything
-    }
-    if (previous.isEmpty() || previous == current) {
-        return {};
-    }
+    if (current.isEmpty()) return {};  // not a bundle run: nothing here supersedes anything
+    if (previous.isEmpty() || previous == current) return {};
     // Only ever a plain, unmistakable bundle file: not a directory, not a
     // symlink, and not the installed binary (which does not end in .AppImage).
     const QFileInfo info(previous);
@@ -283,22 +256,15 @@ QString removeSupersededBundle(const QString& previous) {
     }
     // Two paths can name one file. Resolving both is what stops a bundle that
     // was launched through a symlink from deleting itself.
-    if (info.canonicalFilePath() == QFileInfo(current).canonicalFilePath()) {
-        return {};
-    }
-    if (!QFile::remove(previous)) {
-        return {};
-    }
-    return previous;
+    if (info.canonicalFilePath() == QFileInfo(current).canonicalFilePath()) return {};
+    return QFile::remove(previous) ? previous : QString();
 }
 
 QString privilegedFixScript(CheckId id) {
     switch (id) {
         case CheckId::UdevRule: {
             const QString rule = resourcePath(QStringLiteral("udev/") + QLatin1String(kUdevRuleName));
-            if (rule.isEmpty()) {
-                return {};
-            }
+            if (rule.isEmpty()) return {};
             return QStringLiteral(
                        "#!/bin/sh\n"
                        "set -e\n"
@@ -383,9 +349,7 @@ bool runPrivilegedFix(CheckId id, QString* error) {
     const QString stderrText = QString::fromUtf8(proc.readAllStandardError()).trimmed();
     QFile::remove(path);
 
-    if (code == 0) {
-        return true;
-    }
+    if (code == 0) return true;
     if (error != nullptr) {
         // 126 = authentication dialog dismissed, 127 = pkexec could not run it.
         *error = code == 126

@@ -17,9 +17,10 @@ a headset exposes over USB.
 
 Of that sidechannel, this procedure covers **battery level only**.
 
-**Do not attempt the onboard equalizer.** Sonero contains code that writes an EQ to the
-Arctis Nova Pro Wireless; the writes are accepted by the device and produce no audible
-change, and nobody has worked out why. Since it has never been made to work on the one
+**Do not attempt the onboard equalizer.** Sonero once wrote an EQ to the Arctis Nova Pro
+Wireless (report `0x06 0x33`, then `0x06 0x09` to save; removed, still in git history);
+the writes were accepted by the device and produced no audible change, and nobody has
+worked out why. Since it has never been made to work on the one
 model that was in hand, there is no working example to copy and no way to tell a correct
 implementation from a broken one. The same applies to sidetone, ANC modes and any other
 setting the headset stores internally. If a user asks for those, tell them plainly that

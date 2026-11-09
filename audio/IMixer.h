@@ -6,9 +6,8 @@
 
 namespace sonar::audio {
 
-// Abstraction over the channel mixer. The UI drives it (user actions) and reads
-// metering back from it; a future AudioEngine will feed real levels into it.
-// Keeping this Qt-free makes the mixing logic unit-testable in isolation.
+// The channel mixer model the UI drives and reads meters from. Qt-free, so it is
+// unit-testable.
 class IMixer {
 public:
     virtual ~IMixer() = default;

@@ -17,7 +17,6 @@
 #include <QGuiApplication>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QUrl>
@@ -28,58 +27,15 @@
 #include "app/Updater.h"
 #include "config/SettingsStore.h"
 #include "ui/Notifier.h"
+#include "ui/UiKit.h"
 
 namespace sonar::ui {
-
-namespace {
-// A titled card; returns the body layout to fill.
-QVBoxLayout* makeCard(QVBoxLayout* root, const QString& title, const QString& subtitle) {
-    auto* frame = new QFrame;
-    frame->setObjectName(QStringLiteral("Card"));
-    auto* body = new QVBoxLayout(frame);
-    body->setContentsMargins(22, 18, 22, 20);
-    body->setSpacing(8);
-
-    auto* t = new QLabel(title);
-    t->setObjectName(QStringLiteral("SectionTitle"));
-    body->addWidget(t);
-    if (!subtitle.isEmpty()) {
-        auto* s = new QLabel(subtitle);
-        s->setObjectName(QStringLiteral("Hint"));
-        s->setWordWrap(true);
-        body->addWidget(s);
-    }
-    body->addSpacing(4);
-    root->addWidget(frame);
-    return body;
-}
-}  // namespace
 
 SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings,
                            update::Updater* updater, QWidget* parent)
     : QWidget(parent), notifier_(notifier), settings_(settings), updater_(updater) {
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    outer->addWidget(scroll);
-
-    auto* page = new QWidget;
-    scroll->setWidget(page);
-    auto* root = new QVBoxLayout(page);
-    root->setContentsMargins(40, 34, 40, 34);
-    root->setSpacing(16);
-
-    auto* title = new QLabel(QStringLiteral("Settings"));
-    title->setObjectName(QStringLiteral("PageTitle"));
-    auto* subtitle = new QLabel(QStringLiteral("Application preferences"));
-    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
-    auto* head = new QVBoxLayout;
-    head->setSpacing(4);
-    head->addWidget(title);
-    head->addWidget(subtitle);
-    root->addLayout(head);
+    QVBoxLayout* root = makeScrollPage(this, 16);
+    addPageHeader(root, QStringLiteral("Settings"), QStringLiteral("Application preferences"));
 
     // --- Notifications ---
     QVBoxLayout* notif = makeCard(
@@ -97,8 +53,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings,
     notif->addWidget(enable);
 
     auto* testRow = new QHBoxLayout;
-    auto* test = new QPushButton(QStringLiteral("Send test notification"));
-    test->setCursor(Qt::PointingHandCursor);
+    auto* test = makeButton(QStringLiteral("Send test notification"));
     connect(test, &QPushButton::clicked, this, [this] {
         if (notifier_ != nullptr) {
             notifier_->notify(QStringLiteral("Sonero"),
@@ -116,34 +71,22 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings,
         QStringLiteral("Keep Sonero running when the window is closed so its audio "
                        "routing and controls stay active. Quit from the tray icon menu."));
 
-    // Read/modify/write a single key of the "general" settings section.
-    const auto putGeneral = [this](const QString& key, bool value) {
-        if (settings_ == nullptr) {
-            return;
-        }
-        QJsonObject g = settings_->section(QStringLiteral("general"));
-        g[key] = value;
-        settings_->putSection(QStringLiteral("general"), g);
-    };
-    const QJsonObject general =
-        settings_ != nullptr ? settings_->section(QStringLiteral("general")) : QJsonObject();
-
     auto* runInBg = new QCheckBox(QStringLiteral("Run in background when the window is closed"));
-    runInBg->setChecked(general.value(QStringLiteral("runInBackground")).toBool(true));
+    runInBg->setChecked(settings_ == nullptr ||
+                        settings_->value(QStringLiteral("general"),
+                                         QStringLiteral("runInBackground"))
+                            .toBool(true));
     runInBg->setEnabled(settings_ != nullptr);
-    connect(runInBg, &QCheckBox::toggled, this,
-            [putGeneral](bool on) { putGeneral(QStringLiteral("runInBackground"), on); });
+    connect(runInBg, &QCheckBox::toggled, this, [this](bool on) {
+        settings_->putValue(QStringLiteral("general"), QStringLiteral("runInBackground"), on);
+    });
     bg->addWidget(runInBg);
 
-    // Start at login. The source of truth is the autostart entry on disk, not a
-    // setting — the user may delete it with their desktop's own tweak tool.
-    // Note: only the autostart entry starts hidden (it passes --background).
-    // Launching Sonero yourself always shows the window.
+    // Start at login: the autostart entry on disk is the source of truth. Only that
+    // entry starts hidden (--background).
     auto* atLogin = new QCheckBox(QStringLiteral("Start Sonero when I log in"));
     atLogin->setChecked(autostart::isEnabled());
-    auto* atLoginHint = new QLabel;
-    atLoginHint->setObjectName(QStringLiteral("Hint"));
-    atLoginHint->setWordWrap(true);
+    QLabel* atLoginHint = makeLabel(QString(), "Hint", true);
     const auto describeAutostart = [atLoginHint] {
         atLoginHint->setText(
             autostart::isEnabled()
@@ -165,8 +108,7 @@ SettingsPage::SettingsPage(Notifier* notifier, config::SettingsStore* settings,
     // A guaranteed full-exit path — the tray Quit action is unavailable on desktops
     // without a system tray (e.g. stock GNOME), so keep one here too.
     auto* quitRow = new QHBoxLayout;
-    auto* quit = new QPushButton(QStringLiteral("Quit Sonero"));
-    quit->setCursor(Qt::PointingHandCursor);
+    auto* quit = makeButton(QStringLiteral("Quit Sonero"));
     connect(quit, &QPushButton::clicked, this, [] { QApplication::quit(); });
     quitRow->addStretch(1);
     quitRow->addWidget(quit);
@@ -195,9 +137,7 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
     autoCheck->setChecked(updater_ != nullptr && updater_->autoCheckEnabled());
     autoCheck->setEnabled(updater_ != nullptr);
     connect(autoCheck, &QCheckBox::toggled, this, [this](bool on) {
-        if (updater_ == nullptr) {
-            return;
-        }
+        if (updater_ == nullptr) return;
         updater_->setAutoCheckEnabled(on);
         // Switching it on is the user asking the question, so answer it now
         // rather than at some point over the next day.
@@ -209,41 +149,31 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
 
     // Say plainly what it does — it is the only thing in Sonero that talks to a
     // server, and the box is right here for anyone who would rather it did not.
-    QString hintText;
+    QString how;
     switch (channel) {
         case update::Channel::AppImage:
-            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
-                                      "exists. Nothing is downloaded until you press Update; "
-                                      "then the new bundle replaces this one and Sonero "
-                                      "restarts.");
+            how = QStringLiteral(". Nothing is downloaded until you press Update; then the new "
+                                 "bundle replaces this one and Sonero restarts.");
             break;
         case update::Channel::Deb:
-            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
-                                      "exists. Update downloads the package for your "
-                                      "system and has apt install it — your password is "
-                                      "asked for — then Sonero restarts.");
+            how = QStringLiteral(". Update downloads the package for your system and has apt "
+                                 "install it — your password is asked for — then Sonero "
+                                 "restarts.");
             break;
         case update::Channel::Snap:
-            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
-                                      "exists. snapd installs new versions by itself, a few "
-                                      "times a day; the command below only makes it happen "
-                                      "now.");
+            how = QStringLiteral(". snapd installs new versions by itself, a few times a day; "
+                                 "the command below only makes it happen now.");
             break;
         default:
-            hintText = QStringLiteral("Asks github.com once a day whether a newer release "
-                                      "exists, and tells you. Installing it stays your "
-                                      "package manager's job — Sonero never touches files "
-                                      "it does not own.");
+            how = QStringLiteral(", and tells you. Installing it stays your package manager's "
+                                 "job — Sonero never touches files it does not own.");
             break;
     }
-    auto* hint = new QLabel(hintText);
-    hint->setObjectName(QStringLiteral("Hint"));
-    hint->setWordWrap(true);
-    body->addWidget(hint);
+    body->addWidget(makeLabel(
+        QStringLiteral("Asks github.com once a day whether a newer release exists") + how,
+        "Hint", true));
 
-    updateStatus_ = new QLabel;
-    updateStatus_->setObjectName(QStringLiteral("Hint"));
-    updateStatus_->setWordWrap(true);
+    updateStatus_ = makeLabel(QString(), "Hint", true);
     updateStatus_->setTextFormat(Qt::RichText);
     updateStatus_->setOpenExternalLinks(true);
 
@@ -263,8 +193,7 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
     updateProgress_->setVisible(false);
 
     auto* row = new QHBoxLayout;
-    updateCheck_ = new QPushButton(QStringLiteral("Check now"));
-    updateCheck_->setCursor(Qt::PointingHandCursor);
+    updateCheck_ = makeButton(QStringLiteral("Check now"));
     updateCheck_->setEnabled(updater_ != nullptr);
     connect(updateCheck_, &QPushButton::clicked, this, [this] {
         if (updater_ != nullptr) {
@@ -272,13 +201,10 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
         }
     });
 
-    updateAction_ = new QPushButton;
-    updateAction_->setCursor(Qt::PointingHandCursor);
+    updateAction_ = makeButton(QString());
     updateAction_->setVisible(false);
     connect(updateAction_, &QPushButton::clicked, this, [this] {
-        if (updater_ == nullptr) {
-            return;
-        }
+        if (updater_ == nullptr) return;
         // One handler, three jobs, because which one applies is a property of
         // the updater's state rather than of the button.
         if (updater_->canInstallUpdate()) {
@@ -360,9 +286,7 @@ void SettingsPage::buildUpdatesCard(QVBoxLayout* root) {
 }
 
 void SettingsPage::showUpdateIdle() {
-    if (updater_ == nullptr) {
-        return;
-    }
+    if (updater_ == nullptr) return;
     // A check that already ran (the automatic one, at startup) should not be
     // hidden just because the page is only being looked at now.
     if (updater_->updateAvailable()) {
@@ -376,9 +300,7 @@ void SettingsPage::showUpdateIdle() {
 }
 
 void SettingsPage::showUpdateFound() {
-    if (updater_ == nullptr || !updater_->updateAvailable()) {
-        return;
-    }
+    if (updater_ == nullptr || !updater_->updateAvailable()) return;
     const update::Release release = updater_->availableRelease();
     const update::Channel channel = updater_->channel();
 
@@ -414,7 +336,7 @@ void SettingsPage::buildAboutCard(QVBoxLayout* root) {
 
     // Rich text so the two links are clickable; the AI note is stated plainly here
     // and not only in the README, because it is part of how the app came to be.
-    auto* text = new QLabel(QStringLiteral(
+    QLabel* text = makeLabel(QStringLiteral(
         "<p style='margin:0 0 8px 0'>A personal project, built to learn and to use "
         "every day — not a commercial product. Shared in the hope that it is useful "
         "to someone else too.</p>"
@@ -426,10 +348,9 @@ void SettingsPage::buildAboutCard(QVBoxLayout* root) {
         "against real audio hardware by a human. Every decision, and the "
         "responsibility for the result, is the author's.</p>"
         "<p style='margin:0'>Not affiliated with SteelSeries. Sonar was the "
-        "inspiration, not the source.</p>"));
-    text->setObjectName(QStringLiteral("Hint"));
+        "inspiration, not the source.</p>"),
+        "Hint", true);
     text->setTextFormat(Qt::RichText);
-    text->setWordWrap(true);
     text->setOpenExternalLinks(true);
     body->addWidget(text);
 }
@@ -440,49 +361,26 @@ void SettingsPage::buildSystemCard(QVBoxLayout* root) {
         QStringLiteral("What Sonero needs from your system. Items marked with a lock "
                        "change system files and ask for your password first — you always "
                        "see the exact commands before anything runs."));
+    systemRows_ = new QVBoxLayout;
+    systemRows_->setSpacing(systemBody_->spacing());
+    systemBody_->addLayout(systemRows_);
     refreshSystemChecks();
 }
 
 void SettingsPage::refreshSystemChecks() {
-    if (systemBody_ == nullptr) {
-        return;
-    }
-    // Drop the previous rows (everything the card's header added stays put because
-    // the header widgets live above; we rebuild only what we appended last time).
-    while (systemBody_->count() > 0) {
-        QLayoutItem* item = systemBody_->takeAt(systemBody_->count() - 1);
-        if (QWidget* w = item->widget()) {
-            if (w->property("sonarSystemRow").toBool()) {
-                w->deleteLater();
-                delete item;
-                continue;
-            }
-            // Reached the card header — put it back and stop.
-            systemBody_->addWidget(w);
-            delete item;
-            break;
-        }
-        if (QLayout* child = item->layout()) {
-            systemBody_->addLayout(child);
-            delete item;
-            break;
-        }
-        delete item;
-    }
+    if (systemRows_ == nullptr) return;
+    clearLayout(systemRows_);
 
     for (const setup::Check& check : setup::runChecks()) {
-        if (check.status == setup::Status::NotNeeded) {
-            continue;
-        }
+        if (check.status == setup::Status::NotNeeded) continue;
         auto* row = new QFrame;
-        row->setProperty("sonarSystemRow", true);
         row->setObjectName(QStringLiteral("InsetRow"));  // coloured by the theme
         auto* h = new QHBoxLayout(row);
         h->setContentsMargins(12, 9, 12, 9);
         h->setSpacing(10);
 
         const bool ok = check.status == setup::Status::Ok;
-        auto* dot = new QLabel(ok ? QStringLiteral("●") : QStringLiteral("●"));
+        auto* dot = new QLabel(QStringLiteral("●"));
         dot->setStyleSheet(QStringLiteral("color:%1; font-size:14px;")
                                .arg((ok ? ui::currentTheme().ok : ui::currentTheme().warn)
                                         .name(QColor::HexRgb)));
@@ -491,21 +389,17 @@ void SettingsPage::refreshSystemChecks() {
                                      ? QStringLiteral("🔒 %1").arg(check.title)
                                      : check.title);
         title->setStyleSheet(QStringLiteral("font-weight:700; font-size:13px;"));
-        auto* detail = new QLabel(check.detail);
-        detail->setObjectName(QStringLiteral("Hint"));
-        detail->setWordWrap(true);
         auto* texts = new QVBoxLayout;
         texts->setSpacing(2);
         texts->addWidget(title);
-        texts->addWidget(detail);
+        texts->addWidget(makeLabel(check.detail, "Hint", true));
 
         h->addWidget(dot);
         h->addLayout(texts, 1);
 
         if (check.fixable) {
-            auto* fix = new QPushButton(check.needsRoot ? QStringLiteral("Set up…")
+            auto* fix = makeButton(check.needsRoot ? QStringLiteral("Set up…")
                                                         : QStringLiteral("Set up"));
-            fix->setCursor(Qt::PointingHandCursor);
             const setup::CheckId id = check.id;
             const bool needsRoot = check.needsRoot;
             connect(fix, &QPushButton::clicked, this, [this, id, needsRoot] {
@@ -532,9 +426,7 @@ void SettingsPage::refreshSystemChecks() {
                 box.setDetailedText(script);
                 box.setStandardButtons(QMessageBox::Cancel | QMessageBox::Ok);
                 box.setDefaultButton(QMessageBox::Ok);
-                if (box.exec() != QMessageBox::Ok) {
-                    return;
-                }
+                if (box.exec() != QMessageBox::Ok) return;
                 QString error;
                 if (!setup::runPrivilegedFix(id, &error)) {
                     QMessageBox::warning(this, QStringLiteral("Sonero"), error);
@@ -543,12 +435,10 @@ void SettingsPage::refreshSystemChecks() {
             });
             h->addWidget(fix);
         } else if (!ok) {
-            auto* note = new QLabel(QStringLiteral("action needed"));
-            note->setObjectName(QStringLiteral("Hint"));
-            h->addWidget(note);
+            h->addWidget(makeLabel(QStringLiteral("action needed"), "Hint"));
         }
 
-        systemBody_->addWidget(row);
+        systemRows_->addWidget(row);
     }
 }
 

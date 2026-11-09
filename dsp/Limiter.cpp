@@ -3,29 +3,14 @@
 #include <algorithm>
 #include <cmath>
 
+#include "dsp/DspMath.h"
+
 namespace sonar::dsp {
 
 namespace {
-
-constexpr float kTinyLinear = 1e-6f;
-
 // The same two milliseconds MicChain's limiter uses. Long enough to catch the
 // rise of a transient, short enough that nobody notices it on playback.
 constexpr float kLookaheadMs = 2.0f;
-
-[[nodiscard]] float dbToLin(float db) { return std::pow(10.0f, db * 0.05f); }
-
-[[nodiscard]] float linToDb(float lin) {
-    return 20.0f * std::log10(std::max(std::abs(lin), kTinyLinear));
-}
-
-[[nodiscard]] float envCoef(float ms, float sampleRate) {
-    if (ms <= 0.0f) {
-        return 0.0f;
-    }
-    return std::exp(-1.0f / (ms * 0.001f * sampleRate));
-}
-
 }  // namespace
 
 Limiter::Limiter() { prepare(48000.0f); }
@@ -57,9 +42,7 @@ void Limiter::reset() {
 }
 
 void Limiter::process(const float* in, float* out, int count) {
-    if (in == nullptr || out == nullptr || count <= 0) {
-        return;
-    }
+    if (in == nullptr || out == nullptr || count <= 0) return;
 
     clipped_ = 0;
 
@@ -82,10 +65,8 @@ void Limiter::process(const float* in, float* out, int count) {
     for (int i = 0; i < count; ++i) {
         const float x = in[static_cast<std::size_t>(i)];
 
-        // The peak is read from the sample going in and the gain is applied to
-        // the sample coming out of the delay, so by the time the loud one
-        // arrives the gain is already down. That is what lookahead buys, and
-        // why this stage adds latency.
+        // The peak is read going in and the gain applied coming out of the delay, so the
+        // gain is already down when the loud sample arrives — that is the lookahead.
         const float peak = std::abs(x);
         const float required = peak > ceilingLin_ ? ceilingLin_ / peak : 1.0f;
         if (required < gain_) {

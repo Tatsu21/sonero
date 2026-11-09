@@ -9,23 +9,11 @@ class QWidget;
 
 namespace sonar::ui {
 
-// Theming. The look is one built-in dark theme plus whatever the user layers on
-// top of it, and the built-in one is never replaced — it is compiled into the
-// binary and is always the base a theme is applied over. That is deliberate: a
-// theme file that is wrong, truncated or written for an older version can only
-// change colours, never leave the app unusable, and "back to the built-in theme"
-// is always one click away because there is nothing to restore from disk.
-//
-// A theme is a small JSON file: thirteen named colours, a font family, and an
-// optional block of raw Qt style sheet appended after the built-in one for the
-// things colours cannot express (a corner radius, a spacing, one specific
-// widget). The colours are the supported surface; the style sheet is the escape
-// hatch, and a theme that uses it can break its own layout.
-//
-// Everything the built-in sheet draws is derived from these thirteen. The shades
-// in between — a hover a little lighter than its surface, a border a little
-// lighter than that — are computed rather than listed, so a user supplying
-// thirteen colours gets a coherent interface instead of thirty-six decisions.
+// Theming: one built-in dark theme, compiled in and never replaced, plus an optional
+// theme layered over it — so a broken theme file can only change colours, and the
+// built-in one is always a click away. A theme is a JSON file with thirteen colours
+// (the rest are derived), a font family, and optional raw Qt style sheet appended
+// after the built-in one.
 
 struct ThemeTokens {
     QString name = QStringLiteral("Sonero Dark");
@@ -62,14 +50,11 @@ struct ThemeTokens {
 // The built-in theme: the one compiled into the binary.
 [[nodiscard]] ThemeTokens builtInTheme();
 
-// The theme in use right now. Custom-painted widgets (the equalizer curve, the
-// VU meters, the channel strips' accents) ask this rather than carrying colours
-// of their own, which is what lets a theme reach them too.
+// The theme in use; custom-painted widgets read their colours from it.
 [[nodiscard]] const ThemeTokens& currentTheme();
 
-// Apply a theme to the whole application: Fusion base, palette, and the built-in
-// style sheet with this theme's colours substituted in, followed by its extra
-// style sheet if it has one. Also becomes currentTheme().
+// Apply a theme app-wide (Fusion, palette, the substituted built-in sheet, then its
+// extra sheet); it becomes currentTheme().
 void applyTheme(QApplication& app, const ThemeTokens& theme);
 
 // The built-in theme, for callers that have no theme to apply yet.
@@ -79,18 +64,15 @@ void applyTheme(QApplication& app);
 // app is running needs this; the custom-painted widgets repaint themselves.
 void refreshTheme(QApplication& app);
 
-// Tag a widget with one of the state colours the application sheet defines:
-// "ok", "warn", "bad", or nullptr to clear. Use this instead of a local
-// setStyleSheet("color:#...") — a widget that carries its own sheet is immune to
-// the application sheet, and so immune to the theme.
-//
-// Repolishes the widget, because Qt only re-reads a style property then.
+// Linear sRGB mix — what the original palette was picked against.
+[[nodiscard]] QColor mixColors(const QColor& a, const QColor& b, double t);
+
+// Tag a widget with an application-sheet state colour ("ok", "warn", "bad", nullptr
+// to clear) instead of a local setStyleSheet() the theme cannot reach.
 void setState(QWidget* widget, const char* state);
 
 // --- Theme files -------------------------------------------------------------
-//
-// Themes live in ~/.config/Sonero/themes as .json files. The directory is the
-// user's; Sonero only ever adds to it on an explicit import.
+// In ~/.config/Sonero/themes as .json; Sonero only adds to it on an explicit import.
 
 [[nodiscard]] QString themesDirectory();
 
@@ -106,13 +88,15 @@ bool readTheme(const QString& path, ThemeTokens& out, QString* error = nullptr);
 // point". Creates the parent directory if needed.
 bool writeTheme(const ThemeTokens& theme, const QString& path, QString* error = nullptr);
 
+// A free "<baseName>.json" (or "<baseName> (n).json") in themesDirectory(), which
+// is created if needed. Never the name of a theme already there.
+[[nodiscard]] QString newThemePath(const QString& baseName);
+
 // Copy a theme file into the themes directory, so it shows up in the list.
 // Returns the path it landed at, or an empty string with `error` set.
 [[nodiscard]] QString importTheme(const QString& sourcePath, QString* error = nullptr);
 
-// The built-in style sheet with `theme`'s colours substituted — what export
-// writes alongside a theme so a user editing `extraQss` can see what they are
-// overriding.
+// The built-in sheet with `theme`'s colours substituted, as exported for reference.
 [[nodiscard]] QString resolvedStyleSheet(const ThemeTokens& theme);
 
 }  // namespace sonar::ui

@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 
+#include "dsp/BassStage.h"
 #include "dsp/Equalizer.h"
 #include "dsp/MicChain.h"
 
@@ -11,11 +12,8 @@ class QTimer;
 
 namespace sonar::config {
 
-// Persists the app's user settings to a single JSON file under the user's config
-// directory (~/.config/Sonero/settings.json). Writes are debounced: a caller
-// replaces a named section and the store flushes to disk shortly after, so
-// dragging a slider does not hammer the filesystem. A missing or damaged file is
-// treated as a first run — callers then keep their built-in defaults.
+// User settings in ~/.config/Sonero/settings.json, one JSON object per section.
+// Writes are debounced; a missing or damaged file is a first run.
 class SettingsStore : public QObject {
     Q_OBJECT
 
@@ -32,6 +30,10 @@ public:
     // Replace a section and schedule a debounced write to disk.
     void putSection(const QString& key, const QJsonObject& value);
 
+    // One key of a section (Undefined when absent), and its read-modify-write.
+    [[nodiscard]] QJsonValue value(const QString& section, const QString& key) const;
+    void putValue(const QString& section, const QString& key, const QJsonValue& value);
+
     // Write immediately (also performed on destruction).
     void flush();
 
@@ -47,16 +49,20 @@ private:
     bool dirty_ = false;
 };
 
-// EqSettings <-> JSON, shared by the software EQ and the headset EQ. `eqFromJson`
-// returns `fallback` unchanged when the object carries no bands, and always keeps
-// the band count consistent with the number of bands actually stored.
+// EqSettings <-> JSON. `eqFromJson` returns `fallback` when no bands are stored, and
+// keeps the band count consistent with the bands read.
 QJsonObject eqToJson(const dsp::EqSettings& settings);
 dsp::EqSettings eqFromJson(const QJsonObject& obj, const dsp::EqSettings& fallback);
 
-// MicSettings <-> JSON. `micFromJson` takes anything missing from `fallback`, and
-// clamps what it reads: this file can be edited by hand, and a ratio of zero is a
-// division by zero on the audio thread.
+// MicSettings <-> JSON, missing keys from `fallback`, values clamped: the file can
+// be hand-edited, and a ratio of zero divides by zero on the audio thread.
 QJsonObject micToJson(const dsp::MicSettings& settings);
 dsp::MicSettings micFromJson(const QJsonObject& obj, const dsp::MicSettings& fallback);
+
+// BassStageSettings (harmonic bass + output limiter) <-> JSON. Anything missing
+// or of the wrong type is taken from `fallback`.
+QJsonObject bassToJson(const dsp::BassStageSettings& settings);
+dsp::BassStageSettings bassFromJson(const QJsonObject& obj,
+                                    const dsp::BassStageSettings& fallback);
 
 }  // namespace sonar::config

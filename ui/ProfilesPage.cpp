@@ -7,7 +7,6 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonObject>
 #include <QLabel>
@@ -19,6 +18,7 @@
 
 #include "config/SettingsStore.h"
 #include "core/Log.h"
+#include "ui/UiKit.h"
 
 namespace sonar::ui {
 
@@ -27,25 +27,19 @@ namespace {
 constexpr const char* kSection = "appearance";
 constexpr const char* kThemeKey = "theme";  // a path, or empty for the built-in one
 
-QLabel* caption(const QString& text, QWidget* parent) {
-    auto* label = new QLabel(text, parent);
-    label->setObjectName(QStringLiteral("CardKey"));
-    label->setMinimumWidth(96);
-    return label;
+QPushButton* button(const QString& text, const QString& tooltip) {
+    QPushButton* b = makeButton(text);
+    b->setToolTip(tooltip);
+    return b;
 }
 
 }  // namespace
 
 void ProfilesPage::applySavedTheme(config::SettingsStore* settings) {
-    if (settings == nullptr || qApp == nullptr) {
-        return;
-    }
-    const QString path = settings->section(QString::fromLatin1(kSection))
-                             .value(QString::fromLatin1(kThemeKey))
-                             .toString();
-    if (path.isEmpty()) {
-        return;  // the built-in theme, which main() has already applied
-    }
+    if (settings == nullptr || qApp == nullptr) return;
+    const QString path =
+        settings->value(QString::fromLatin1(kSection), QString::fromLatin1(kThemeKey)).toString();
+    if (path.isEmpty()) return;  // the built-in theme, which main() has already applied
     ThemeTokens theme;
     QString error;
     if (readTheme(path, theme, &error)) {
@@ -53,10 +47,8 @@ void ProfilesPage::applySavedTheme(config::SettingsStore* settings) {
         log::info("Theme: '{}' from {}", theme.name.toStdString(), path.toStdString());
         return;
     }
-    // A theme file deleted or broken since it was chosen leaves the built-in one
-    // in place rather than failing the launch. Logged rather than shown: this
-    // runs before there is a window to put a message in, and the Profiles page
-    // reports which theme is actually active.
+    // A theme file broken or deleted since it was chosen leaves the built-in theme;
+    // logged, since there is no window yet.
     log::warn("Theme: '{}' {} — using the built-in theme", path.toStdString(),
               error.toStdString());
 }
@@ -67,69 +59,48 @@ ProfilesPage::ProfilesPage(config::SettingsStore* settings, QWidget* parent)
     root->setContentsMargins(40, 34, 40, 34);
     root->setSpacing(16);
 
-    auto* title = new QLabel(QStringLiteral("Profiles"), this);
-    title->setObjectName(QStringLiteral("PageTitle"));
-    auto* subtitle = new QLabel(
-        QStringLiteral("How Sonero looks. Audio settings live on the other pages."), this);
-    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
-    root->addWidget(title);
-    root->addWidget(subtitle);
+    addPageHeader(root, QStringLiteral("Profiles"),
+                  QStringLiteral("How Sonero looks. Audio settings live on the other pages."));
 
-    auto* frame = new QFrame(this);
-    frame->setObjectName(QStringLiteral("Card"));
-    auto* body = new QVBoxLayout(frame);
-    body->setContentsMargins(22, 18, 22, 20);
-    body->setSpacing(10);
-
-    auto* sectionTitle = new QLabel(QStringLiteral("Theme"), this);
-    sectionTitle->setObjectName(QStringLiteral("SectionTitle"));
-    body->addWidget(sectionTitle);
-
-    auto* hint = new QLabel(
-        QStringLiteral(
-            "A theme is a small JSON file: thirteen colours, a font, and an optional "
-            "block of Qt style sheet for anything colours cannot express. The shades "
-            "in between are derived from the thirteen, so you do not have to list "
-            "them. The built-in theme is compiled into Sonero and is always the base "
-            "a theme is applied over — it cannot be broken or removed, so there is "
-            "always a way back."),
-        this);
-    hint->setObjectName(QStringLiteral("Hint"));
-    hint->setWordWrap(true);
-    body->addWidget(hint);
-    body->addSpacing(4);
+    QVBoxLayout* body = makeCard(
+        root, QStringLiteral("Theme"),
+        QStringLiteral("A theme is a small JSON file: thirteen colours, a font, and an optional "
+                       "block of Qt style sheet for anything colours cannot express. The shades "
+                       "in between are derived from the thirteen, so you do not have to list "
+                       "them. The built-in theme is compiled into Sonero and is always the base "
+                       "a theme is applied over — it cannot be broken or removed, so there is "
+                       "always a way back."),
+        10);
 
     themeCombo_ = new QComboBox(this);
     themeCombo_->setMinimumWidth(240);
+    QLabel* active = makeLabel(QStringLiteral("Active"), "CardKey");
+    active->setMinimumWidth(96);
     auto* row = new QHBoxLayout;
     row->setSpacing(8);
-    row->addWidget(caption(QStringLiteral("Active"), this));
+    row->addWidget(active);
     row->addWidget(themeCombo_, 1);
     body->addLayout(row);
 
-    detail_ = new QLabel(this);
-    detail_->setObjectName(QStringLiteral("Hint"));
-    detail_->setWordWrap(true);
+    detail_ = makeLabel(QString(), "Hint", true);
     body->addWidget(detail_);
     body->addSpacing(6);
 
-    auto* importBtn = new QPushButton(QStringLiteral("Import…"), this);
-    importBtn->setToolTip(QStringLiteral(
-        "Add a theme. Takes a .json theme, or a bare .qss style sheet — a style "
-        "sheet becomes a theme with the built-in colours and your sheet on top."));
-    auto* exportBtn = new QPushButton(QStringLiteral("Export theme…"), this);
-    exportBtn->setToolTip(QStringLiteral(
-        "Write the active theme out as JSON — the starting point for editing one."));
-    auto* exportQssBtn = new QPushButton(QStringLiteral("Export stylesheet…"), this);
-    exportQssBtn->setToolTip(QStringLiteral(
-        "Write out the whole style sheet as Sonero is currently using it, with every "
-        "colour resolved. This is what your theme's `qss` block overrides, so it is "
-        "the reference for writing one."));
-    auto* folderBtn = new QPushButton(QStringLiteral("Open folder"), this);
-    folderBtn->setToolTip(QStringLiteral("The directory themes are read from."));
-    for (QPushButton* b : {importBtn, exportBtn, exportQssBtn, folderBtn}) {
-        b->setCursor(Qt::PointingHandCursor);
-    }
+    QPushButton* importBtn = button(
+        QStringLiteral("Import…"),
+        QStringLiteral("Add a theme. Takes a .json theme, or a bare .qss style sheet — a style "
+                       "sheet becomes a theme with the built-in colours and your sheet on top."));
+    QPushButton* exportBtn = button(
+        QStringLiteral("Export theme…"),
+        QStringLiteral("Write the active theme out as JSON — the starting point for editing "
+                       "one."));
+    QPushButton* exportQssBtn = button(
+        QStringLiteral("Export stylesheet…"),
+        QStringLiteral("Write out the whole style sheet as Sonero is currently using it, with "
+                       "every colour resolved. This is what your theme's `qss` block overrides, "
+                       "so it is the reference for writing one."));
+    QPushButton* folderBtn = button(QStringLiteral("Open folder"),
+                                    QStringLiteral("The directory themes are read from."));
 
     auto* buttons = new QHBoxLayout;
     buttons->setSpacing(8);
@@ -140,12 +111,8 @@ ProfilesPage::ProfilesPage(config::SettingsStore* settings, QWidget* parent)
     buttons->addWidget(folderBtn);
     body->addLayout(buttons);
 
-    status_ = new QLabel(this);
-    status_->setObjectName(QStringLiteral("Hint"));
-    status_->setWordWrap(true);
+    status_ = makeLabel(QString(), "Hint", true);
     body->addWidget(status_);
-
-    root->addWidget(frame);
     root->addStretch(1);
 
     connect(themeCombo_, &QComboBox::activated, this, [this](int) { applySelected(); });
@@ -191,25 +158,19 @@ void ProfilesPage::reloadThemes(const QString& selectPath) {
 
 ThemeTokens ProfilesPage::selectedTheme() const {
     const int i = themeCombo_->currentIndex();
-    if (i < 0 || i >= themes_.size()) {
-        return builtInTheme();
-    }
-    return themes_.at(i);
+    return i < 0 || i >= themes_.size() ? builtInTheme() : themes_.at(i);
 }
 
 void ProfilesPage::applySelected() {
     const ThemeTokens theme = selectedTheme();
     if (qApp != nullptr) {
         applyTheme(*qApp, theme);
-        // The style sheet change repolishes every styled widget, but the
-        // custom-painted ones (the curve, the meters, the strips' accents) read
-        // currentTheme() when they paint and have no way to know it moved.
+        // Custom-painted widgets read currentTheme() when painting; tell them it moved.
         refreshTheme(*qApp);
     }
-    if (settings_ != nullptr) {
-        QJsonObject section = settings_->section(QString::fromLatin1(kSection));
-        section[QString::fromLatin1(kThemeKey)] = theme.filePath;  // empty = built-in
-        settings_->putSection(QString::fromLatin1(kSection), section);
+    if (settings_ != nullptr) {  // an empty path means the built-in theme
+        settings_->putValue(QString::fromLatin1(kSection), QString::fromLatin1(kThemeKey),
+                            theme.filePath);
     }
     reloadThemes(theme.filePath);
     setStatus(QStringLiteral("Applied “%1”.").arg(theme.name));
@@ -219,16 +180,12 @@ void ProfilesPage::onImport() {
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("Import a theme"), QDir::homePath(),
         QStringLiteral("Themes and style sheets (*.json *.qss);;All files (*)"));
-    if (path.isEmpty()) {
-        return;
-    }
+    if (path.isEmpty()) return;
 
     QString error;
     QString landed;
     if (QFileInfo(path).suffix().compare(QLatin1String("qss"), Qt::CaseInsensitive) == 0) {
-        // A bare style sheet: wrap it in a theme that keeps the built-in colours
-        // and layers the sheet on top. That is the whole point of the sheet being
-        // additive — a user can restyle one widget without redescribing the rest.
+        // A bare style sheet becomes a theme: the built-in colours with the sheet on top.
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) {
             setStatus(QStringLiteral("Could not read %1: %2").arg(path, file.errorString()),
@@ -238,12 +195,7 @@ void ProfilesPage::onImport() {
         ThemeTokens t = builtInTheme();
         t.name = QFileInfo(path).completeBaseName();
         t.extraQss = QString::fromUtf8(file.readAll());
-        QDir().mkpath(themesDirectory());
-        landed = themesDirectory() + QLatin1Char('/') + t.name + QStringLiteral(".json");
-        for (int n = 2; QFile::exists(landed); ++n) {
-            landed = themesDirectory() + QLatin1Char('/') +
-                     QStringLiteral("%1 (%2).json").arg(t.name).arg(n);
-        }
+        landed = newThemePath(t.name);
         if (!writeTheme(t, landed, &error)) {
             setStatus(QStringLiteral("Could not save the theme: %1").arg(error), true);
             return;
@@ -269,9 +221,7 @@ void ProfilesPage::onExportTheme() {
                               QStringLiteral(".json");
     const QString path = QFileDialog::getSaveFileName(
         this, QStringLiteral("Export theme"), suggested, QStringLiteral("Theme (*.json)"));
-    if (path.isEmpty()) {
-        return;
-    }
+    if (path.isEmpty()) return;
     QString error;
     if (!writeTheme(theme, path, &error)) {
         setStatus(QStringLiteral("Could not write %1: %2").arg(path, error), true);
@@ -286,9 +236,7 @@ void ProfilesPage::onExportStyleSheet() {
                                                       QStringLiteral("Export stylesheet"),
                                                       suggested,
                                                       QStringLiteral("Style sheet (*.qss)"));
-    if (path.isEmpty()) {
-        return;
-    }
+    if (path.isEmpty()) return;
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         setStatus(QStringLiteral("Could not write %1: %2").arg(path, file.errorString()),

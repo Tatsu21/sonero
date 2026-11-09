@@ -10,7 +10,7 @@ where to source the protocol from, and how to verify the result on real hardware
 Three rules from it worth loading before you start:
 
 - **Battery only.** Do not attempt the onboard equalizer, sidetone or ANC. The EQ code
-  that exists writes successfully to the one supported headset and changes nothing
+  that once existed wrote successfully to the one supported headset and changed nothing
   audible; there is no working example to copy.
 - **Do not edit `hid/SteelSeriesDevice.{h,cpp}`.** Write new files for the new device and
   use that one as a reference. It is the only HID path proven on real hardware, and no

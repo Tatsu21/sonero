@@ -59,18 +59,11 @@ AppChip::AppChip(std::uint32_t appId, const QString& name,
 }
 
 void AppChip::applyTint() {
-    if (!channel_ || restyling_) {
-        return;
-    }
+    if (!channel_ || restyling_) return;
     restyling_ = true;
-    // Tint the chip with its channel's colour, so a glance across the mixer
-    // shows where everything went. The chip already sits inside that channel's
-    // column, which is why the old "-> Channel" badge is gone.
+    // Tinted with its channel's colour, so a glance shows where everything went.
     const QString accent = ChannelStrip::accentFor(*channel_);
-    // The label sits on the channel's own colour, so it cannot come from the
-    // theme's text token — it has to contrast with whatever that tint is. Qt has
-    // no contrast function, so: dark text on a light tint and the reverse,
-    // decided by the tint's own lightness.
+    // The text sits on the channel's tint, so it is dark or light by the tint's lightness.
     const QColor tint(accent);
     const QString ink = tint.lightness() > 140 ? currentTheme().bg.name(QColor::HexRgb)
                                                : currentTheme().text.name(QColor::HexRgb);
@@ -105,12 +98,8 @@ void AppChip::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void AppChip::mouseMoveEvent(QMouseEvent* event) {
-    if ((event->buttons() & Qt::LeftButton) == 0) {
-        return;
-    }
-    if ((event->pos() - pressPos_).manhattanLength() < QApplication::startDragDistance()) {
-        return;
-    }
+    if ((event->buttons() & Qt::LeftButton) == 0) return;
+    if ((event->pos() - pressPos_).manhattanLength() < QApplication::startDragDistance()) return;
 
     auto* mime = new QMimeData;
     mime->setData(QString::fromLatin1(kAppMimeType), QByteArray::number(appId_));

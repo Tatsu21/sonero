@@ -32,9 +32,8 @@ namespace sonar::ui {
 
 class EqCurve;
 
-// Per-channel graphic equalizer page: channel selector, preset picker (built-in
-// and user-saved), band count (10/15/31) and an interactive response curve.
-// Changes are applied to the real audio path through IEqualizerController.
+// Per-channel equalizer page: channel selector, presets (built-in and saved), band
+// count (10/15/31) and the response curve, applied via IEqualizerController.
 class EqualizerPage : public QWidget {
     Q_OBJECT
 
@@ -59,16 +58,18 @@ public:
 public slots:
     // Reflect values the Mixer page holds, when the selection changes.
     void showChannelGain(float gainDb, bool autoOn);
-    // Which device this channel plays to. The combo is rebuilt whenever the set
-    // of devices changes, so the selection has to be restored rather than left
-    // to survive — and without this the page showed "Default output" for every
-    // channel however it was actually routed.
+    // Which device this channel plays to; restored each time the combo is rebuilt.
     void showChannelOutput(const QString& deviceNodeName);
     // Follow the auto-gain loop while it runs: it owns the value, so the slider
     // and the readout have to be told, not asked.
     void showAutoGainValue(audio::ChannelId id, float gainDb);
 
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
+    void flushPending();  // pending EQ / bass edits and the output list
     [[nodiscard]] dsp::EqSettings& current();
     void reflectControls(bool includeCombo);  // model -> controls
     void loadChannel();
@@ -79,7 +80,8 @@ private:
     void saveEq();          // snapshot every channel's EQ into the settings store
 
     void buildBassCard(QVBoxLayout* root);
-    void reflectBass();   // model -> bass controls
+    void reflectBass();
+    void showCrossoverHint(float crossoverHz);   // model -> bass controls
     void pushBass();      // bass model -> real audio
     void saveBass();      // snapshot every channel's bass stage
     void restoreBass();   // load it back
@@ -91,9 +93,7 @@ private:
     void onExportPreset();
 
     std::array<dsp::EqSettings, sonar::audio::kAllChannels.size()> eq_;
-    // The harmonic bass stage of each channel's filter graph. Per channel for
-    // the same reason the equalizer is: a game wants its low end rebuilt and a
-    // voice chat emphatically does not.
+    // Each channel's harmonic bass stage (a game wants its lows rebuilt, a voice chat does not).
     std::array<dsp::BassStageSettings, sonar::audio::kAllChannels.size()> bass_;
     int channel_ = 0;  // index into audio::kAllChannels, not into the buttons
     // Button id -> kAllChannels index. The page shows output channels only, so
@@ -105,9 +105,7 @@ private:
     QCheckBox* autoGain_ = nullptr;
     QLabel* gainValue_ = nullptr;
     QComboBox* output_ = nullptr;
-    // Last device-list revision this page drew. The backend bumps its counter
-    // when a sink appears or goes away; polling it is how a device plugged in
-    // while the page is open shows up without restarting Sonero.
+    // Last device-list revision drawn, so a device plugged in while the page is open shows up.
     std::uint64_t devicesRevision_ = ~0ULL;
     QString currentOutput_;  // node.name, empty = follow the default
     config::SettingsStore* settings_ = nullptr;

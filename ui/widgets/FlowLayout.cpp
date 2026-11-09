@@ -35,10 +35,7 @@ int FlowLayout::count() const { return static_cast<int>(items_.size()); }
 QLayoutItem* FlowLayout::itemAt(int index) const { return items_.value(index); }
 
 QLayoutItem* FlowLayout::takeAt(int index) {
-    if (index >= 0 && index < items_.size()) {
-        return items_.takeAt(index);
-    }
-    return nullptr;
+    return index >= 0 && index < items_.size() ? items_.takeAt(index) : nullptr;
 }
 
 Qt::Orientations FlowLayout::expandingDirections() const { return {}; }
@@ -100,9 +97,7 @@ int FlowLayout::doLayout(const QRect& rect, bool testOnly) const {
 
 int FlowLayout::smartSpacing(QStyle::PixelMetric pm) const {
     QObject* parentObj = parent();
-    if (parentObj == nullptr) {
-        return -1;
-    }
+    if (parentObj == nullptr) return -1;
     if (parentObj->isWidgetType()) {
         auto* widget = static_cast<QWidget*>(parentObj);
         return widget->style()->pixelMetric(pm, nullptr, widget);

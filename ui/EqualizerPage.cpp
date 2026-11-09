@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <functional>
-#include <cstdlib>
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -26,6 +25,7 @@
 #include "audio/IEqualizerController.h"
 #include "config/SettingsStore.h"
 #include "ui/EqPresetStore.h"
+#include "ui/UiKit.h"
 #include "ui/widgets/EqCurve.h"
 
 namespace sonar::ui {
@@ -33,11 +33,6 @@ namespace sonar::ui {
 using audio::ChannelId;
 
 namespace {
-
-QString toQString(std::string_view sv) {
-    return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size()));
-}
-
 QFrame* makeSegmented(const QStringList& labels, QButtonGroup*& group, QWidget* parent) {
     auto* frame = new QFrame(parent);
     frame->setObjectName(QStringLiteral("Segmented"));
@@ -60,9 +55,7 @@ QFrame* makeSegmented(const QStringList& labels, QButtonGroup*& group, QWidget* 
     return frame;
 }
 
-// The gain readout. Manual moves are whole decibels, but the auto-gain loop
-// settles on fractions of one — rounding those to an integer would make the
-// display look stuck while the value is still moving, so keep a decimal there.
+// The gain readout: whole dB for manual moves, one decimal while auto-gain settles.
 QString formatGainDb(float gainDb, bool fractional) {
     const QString number = fractional ? QString::number(gainDb, 'f', 1)
                                       : QString::number(static_cast<int>(std::lround(gainDb)));
@@ -70,11 +63,7 @@ QString formatGainDb(float gainDb, bool fractional) {
                          : QStringLiteral("%1 dB").arg(number);
 }
 
-QLabel* caption(const QString& text, QWidget* parent) {
-    auto* label = new QLabel(text, parent);
-    label->setObjectName(QStringLiteral("CardKey"));
-    return label;
-}
+QLabel* caption(const QString& text) { return makeLabel(text, "CardKey"); }
 
 int bandIndexOf(dsp::BandCount count) {
     return count == dsp::BandCount::Bands10 ? 0 : count == dsp::BandCount::Bands15 ? 1 : 2;
@@ -113,28 +102,14 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     root->setContentsMargins(40, 34, 40, 34);
     root->setSpacing(18);
 
-    auto* title = new QLabel(QStringLiteral("Channels"), this);
-    title->setObjectName(QStringLiteral("PageTitle"));
-    auto* subtitle =
-        new QLabel(QStringLiteral("Per-channel gain, output and equalizer"), this);
-    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
-    auto* head = new QVBoxLayout;
-    head->setSpacing(4);
-    head->addWidget(title);
-    head->addWidget(subtitle);
-    root->addLayout(head);
+    addPageHeader(root, QStringLiteral("Channels"),
+                  QStringLiteral("Per-channel gain, output and equalizer"));
 
-    // Output channels only. The microphone used to be here, and it did not belong:
-    // it is an input, it has no output device to pick and no place in the stream
-    // mix, and its equalizer already lives on its own page — which meant one
-    // signal with two equalizers, and this page overwriting the other one on every
-    // launch.
+    // Output channels only: the microphone's equalizer lives on its own page.
     QStringList channelLabels;
     for (std::size_t i = 0; i < audio::kAllChannels.size(); ++i) {
-        if (audio::kAllChannels[i] == ChannelId::Microphone) {
-            continue;
-        }
-        channelLabels << toQString(audio::channelName(audio::kAllChannels[i]));
+        if (audio::kAllChannels[i] == ChannelId::Microphone) continue;
+        channelLabels << channelKey(audio::kAllChannels[i]);
         buttonChannel_.push_back(static_cast<int>(i));
     }
     root->addWidget(makeSegmented(channelLabels, channelGroup_, this));
@@ -144,8 +119,7 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     gain_->setRange(-20, 6);
     gain_->setFixedWidth(150);
     gain_->setToolTip(QStringLiteral("Channel gain in dB (0 dB = unchanged)"));
-    gainValue_ = new QLabel(QStringLiteral("0 dB"), this);
-    gainValue_->setObjectName(QStringLiteral("VolumeValue"));
+    gainValue_ = makeLabel(QStringLiteral("0 dB"), "VolumeValue");
     gainValue_->setMinimumWidth(52);
     autoGain_ = new QCheckBox(QStringLiteral("Auto"), this);
     autoGain_->setToolTip(QStringLiteral(
@@ -160,28 +134,28 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
 
     auto* routeRow = new QHBoxLayout;
     routeRow->setSpacing(8);
-    routeRow->addWidget(caption(QStringLiteral("Gain"), this));
+    routeRow->addWidget(caption(QStringLiteral("Gain")));
     routeRow->addWidget(gain_);
     routeRow->addWidget(gainValue_);
     routeRow->addWidget(autoGain_);
     routeRow->addSpacing(18);
-    routeRow->addWidget(caption(QStringLiteral("Output"), this));
+    routeRow->addWidget(caption(QStringLiteral("Output")));
     routeRow->addWidget(output_, 1);
     root->addLayout(routeRow);
 
     connect(gain_, &QSlider::valueChanged, this, [this](int db) {
         gainValue_->setText(formatGainDb(static_cast<float>(db), false));
-        emit channelGainChanged(audio::kAllChannels[static_cast<std::size_t>(channel_)],
+        emit channelGainChanged(selectedChannel(),
                                 static_cast<float>(db));
     });
     connect(autoGain_, &QCheckBox::toggled, this, [this](bool on) {
         gain_->setEnabled(!on);  // the loop owns the value while it runs
         emit channelAutoGainToggled(
-            audio::kAllChannels[static_cast<std::size_t>(channel_)], on);
+            selectedChannel(), on);
     });
     connect(output_, &QComboBox::activated, this, [this](int) {
         currentOutput_ = output_->currentData().toString();
-        emit channelOutputChanged(audio::kAllChannels[static_cast<std::size_t>(channel_)],
+        emit channelOutputChanged(selectedChannel(),
                                   currentOutput_);
     });
 
@@ -207,13 +181,13 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     controls->setSpacing(8);
     controls->addWidget(enabledCheck_);
     controls->addStretch(1);
-    controls->addWidget(caption(QStringLiteral("Preset"), this));
+    controls->addWidget(caption(QStringLiteral("Preset")));
     controls->addWidget(presetCombo_);
     controls->addWidget(saveBtn);
     controls->addWidget(importBtn);
     controls->addWidget(exportBtn);
     controls->addSpacing(10);
-    controls->addWidget(caption(QStringLiteral("Bands"), this));
+    controls->addWidget(caption(QStringLiteral("Bands")));
     controls->addWidget(bandSeg);
     root->addLayout(controls);
 
@@ -227,12 +201,10 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     rebuildPresetCombo();
 
     connect(channelGroup_, &QButtonGroup::idClicked, this, [this](int id) {
-        if (id < 0 || id >= static_cast<int>(buttonChannel_.size())) {
-            return;
-        }
+        if (id < 0 || id >= static_cast<int>(buttonChannel_.size())) return;
         channel_ = buttonChannel_[static_cast<std::size_t>(id)];
         loadChannel();
-        emit channelSelected(audio::kAllChannels[static_cast<std::size_t>(channel_)]);
+        emit channelSelected(selectedChannel());
     });
     connect(bandGroup_, &QButtonGroup::idClicked, this, [this](int id) {
         dsp::EqSettings& s = current();
@@ -256,37 +228,10 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     connect(curve_, &EqCurve::bandChanged, this, &EqualizerPage::onBandChanged);
 
     // Flush drag edits to the audio path at a steady, low rate so the filters
-    // don't click on every mouse move.
+    // don't click on every mouse move. Runs only while the page is shown.
     eqFlush_ = new QTimer(this);
     eqFlush_->setInterval(40);
-    connect(eqFlush_, &QTimer::timeout, this, [this] {
-        if (eqDirty_) {
-            eqDirty_ = false;
-            pushEq();
-        }
-        if (bassDirty_) {
-            bassDirty_ = false;
-            pushBass();
-        }
-        // A device plugged in while this page is open used to stay invisible
-        // until the channel was switched or Sonero restarted: the list was only
-        // built from loadChannel(). The backend bumps a revision when a sink
-        // comes or goes, and the Mixer and Devices pages already watch it.
-        if (devices_ != nullptr && devices_->devicesRevision() != devicesRevision_) {
-            refreshOutputs();
-        }
-    });
-    eqFlush_->start();
-
-    if (const char* demo = std::getenv("SONAR_EQ_DEMO")) {  // dev hook for screenshots
-        const QString name = QString::fromLatin1(demo);
-        for (const dsp::EqPreset preset : kBuiltinPresets) {
-            if (toQString(dsp::presetName(preset)).compare(name, Qt::CaseInsensitive) == 0) {
-                dsp::applyPreset(current(), preset);
-                break;
-            }
-        }
-    }
+    connect(eqFlush_, &QTimer::timeout, this, &EqualizerPage::flushPending);
 
     restoreEq();    // persisted per-channel EQ overrides the defaults above
     restoreBass();  // and the persisted harmonic bass stage of each channel
@@ -296,19 +241,38 @@ EqualizerPage::EqualizerPage(audio::IEqualizerController* controller,
     // the visible one — so saved settings take effect immediately on launch.
     if (controller_ != nullptr) {
         for (std::size_t i = 0; i < eq_.size(); ++i) {
-            // Not the microphone. Its equalizer is owned by the microphone page
-            // and runs inside the microphone's own chain; applying this page's
-            // copy here would overwrite it every time Sonero started.
-            if (audio::kAllChannels[i] == ChannelId::Microphone) {
-                continue;
-            }
+            // Not the microphone: its equalizer belongs to the microphone page.
+            if (audio::kAllChannels[i] == ChannelId::Microphone) continue;
             controller_->applyEqualizer(audio::kAllChannels[i], eq_[i]);
-            // The bass stage too, and for the same reason: a restored setting
-            // that only takes effect once its channel is selected is a setting
-            // the user has to go and find before their audio sounds right.
+            // The bass stage too, so a restored setting applies without selecting the channel.
             controller_->applyBassStage(audio::kAllChannels[i], bass_[i]);
         }
     }
+}
+
+void EqualizerPage::flushPending() {
+    if (eqDirty_) {
+        eqDirty_ = false;
+        pushEq();
+    }
+    if (bassDirty_) {
+        bassDirty_ = false;
+        pushBass();
+    }
+    // Refresh the output list when a sink came or went.
+    if (devices_ != nullptr && devices_->devicesRevision() != devicesRevision_) refreshOutputs();
+}
+
+void EqualizerPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    flushPending();  // catches a device that came or went while hidden
+    eqFlush_->start();
+}
+
+void EqualizerPage::hideEvent(QHideEvent* event) {
+    QWidget::hideEvent(event);
+    eqFlush_->stop();
+    flushPending();  // an edit made just before leaving still reaches the audio
 }
 
 dsp::EqSettings& EqualizerPage::current() {
@@ -324,10 +288,8 @@ void EqualizerPage::buildBassCard(QVBoxLayout* root) {
     body->setContentsMargins(18, 14, 18, 14);
     body->setSpacing(8);
 
-    // A small driver cannot move enough air to reproduce 40 Hz, and boosting
-    // 40 Hz with the curve above only spends excursion distorting everything
-    // else. This stage synthesises the harmonics of the bass instead, in the
-    // range the driver does reproduce, and hearing supplies the fundamental.
+    // Harmonic bass: synthesise the harmonics a small driver can reproduce instead of
+    // boosting a fundamental it cannot.
     bassOn_ = new QCheckBox(QStringLiteral("Harmonic bass"), this);
     bassOn_->setToolTip(QStringLiteral(
         "Rebuild the low end the driver cannot reproduce, by synthesising the "
@@ -344,9 +306,7 @@ void EqualizerPage::buildBassCard(QVBoxLayout* root) {
 
     auto* head = new QHBoxLayout;
     head->setSpacing(10);
-    auto* title = new QLabel(QStringLiteral("Harmonic bass"), this);
-    title->setObjectName(QStringLiteral("SectionTitle"));
-    head->addWidget(title);
+    head->addWidget(makeLabel(QStringLiteral("Harmonic bass"), "SectionTitle"));
     head->addSpacing(8);
     head->addWidget(bassOn_);
     head->addStretch(1);
@@ -354,9 +314,7 @@ void EqualizerPage::buildBassCard(QVBoxLayout* root) {
     head->addWidget(bassLimiter_);
     body->addLayout(head);
 
-    bassCrossoverHint_ = new QLabel(this);
-    bassCrossoverHint_->setObjectName(QStringLiteral("Hint"));
-    bassCrossoverHint_->setWordWrap(true);
+    bassCrossoverHint_ = makeLabel(QString(), "Hint", true);
 
     // Two columns: the three settings that shape the effect on the left, the
     // three that shape its timing and balance on the right.
@@ -366,14 +324,12 @@ void EqualizerPage::buildBassCard(QVBoxLayout* root) {
     const auto row = [this, grid](int r, int col, const QString& label, int lo, int hi,
                                   const std::function<QString(int)>& fmt,
                                   const QString& tip) {
-        auto* key = caption(label, this);
+        QLabel* key = caption(label);
         key->setMinimumWidth(78);
         auto* slider = new QSlider(Qt::Horizontal, this);
         slider->setRange(lo, hi);
-        auto* value = new QLabel(this);
-        value->setObjectName(QStringLiteral("VolumeValue"));
+        QLabel* value = makeValueLabel(QString());
         value->setMinimumWidth(58);
-        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         if (!tip.isEmpty()) {
             key->setToolTip(tip);
             slider->setToolTip(tip);
@@ -452,9 +408,7 @@ void EqualizerPage::buildBassCard(QVBoxLayout* root) {
 }
 
 void EqualizerPage::reflectBass() {
-    if (bassOn_ == nullptr) {
-        return;
-    }
+    if (bassOn_ == nullptr) return;
     const dsp::BassStageSettings& b = bass_[static_cast<std::size_t>(channel_)];
     bassSyncing_ = true;
     bassOn_->setChecked(b.bass.enabled);
@@ -467,15 +421,16 @@ void EqualizerPage::reflectBass() {
     bassReplaceLows_->setChecked(b.bass.replaceLows);
     bassLimiter_->setChecked(b.limiterEnabled);
     bassSyncing_ = false;
+    showCrossoverHint(b.bass.crossoverHz);
+}
 
-    const std::string_view hint = dsp::harmonicBassCrossoverHint(b.bass.crossoverHz);
-    bassCrossoverHint_->setText(QStringLiteral("Crossover suits: %1").arg(toQString(hint)));
+void EqualizerPage::showCrossoverHint(float crossoverHz) {
+    bassCrossoverHint_->setText(QStringLiteral("Crossover suits: %1")
+                                    .arg(toQString(dsp::harmonicBassCrossoverHint(crossoverHz))));
 }
 
 void EqualizerPage::pushBass() {
-    if (bassOn_ == nullptr) {
-        return;
-    }
+    if (bassOn_ == nullptr) return;
     dsp::BassStageSettings& b = bass_[static_cast<std::size_t>(channel_)];
     b.bass.enabled = bassOn_->isChecked();
     b.bass.crossoverHz = static_cast<float>(bassCrossover_->value());
@@ -487,32 +442,17 @@ void EqualizerPage::pushBass() {
     b.bass.replaceLows = bassReplaceLows_->isChecked();
     b.limiterEnabled = bassLimiter_->isChecked();
 
-    const std::string_view hint = dsp::harmonicBassCrossoverHint(b.bass.crossoverHz);
-    bassCrossoverHint_->setText(QStringLiteral("Crossover suits: %1").arg(toQString(hint)));
+    showCrossoverHint(b.bass.crossoverHz);
     if (controller_ != nullptr) {
-        controller_->applyBassStage(audio::kAllChannels[static_cast<std::size_t>(channel_)], b);
+        controller_->applyBassStage(selectedChannel(), b);
     }
 }
 
 void EqualizerPage::saveBass() {
-    if (settings_ == nullptr) {
-        return;
-    }
+    if (settings_ == nullptr) return;
     QJsonObject channels;
     for (std::size_t i = 0; i < audio::kAllChannels.size(); ++i) {
-        const dsp::BassStageSettings& b = bass_[i];
-        QJsonObject o;
-        o[QStringLiteral("enabled")] = b.bass.enabled;
-        o[QStringLiteral("crossoverHz")] = b.bass.crossoverHz;
-        o[QStringLiteral("amountDb")] = b.bass.amountDb;
-        o[QStringLiteral("harmonics")] = b.bass.harmonics;
-        o[QStringLiteral("evenWeight")] = b.bass.evenWeight;
-        o[QStringLiteral("attackMs")] = b.bass.attackMs;
-        o[QStringLiteral("releaseMs")] = b.bass.releaseMs;
-        o[QStringLiteral("replaceLows")] = b.bass.replaceLows;
-        o[QStringLiteral("limiterEnabled")] = b.limiterEnabled;
-        o[QStringLiteral("limiterCeilingDb")] = b.limiterCeilingDb;
-        channels[toQString(audio::channelName(audio::kAllChannels[i]))] = o;
+        channels[channelKey(audio::kAllChannels[i])] = config::bassToJson(bass_[i]);
     }
     QJsonObject section;
     section[QStringLiteral("channels")] = channels;
@@ -520,38 +460,15 @@ void EqualizerPage::saveBass() {
 }
 
 void EqualizerPage::restoreBass() {
-    if (settings_ == nullptr) {
-        return;
-    }
+    if (settings_ == nullptr) return;
     const QJsonObject channels = settings_->section(QStringLiteral("harmonicBass"))
                                      .value(QStringLiteral("channels"))
                                      .toObject();
-    if (channels.isEmpty()) {
-        return;  // first run — keep the defaults
-    }
     for (std::size_t i = 0; i < audio::kAllChannels.size(); ++i) {
-        const QJsonObject o =
-            channels.value(toQString(audio::channelName(audio::kAllChannels[i]))).toObject();
-        if (o.isEmpty()) {
-            continue;
+        const QJsonObject o = channels.value(channelKey(audio::kAllChannels[i])).toObject();
+        if (!o.isEmpty()) {  // first run, or a channel never touched: keep the defaults
+            bass_[i] = config::bassFromJson(o, bass_[i]);
         }
-        dsp::BassStageSettings& b = bass_[i];
-        const auto num = [&o](const QString& key, float fallback) {
-            return o.contains(key) ? static_cast<float>(o.value(key).toDouble(fallback))
-                                   : fallback;
-        };
-        b.bass.enabled = o.value(QStringLiteral("enabled")).toBool(b.bass.enabled);
-        b.bass.crossoverHz = num(QStringLiteral("crossoverHz"), b.bass.crossoverHz);
-        b.bass.amountDb = num(QStringLiteral("amountDb"), b.bass.amountDb);
-        b.bass.harmonics = o.value(QStringLiteral("harmonics")).toInt(b.bass.harmonics);
-        b.bass.evenWeight = num(QStringLiteral("evenWeight"), b.bass.evenWeight);
-        b.bass.attackMs = num(QStringLiteral("attackMs"), b.bass.attackMs);
-        b.bass.releaseMs = num(QStringLiteral("releaseMs"), b.bass.releaseMs);
-        b.bass.replaceLows =
-            o.value(QStringLiteral("replaceLows")).toBool(b.bass.replaceLows);
-        b.limiterEnabled =
-            o.value(QStringLiteral("limiterEnabled")).toBool(b.limiterEnabled);
-        b.limiterCeilingDb = num(QStringLiteral("limiterCeilingDb"), b.limiterCeilingDb);
     }
 }
 
@@ -611,21 +528,15 @@ void EqualizerPage::loadChannel() {
 }
 
 void EqualizerPage::refreshOutputs() {
-    if (devices_ == nullptr || output_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker block(output_);
-    output_->clear();
-    output_->addItem(QStringLiteral("Default output"), QString());
+    if (devices_ == nullptr || output_ == nullptr) return;
+    std::vector<std::pair<QString, QString>> items;
     for (const audio::AudioDevice& dev : devices_->outputDevices()) {
-        output_->addItem(QString::fromStdString(dev.description),
-                         QString::fromStdString(dev.name));
+        items.emplace_back(QString::fromStdString(dev.description),
+                           QString::fromStdString(dev.name));
     }
-    // Rebuilding the list drops the selection, so put it back. A device that has
-    // since disappeared falls back to the first entry, which is what the channel
-    // is actually doing once its target is gone.
-    const int index = output_->findData(currentOutput_);
-    output_->setCurrentIndex(index >= 0 ? index : 0);
+    // A device that has since disappeared falls back to the first entry, which is
+    // what the channel is actually doing once its target is gone.
+    fillDeviceCombo(output_, QStringLiteral("Default output"), items, currentOutput_);
     devicesRevision_ = devices_->devicesRevision();
 }
 
@@ -639,9 +550,7 @@ ChannelId EqualizerPage::selectedChannel() const {
 }
 
 void EqualizerPage::showChannelGain(float gainDb, bool autoOn) {
-    if (gain_ == nullptr) {
-        return;
-    }
+    if (gain_ == nullptr) return;
     const QSignalBlocker g(gain_);
     const QSignalBlocker a(autoGain_);
     gain_->setValue(static_cast<int>(std::lround(gainDb)));
@@ -653,7 +562,7 @@ void EqualizerPage::showChannelGain(float gainDb, bool autoOn) {
 void EqualizerPage::showAutoGainValue(ChannelId id, float gainDb) {
     // The loop reports every channel; only the one on screen has anything to show.
     if (gain_ == nullptr ||
-        audio::kAllChannels[static_cast<std::size_t>(channel_)] != id) {
+        selectedChannel() != id) {
         return;
     }
     const QSignalBlocker g(gain_);  // moving the slider must not look like a user edit
@@ -680,25 +589,21 @@ void EqualizerPage::onBandChanged(int index, float gainDb) {
 
 void EqualizerPage::pushEq() {
     if (controller_ != nullptr) {
-        controller_->applyEqualizer(audio::kAllChannels[static_cast<std::size_t>(channel_)],
+        controller_->applyEqualizer(selectedChannel(),
                                     current());
     }
 }
 
 void EqualizerPage::restoreEq() {
-    if (settings_ == nullptr) {
-        return;
-    }
+    if (settings_ == nullptr) return;
     const QJsonObject channels =
         settings_->section(QStringLiteral("softwareEq")).value(QStringLiteral("channels")).toObject();
-    if (channels.isEmpty()) {
-        return;  // first run — keep the flat defaults
-    }
+    if (channels.isEmpty()) return;  // first run — keep the flat defaults
     for (std::size_t i = 0; i < eq_.size(); ++i) {
         if (audio::kAllChannels[i] == ChannelId::Microphone) {
             continue;  // stored under "microphoneEq" by the microphone page
         }
-        const QString key = toQString(audio::channelName(audio::kAllChannels[i]));
+        const QString key = channelKey(audio::kAllChannels[i]);
         if (channels.contains(key)) {
             eq_[i] = config::eqFromJson(channels.value(key).toObject(), eq_[i]);
         }
@@ -706,15 +611,11 @@ void EqualizerPage::restoreEq() {
 }
 
 void EqualizerPage::saveEq() {
-    if (settings_ == nullptr) {
-        return;
-    }
+    if (settings_ == nullptr) return;
     QJsonObject channels;
     for (std::size_t i = 0; i < eq_.size(); ++i) {
-        if (audio::kAllChannels[i] == ChannelId::Microphone) {
-            continue;
-        }
-        channels[toQString(audio::channelName(audio::kAllChannels[i]))] =
+        if (audio::kAllChannels[i] == ChannelId::Microphone) continue;
+        channels[channelKey(audio::kAllChannels[i])] =
             config::eqToJson(eq_[i]);
     }
     QJsonObject section;
@@ -727,9 +628,7 @@ void EqualizerPage::onSavePreset() {
     const QString name = QInputDialog::getText(this, QStringLiteral("Save preset"),
                                                QStringLiteral("Preset name:"), QLineEdit::Normal,
                                                QString(), &ok);
-    if (!ok || name.trimmed().isEmpty()) {
-        return;
-    }
+    if (!ok || name.trimmed().isEmpty()) return;
     if (!presets::save(name.trimmed(), current())) {
         QMessageBox::warning(this, QStringLiteral("Save preset"),
                              QStringLiteral("Could not save the preset."));
@@ -745,9 +644,7 @@ void EqualizerPage::onSavePreset() {
 void EqualizerPage::onImportPreset() {
     const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import preset"),
                                                       QString(), QStringLiteral("Presets (*.json)"));
-    if (path.isEmpty()) {
-        return;
-    }
+    if (path.isEmpty()) return;
     const auto name = presets::importFile(path);
     if (!name) {
         QMessageBox::warning(this, QStringLiteral("Import preset"),
@@ -766,9 +663,7 @@ void EqualizerPage::onExportPreset() {
     const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export preset"),
                                                       QStringLiteral("preset.json"),
                                                       QStringLiteral("Presets (*.json)"));
-    if (path.isEmpty()) {
-        return;
-    }
+    if (path.isEmpty()) return;
     if (!presets::exportFile(path, QStringLiteral("Sonero EQ"), current())) {
         QMessageBox::warning(this, QStringLiteral("Export preset"),
                              QStringLiteral("Could not write the file."));

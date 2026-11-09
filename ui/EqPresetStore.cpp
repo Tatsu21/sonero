@@ -53,9 +53,7 @@ QJsonObject toJson(const QString& name, const dsp::EqSettings& s) {
 }
 
 std::optional<dsp::EqSettings> fromJson(const QJsonObject& o, QString* nameOut) {
-    if (!o.contains(QStringLiteral("bands"))) {
-        return std::nullopt;
-    }
+    if (!o.contains(QStringLiteral("bands"))) return std::nullopt;
     dsp::EqSettings s;
     s.preset = dsp::EqPreset::Custom;
     s.enabled = o.value(QStringLiteral("enabled")).toBool(true);
@@ -65,9 +63,7 @@ std::optional<dsp::EqSettings> fromJson(const QJsonObject& o, QString* nameOut) 
         s.bands.push_back(dsp::EqBand{static_cast<float>(bo.value(QStringLiteral("f")).toDouble()),
                                       static_cast<float>(bo.value(QStringLiteral("g")).toDouble())});
     }
-    if (s.bands.empty()) {
-        return std::nullopt;
-    }
+    if (s.bands.empty()) return std::nullopt;
     if (nameOut != nullptr) {
         *nameOut = o.value(QStringLiteral("name")).toString();
     }
@@ -76,21 +72,15 @@ std::optional<dsp::EqSettings> fromJson(const QJsonObject& o, QString* nameOut) 
 
 std::optional<QJsonObject> readJson(const QString& filePath) {
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return std::nullopt;
-    }
+    if (!file.open(QIODevice::ReadOnly)) return std::nullopt;
     const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (!doc.isObject()) {
-        return std::nullopt;
-    }
+    if (!doc.isObject()) return std::nullopt;
     return doc.object();
 }
 
 bool writeJson(const QString& filePath, const QJsonObject& obj) {
     QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return false;
-    }
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
     file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
     return true;
 }
@@ -125,9 +115,7 @@ bool save(const QString& name, const dsp::EqSettings& settings) {
 
 std::optional<dsp::EqSettings> load(const QString& name) {
     const auto obj = readJson(pathFor(name));
-    if (!obj) {
-        return std::nullopt;
-    }
+    if (!obj) return std::nullopt;
     return fromJson(*obj, nullptr);
 }
 
@@ -135,20 +123,14 @@ bool remove(const QString& name) { return QFile::remove(pathFor(name)); }
 
 std::optional<QString> importFile(const QString& filePath) {
     const auto obj = readJson(filePath);
-    if (!obj) {
-        return std::nullopt;
-    }
+    if (!obj) return std::nullopt;
     QString name;
     const auto settings = fromJson(*obj, &name);
-    if (!settings) {
-        return std::nullopt;
-    }
+    if (!settings) return std::nullopt;
     if (name.isEmpty()) {
         name = QFileInfo(filePath).completeBaseName();
     }
-    if (!save(name, *settings)) {
-        return std::nullopt;
-    }
+    if (!save(name, *settings)) return std::nullopt;
     return name;
 }
 

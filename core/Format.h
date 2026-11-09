@@ -8,22 +8,9 @@
 #include <utility>
 #include <vector>
 
-// A small brace formatter, standing in for std::format.
-//
-// std::format is C++20, but libstdc++ only shipped it in GCC 13. Using it would
-// make the project unbuildable on Ubuntu 22.04 / Linux Mint 21 (GCC 11) — and
-// building there with a newer compiler does not help either, because the result
-// would then demand a libstdc++ those systems do not have. Since packaging for
-// exactly those distributions is a goal, the formatting stays here instead.
-//
-// Supports what the codebase actually uses:
-//   {}        the next argument, in order
-//   {N}       argument N, zero-based
-//   {:.Nf}    fixed-point with N decimals
-//   {{ }}     literal braces
-//
-// Anything it does not recognise is copied through verbatim rather than throwing:
-// a malformed log line is a nuisance, a crash while logging is a bug.
+// A small brace formatter standing in for std::format, which GCC 11 (Ubuntu 22.04,
+// Mint 21) lacks. Supports {}, {N}, {:.Nf} and {{ }}; anything else is copied
+// through verbatim, because a crash while logging is worse than a malformed line.
 namespace sonar::fmt {
 
 namespace detail {

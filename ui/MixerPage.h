@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <random>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -17,7 +16,6 @@ namespace sonar::audio {
 class IMixer;
 class IAppRouter;
 class IChannelController;
-class IAudioDevices;
 }
 
 namespace sonar::config {
@@ -29,24 +27,17 @@ namespace sonar::ui {
 class ChannelStrip;
 class FlowLayout;
 
-// The Mixer page: one ChannelStrip per channel, wired to the mixer model, plus
-// an "Applications" panel (from the router) that lets each running app be moved
-// onto a channel. A refresh timer drives the VU meters and rebuilds the app list
-// when the router reports a change.
-//
-// Until the audio engine produces real peaks, an optional (default-on)
-// placeholder simulator synthesizes levels from channel state.
+// The Mixer page: one ChannelStrip per channel plus a pool of unrouted apps to drag
+// onto them. A timer drives the meters and rebuilds the apps on router changes.
 class MixerPage : public QWidget {
     Q_OBJECT
 
 public:
     MixerPage(sonar::audio::IMixer& mixer, sonar::audio::IAppRouter* router,
               sonar::audio::IChannelController* controller,
-              sonar::audio::IAudioDevices* devices = nullptr,
               sonar::config::SettingsStore* settings = nullptr, QWidget* parent = nullptr);
 
 signals:
-
     void channelGainDbChanged(audio::ChannelId id, float gainDb);
 
     // A channel's own fader moved, wherever it was moved from. Lets a second view
@@ -54,10 +45,8 @@ signals:
     void channelVolumeChanged(audio::ChannelId id, float volume);
 
 public:
-    // The single path that changes a channel's volume: updates the model, pushes
-    // it to PipeWire with the master multiplier applied, persists it, and moves
-    // this page's own strip. Every other view drives volume through here rather
-    // than repeating those four steps.
+    // The single path that changes a channel's volume: model, PipeWire (with the master
+    // multiplier), persistence and this page's strip.
     void applyChannelVolume(audio::ChannelId id, float volume);
 
     // Called by the Channels page, which owns the gain / auto / output controls
@@ -71,14 +60,19 @@ public:
     [[nodiscard]] QString channelOutput(audio::ChannelId id) const;
     [[nodiscard]] bool channelAutoGain(audio::ChannelId id) const;
 
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
 private:
+    void updateRefreshRate();  // fast while shown or while auto-gain runs
     void refresh();
-    void injectSimulatedLevels();
     void rebuildApplications();
     void pushChannelBalances();
     void pushChannelVolumes();  // apply every channel's volume to the real sinks
     void pushMuteStates();      // apply mute+solo to the real channel sinks
-    void syncOutputDevices();   // refresh each strip's output selector
+    // Set a channel's trim on the real sink, in dB.
+    void pushChannelGain(audio::ChannelId id, float gainDb);
     void updateAutoGain(ChannelStrip* strip, float peak);  // one AGC step
     void restoreAppRouting();   // re-apply saved app->channel assignments
     void saveAppRouting(const QString& appName, audio::ChannelId channel);
@@ -88,7 +82,6 @@ private:
     sonar::audio::IMixer& mixer_;
     sonar::audio::IAppRouter* router_ = nullptr;
     sonar::audio::IChannelController* controller_ = nullptr;
-    sonar::audio::IAudioDevices* devices_ = nullptr;
     sonar::config::SettingsStore* settings_ = nullptr;
 
     std::vector<ChannelStrip*> strips_;
@@ -100,12 +93,9 @@ private:
     std::unordered_map<int, dsp::AutoGain> autoGain_;
     // Second mix: how loud each channel is for a capture application.
     std::unordered_map<int, float> streamLevel_;
-    bool streamMode_ = false;
 
-    // Remembered app routing, keyed by application name — PipeWire hands out a
-    // fresh node id every time an application starts, so the id is useless across
-    // runs. Ids we have already placed are tracked so a later manual move is not
-    // undone on the next refresh.
+    // App routing remembered by application name (node ids change every run). Placed
+    // ids are tracked so a later manual move is not undone.
     std::unordered_map<QString, int> savedAppChannel_;
     std::set<std::uint32_t> routedAppIds_;
     FlowLayout* appsLayout_ = nullptr;
@@ -113,12 +103,7 @@ private:
     // — otherwise it costs the strips the height their app chips need.
     QWidget* appsSection_ = nullptr;
     QTimer* timer_ = nullptr;
-    bool simulate_ = true;
-    std::uint64_t appsRevision_ = ~0ULL;     // force initial rebuild
-    std::uint64_t devicesRevision_ = ~0ULL;  // force initial output-selector fill
-
-    std::mt19937 rng_{std::random_device{}()};
-    std::uniform_real_distribution<float> noise_{0.0f, 1.0f};
+    std::uint64_t appsRevision_ = ~0ULL;  // force initial rebuild
 };
 
 }  // namespace sonar::ui

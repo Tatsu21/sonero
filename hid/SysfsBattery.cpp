@@ -16,9 +16,7 @@ namespace fs = std::filesystem;
 // which every caller here treats as "this device does not say".
 std::string readLine(const fs::path& path) {
     std::ifstream in(path);
-    if (!in) {
-        return {};
-    }
+    if (!in) return {};
     std::string line;
     std::getline(in, line);
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ')) {
@@ -34,10 +32,8 @@ ChargeState parseState(const std::string& status) {
     return ChargeState::Unknown;
 }
 
-// Walk up from a sysfs device directory looking for the USB device that owns it
-// — the one carrying `manufacturer` and `product`, which is what ALSA names the
-// sound card after. Bounded, because sysfs symlink chains can be long and a
-// wrong turn should end rather than wander.
+// Walk up to the USB device carrying `manufacturer` / `product` (what ALSA names
+// the card after). Bounded, so a wrong turn ends.
 fs::path findUsbAncestor(fs::path start) {
     std::error_code ec;
     for (int depth = 0; depth < 12 && !start.empty(); ++depth) {
@@ -45,9 +41,7 @@ fs::path findUsbAncestor(fs::path start) {
             return start;
         }
         const fs::path parent = start.parent_path();
-        if (parent == start) {
-            break;
-        }
+        if (parent == start) break;
         start = parent;
     }
     return {};
@@ -60,9 +54,7 @@ std::string SysfsBatterySource::root_ = "/sys/class/power_supply";
 void SysfsBatterySource::setSysfsRoot(std::string root) { root_ = std::move(root); }
 
 std::string SysfsBatterySource::alsaIdForm(const std::string& descriptorString) {
-    // ALSA builds a card id from the USB strings by replacing anything that is
-    // not alphanumeric with an underscore, then collapsing runs of them. Doing
-    // the same here is what lets the two be compared at all.
+    // Normalise like ALSA builds card ids (non-alphanumerics to one underscore).
     std::string out;
     out.reserve(descriptorString.size());
     for (const char c : descriptorString) {
@@ -82,19 +74,12 @@ std::string SysfsBatterySource::alsaIdForm(const std::string& descriptorString) 
 bool SysfsBatterySource::nodeMatchesUsb(const std::string& nodeName,
                                         const std::string& manufacturer,
                                         const std::string& product) {
-    if (nodeName.empty()) {
-        return false;
-    }
-    // The product string alone is the reliable part: ALSA truncates long ids, and
-    // some descriptors repeat the manufacturer inside the product ("SteelSeries
-    // SteelSeries Arctis..."), so requiring both in order fails on real hardware.
+    if (nodeName.empty()) return false;
+    // The product string alone: ALSA truncates long ids and some descriptors repeat
+    // the manufacturer.
     const std::string wantProduct = alsaIdForm(product);
-    if (wantProduct.empty()) {
-        return false;
-    }
-    if (nodeName.find(wantProduct) != std::string::npos) {
-        return true;
-    }
+    if (wantProduct.empty()) return false;
+    if (nodeName.find(wantProduct) != std::string::npos) return true;
     // ...and when the product id was truncated, the manufacturer plus the start
     // of the product is still a strong enough signal to accept.
     const std::string wantVendor = alsaIdForm(manufacturer);
@@ -107,20 +92,14 @@ bool SysfsBatterySource::nodeMatchesUsb(const std::string& nodeName,
 
 std::optional<BatteryReading> SysfsBatterySource::read(const std::string& nodeName) {
     std::error_code ec;
-    if (!fs::is_directory(root_, ec)) {
-        return std::nullopt;  // no power_supply class at all
-    }
+    if (!fs::is_directory(root_, ec)) return std::nullopt;  // no power_supply class at all
 
     for (const fs::directory_entry& entry : fs::directory_iterator(root_, ec)) {
         const fs::path dir = entry.path();
 
-        // Peripherals only. A laptop's own battery and its mains adapter also
-        // live here, and reporting the laptop's charge as a headset's would be
-        // worse than reporting nothing.
+        // Peripherals only: never report the laptop's own battery as a headset's.
         const std::string scope = readLine(dir / "scope");
-        if (scope != "Device") {
-            continue;
-        }
+        if (scope != "Device") continue;
 
         // Signal one: the USB device this power supply hangs off.
         bool matched = false;
@@ -133,16 +112,13 @@ std::optional<BatteryReading> SysfsBatterySource::read(const std::string& nodeNa
         }
         ec.clear();
 
-        // Signal two: what the power supply calls itself. For anything behind a
-        // receiver the USB strings describe the dongle, so this is the only one
-        // that identifies the device.
+        // Signal two: the supply's own name, the only one that identifies a device behind
+        // a receiver.
         if (!matched) {
             matched = nodeMatchesUsb(nodeName, readLine(dir / "manufacturer"),
                                      readLine(dir / "model_name"));
         }
-        if (!matched) {
-            continue;
-        }
+        if (!matched) continue;
 
         const std::string capacity = readLine(dir / "capacity");
         BatteryReading reading;

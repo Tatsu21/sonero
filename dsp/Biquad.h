@@ -6,13 +6,8 @@
 
 namespace sonar::dsp {
 
-// A second-order section and the RBJ cookbook coefficients for the shapes the
-// playback chains need. Pure header, no state beyond the filter's own.
-//
-// MicChain carries its own private copy of this struct. It is deliberately not
-// refactored onto this one: that code runs on the microphone's realtime thread
-// in every shipped build, and sharing a type with it buys nothing worth the risk
-// of touching it. New chains use this header so they do not each grow a copy.
+// A second-order section and RBJ cookbook coefficients. MicChain computes its own
+// coefficients in place, so a band keeps its state when only its gain moves.
 
 // Direct-form transposed II: fewer state variables than DF1 and better behaved
 // with float coefficients at the low frequencies a bass stage works in.
@@ -24,9 +19,7 @@ struct Biquad {
         const float y = b0 * x + z1;
         z1 = b1 * x - a1 * y + z2;
         z2 = b2 * x - a2 * y;
-        // Denormals cost hundreds of cycles each on x86, and they only ever turn
-        // up in a filter that has been fed silence for a while — which is most of
-        // a bass stage's life, since it sees a band that is often empty.
+        // Flush denormals: they cost hundreds of cycles each in a filter fed silence.
         if (!std::isfinite(z1) || std::abs(z1) < 1e-25f) z1 = 0.0f;
         if (!std::isfinite(z2) || std::abs(z2) < 1e-25f) z2 = 0.0f;
         return y;
@@ -43,10 +36,8 @@ struct Biquad {
     }
 };
 
-// Butterworth Q. Two sections cascaded at this Q make a Linkwitz-Riley 4th-order
-// crossover, whose low and high halves sum back to a flat magnitude — which is
-// what lets the bass stage subtract the lows and put something else there
-// without leaving a hole at the crossover.
+// Butterworth Q: two cascaded sections make a Linkwitz-Riley crossover whose halves
+// sum back flat, so the bass stage can replace the lows without a hole.
 inline constexpr float kButterworthQ = 0.70710678f;
 
 // Keeps a corner frequency inside the range a biquad can actually express at
@@ -55,11 +46,20 @@ inline constexpr float kButterworthQ = 0.70710678f;
     return std::clamp(freqHz, 10.0f, sampleRate * 0.45f);
 }
 
-[[nodiscard]] inline Biquad lowPass(float freqHz, float q, float sampleRate) {
+// The intermediates every RBJ cookbook shape starts from.
+struct RbjTerms {
+    float cosw;
+    float alpha;
+};
+
+[[nodiscard]] inline RbjTerms rbjTerms(float freqHz, float q, float sampleRate) {
     const float f = safeCorner(freqHz, sampleRate);
     const float w0 = 2.0f * std::numbers::pi_v<float> * f / sampleRate;
-    const float cosw = std::cos(w0);
-    const float alpha = std::sin(w0) / (2.0f * q);
+    return {std::cos(w0), std::sin(w0) / (2.0f * q)};
+}
+
+[[nodiscard]] inline Biquad lowPass(float freqHz, float q, float sampleRate) {
+    const auto [cosw, alpha] = rbjTerms(freqHz, q, sampleRate);
     const float a0 = 1.0f + alpha;
     Biquad bq;
     bq.b0 = (1.0f - cosw) * 0.5f / a0;
@@ -71,10 +71,7 @@ inline constexpr float kButterworthQ = 0.70710678f;
 }
 
 [[nodiscard]] inline Biquad highPass(float freqHz, float q, float sampleRate) {
-    const float f = safeCorner(freqHz, sampleRate);
-    const float w0 = 2.0f * std::numbers::pi_v<float> * f / sampleRate;
-    const float cosw = std::cos(w0);
-    const float alpha = std::sin(w0) / (2.0f * q);
+    const auto [cosw, alpha] = rbjTerms(freqHz, q, sampleRate);
     const float a0 = 1.0f + alpha;
     Biquad bq;
     bq.b0 = (1.0f + cosw) * 0.5f / a0;
@@ -85,16 +82,12 @@ inline constexpr float kButterworthQ = 0.70710678f;
     return bq;
 }
 
-// Peaking, the shape a graphic equalizer band is. `gainDb` is unbounded here on
-// purpose: the Lab chain's whole point is an equalizer with no gain ceiling, and
-// the cookbook formula stays stable far beyond the +-12 dB the UI used to allow.
+// Peaking (a graphic EQ band). `gainDb` is unbounded; the formula stays stable far
+// past +-12 dB.
 [[nodiscard]] inline Biquad peaking(float freqHz, float q, float gainDb,
                                     float sampleRate) {
-    const float f = safeCorner(freqHz, sampleRate);
+    const auto [cosw, alpha] = rbjTerms(freqHz, q, sampleRate);
     const float A = std::pow(10.0f, gainDb / 40.0f);
-    const float w0 = 2.0f * std::numbers::pi_v<float> * f / sampleRate;
-    const float cosw = std::cos(w0);
-    const float alpha = std::sin(w0) / (2.0f * q);
     const float a0 = 1.0f + alpha / A;
     Biquad bq;
     bq.b0 = (1.0f + alpha * A) / a0;

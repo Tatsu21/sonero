@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -17,13 +16,11 @@
 
 #include "audio/DeviceFormat.h"
 #include "hid/BatterySource.h"
-#include "dsp/Equalizer.h"
 #include "hid/SteelSeriesDevice.h"
 
 class QComboBox;
 class QLabel;
 class QProgressBar;
-class QSlider;
 class QTimer;
 class QVBoxLayout;
 
@@ -39,7 +36,6 @@ class SettingsStore;
 
 namespace sonar::ui {
 
-class EqCurve;
 class Notifier;
 
 // One connected device's battery, as the tray menu shows it. Reported by
@@ -52,10 +48,8 @@ struct BatteryLevel {
     bool operator==(const BatteryLevel&) const = default;
 };
 
-// Lists every connected audio output (USB, Bluetooth, HDMI, S/PDIF, analog) live
-// — devices appear and disappear as they are plugged / unplugged. The SteelSeries
-// Arctis Nova Pro base station additionally gets its onboard controls (battery,
-// transmission format, and a Sonar-style HID equalizer).
+// Every connected audio output, live, plus the SteelSeries Arctis Nova Pro base
+// station's battery while it is connected.
 class DevicesPage : public QWidget {
     Q_OBJECT
 
@@ -65,10 +59,8 @@ public:
                          config::SettingsStore* settings = nullptr, Notifier* notifier = nullptr,
                          QWidget* parent = nullptr);
 
-    // The levels as of the last poll. The first poll happens inside the
-    // constructor, before any caller can connect to batteriesChanged(), and the
-    // signal then stays quiet until something changes — so a listener has to seed
-    // itself from this rather than wait for an edge that already went by.
+    // The levels as of the last poll. The first poll runs inside the constructor,
+    // before anyone can connect to batteriesChanged(), so listeners seed from this.
     [[nodiscard]] const QList<BatteryLevel>& batteries() const { return lastBatteries_; }
 
 signals:
@@ -85,18 +77,15 @@ private:
     void buildSteelSeriesControls(QVBoxLayout* parent);
     // Refreshes the row's badge and hands back the level it found, if any.
     std::optional<int> updateBtBattery(QLabel* label, const std::string& nodeName);
+    // Low-battery notification for `key`, once per drain.
+    void warnIfLow(const std::string& key, int percent, const QString& what);
     void publishBatteries(QList<BatteryLevel> levels);  // headset first, then Bluetooth
 
     void refresh();  // SteelSeries battery / status
-    void onEqBandChanged(int index, float gainDb);
-    void applyHeadsetPreset(const std::array<int, 10>& gainsDb);
-    void sendHeadsetEq();
     void buildFormatCard(QVBoxLayout* root);
     void syncFormatDevices();            // refill the ALSA-device selector
     void loadFormatForSelectedDevice();  // fill rate/depth for the chosen device
     void applyFormat();
-    void setBand(int index, float gainDb);  // update model + both widgets + queue send
-    void saveHeadsetEq();                    // persist the headset EQ to the store
 
     audio::IAudioDevices* devices_ = nullptr;
     audio::IDeviceFormats* formats_ = nullptr;
@@ -109,17 +98,14 @@ private:
     std::unordered_map<std::string, std::string> pendingDevices_;  // awaiting settle
     QTimer* hotplugTimer_ = nullptr;  // debounces flapping outputs (HDMI on DPMS)
     bool devicesInitialized_ = false;                            // skip the first sync
-    std::unordered_set<std::string> btLowWarned_;                // BT names warned low
-    bool headsetLowWarned_ = false;
+    std::unordered_set<std::string> lowWarned_;  // batteries already warned about this drain
 
     QVBoxLayout* deviceListBody_ = nullptr;   // rows, one per connected output
-    // Every way of learning a device's charge level, generic ones first. Battery
-    // support is a list of sources, not a list of products — see
-    // hid/BatterySource.h.
+    // Every way of learning a charge level, generic first (see hid/BatterySource.h).
     std::vector<std::unique_ptr<sonar::hid::IBatterySource>> batterySources_ =
         sonar::hid::defaultBatterySources();
 
-    QWidget* steelSeriesCard_ = nullptr;      // battery + EQ (hidden when absent)
+    QWidget* steelSeriesCard_ = nullptr;      // battery (hidden when absent)
     std::uint64_t lastDevicesRev_ = ~0ULL;    // force the initial build
     QTimer* timer_ = nullptr;
     // Bluetooth outputs whose battery is polled each tick.
@@ -143,13 +129,6 @@ private:
     int headsetPercent_ = -1;        // last reading; -1 when the dock is absent
     bool headsetCharging_ = false;
     QList<BatteryLevel> lastBatteries_;  // what was last emitted, to skip no-ops
-    QLabel* rawLabel_ = nullptr;
-
-    EqCurve* eqCurve_ = nullptr;
-    dsp::EqSettings headsetEq_;
-    std::array<QSlider*, 10> eqSliders_{};
-    std::array<QLabel*, 10> eqValues_{};
-    QTimer* eqTimer_ = nullptr;
 };
 
 }  // namespace sonar::ui

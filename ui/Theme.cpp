@@ -24,18 +24,8 @@ namespace sonar::ui {
 
 namespace {
 
-// The built-in theme's style sheet. Colours are placeholders rather than
-// literals: every one is filled in from ThemeTokens at apply time, which is what
-// makes the whole interface themeable without a user having to write any of this.
-//
-// Thirteen of the placeholders are the theme's own colours. The rest are shades
-// derived from them in derive() below — a hover a little lighter than its
-// surface, a border a little lighter than that — so a theme file carries thirteen
-// decisions instead of thirty-six.
-//
-// This string is the baseline and is never replaced, only substituted into. A
-// theme's own `extraQss` is appended after it, so it wins where the two overlap
-// and the app stays usable when it is wrong.
+// The built-in style sheet. Colour placeholders are filled from ThemeTokens (the
+// thirteen colours plus shades from derive()); a theme's `extraQss` follows it.
 const char* const kStyleSheet = R"QSS(
 * {
     font-family: @FONT@;
@@ -270,26 +260,38 @@ QLabel[sonerostate="bad"] { color: @DANGER@; font-weight: 800; }
 
 // --- Colour derivation -------------------------------------------------------
 
-// How bright a colour looks, 0..255. Not QColor::lightness(), which is HSL and
-// averages the extremes: it rates cyan #05d9e8 at 46% and so would put white
-// text on it. The green-weighted form is what the eye actually does, and it is
-// what decides every light-or-dark choice below.
+// Perceived brightness 0..255 (green-weighted), not HSL lightness, which would put
+// white text on cyan.
 [[nodiscard]] int luma(const QColor& c) {
     return (299 * c.red() + 587 * c.green() + 114 * c.blue()) / 1000;
 }
 
-// Mix two colours. Straight linear interpolation in sRGB, which is not
-// perceptually even but is what every hand-picked value in the original palette
-// was eyeballed against — matching it matters more here than being correct.
-[[nodiscard]] QColor mix(const QColor& a, const QColor& b, double t) {
-    const double u = 1.0 - t;
-    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
-                            a.blueF() * u + b.blueF() * t);
-}
 
-// Every placeholder the sheet uses, resolved against one theme. The derivations
-// reproduce the original hand-picked palette closely enough to be invisible, and
-// they are what let a thirteen-colour theme file paint every surface.
+// The thirteen colours a theme file carries: its JSON key, the style sheet
+// placeholder it fills, and where it lives in ThemeTokens.
+struct ColorSlot {
+    const char* key;
+    const char* placeholder;
+    QColor ThemeTokens::*member;
+};
+constexpr ColorSlot kColorSlots[] = {
+    {"bg", "@BG@", &ThemeTokens::bg},
+    {"sidebar", "@SIDEBAR@", &ThemeTokens::sidebar},
+    {"surface", "@SURFACE@", &ThemeTokens::surface},
+    {"input", "@INPUT@", &ThemeTokens::input},
+    {"hover", "@HOVER@", &ThemeTokens::hover},
+    {"border", "@BORDER@", &ThemeTokens::border},
+    {"text", "@TEXT@", &ThemeTokens::text},
+    {"textDim", "@TEXT_DIM@", &ThemeTokens::textDim},
+    {"accent", "@ACCENT@", &ThemeTokens::accent},
+    {"accentHi", "@ACCENT_HI@", &ThemeTokens::accentHi},
+    {"danger", "@DANGER@", &ThemeTokens::danger},
+    {"warn", "@WARN@", &ThemeTokens::warn},
+    {"ok", "@OK@", &ThemeTokens::ok},
+};
+
+// Every placeholder, resolved for one theme; the derivations reproduce the
+// original hand-picked palette.
 [[nodiscard]] QHash<QString, QString> derive(const ThemeTokens& t) {
     const QColor white(0xff, 0xff, 0xff);
     const QColor black(0x0a, 0x0b, 0x10);
@@ -298,9 +300,7 @@ QLabel[sonerostate="bad"] { color: @DANGER@; font-weight: 800; }
     // to stay legible against the background is pushed toward this.
     const QColor contrast = luma(t.bg) < 128 ? white : black;
 
-    // Ink that sits ON a strong colour is a different question from contrasting
-    // with the background: a light theme can perfectly well have a dark accent,
-    // and then its buttons need light text while its titles need dark.
+    // Ink on a strong colour is decided by that colour, not by the background.
     const auto ink = [&](const QColor& on) { return luma(on) < 128 ? white : black; };
 
     QHash<QString, QString> v;
@@ -309,51 +309,37 @@ QLabel[sonerostate="bad"] { color: @DANGER@; font-weight: 800; }
     };
 
     // The thirteen a theme actually carries.
-    put("@BG@", t.bg);
-    put("@SIDEBAR@", t.sidebar);
-    put("@SURFACE@", t.surface);
-    put("@INPUT@", t.input);
-    put("@HOVER@", t.hover);
-    put("@BORDER@", t.border);
-    put("@TEXT@", t.text);
-    put("@TEXT_DIM@", t.textDim);
-    put("@ACCENT@", t.accent);
-    put("@ACCENT_HI@", t.accentHi);
-    put("@DANGER@", t.danger);
-    put("@WARN@", t.warn);
-    put("@OK@", t.ok);
+    for (const ColorSlot& slot : kColorSlots) {
+        put(slot.placeholder, t.*slot.member);
+    }
 
     // ...and the shades between them.
-    put("@BG_RAISED@", mix(t.bg, t.surface, 0.45));
-    put("@SURFACE_ACCENT@", mix(t.surface, t.accent, 0.18));
-    put("@SEP@", mix(t.bg, t.border, 0.45));
-    put("@INPUT_RAISED@", mix(t.input, t.hover, 0.45));
-    put("@BORDER_SOFT@", mix(t.surface, t.border, 0.72));
-    put("@BORDER_STRONG@", mix(t.border, t.hover, 0.55));
-    put("@BORDER_HOVER@", mix(t.border, t.accent, 0.28));
-    put("@GROOVE@", mix(t.border, t.textDim, 0.28));
-    put("@HANDLE@", mix(t.border, t.textDim, 0.52));
-    put("@TEXT_DISABLED@", mix(t.textDim, t.bg, 0.42));
-    put("@TEXT_HINT@", mix(t.textDim, t.bg, 0.22));
-    put("@TEXT_SOFT@", mix(t.text, t.textDim, 0.45));
-    // Pushed AWAY from the background, not toward white. A light theme has dark
-    // text, so "brighter" there means darker — mixing toward white gave #bfc0c2
-    // page titles on a white surface, which is the most prominent text in the app
-    // rendered as the least readable.
-    put("@TEXT_BRIGHT@", mix(t.text, contrast, 0.25));
-    put("@TEXT_STRONG@", mix(t.text, contrast, 0.72));
-    put("@ACCENT_MID@", mix(t.accent, t.accentHi, 0.5));
-    put("@OK_HI@", mix(t.ok, contrast, 0.22));
+    put("@BG_RAISED@", mixColors(t.bg, t.surface, 0.45));
+    put("@SURFACE_ACCENT@", mixColors(t.surface, t.accent, 0.18));
+    put("@SEP@", mixColors(t.bg, t.border, 0.45));
+    put("@INPUT_RAISED@", mixColors(t.input, t.hover, 0.45));
+    put("@BORDER_SOFT@", mixColors(t.surface, t.border, 0.72));
+    put("@BORDER_STRONG@", mixColors(t.border, t.hover, 0.55));
+    put("@BORDER_HOVER@", mixColors(t.border, t.accent, 0.28));
+    put("@GROOVE@", mixColors(t.border, t.textDim, 0.28));
+    put("@HANDLE@", mixColors(t.border, t.textDim, 0.52));
+    put("@TEXT_DISABLED@", mixColors(t.textDim, t.bg, 0.42));
+    put("@TEXT_HINT@", mixColors(t.textDim, t.bg, 0.22));
+    put("@TEXT_SOFT@", mixColors(t.text, t.textDim, 0.45));
+    // Pushed away from the background, not toward white: on a light theme "brighter"
+    // means darker.
+    put("@TEXT_BRIGHT@", mixColors(t.text, contrast, 0.25));
+    put("@TEXT_STRONG@", mixColors(t.text, contrast, 0.72));
+    put("@ACCENT_MID@", mixColors(t.accent, t.accentHi, 0.5));
+    put("@OK_HI@", mixColors(t.ok, contrast, 0.22));
 
-    put("@PANEL@", mix(t.surface, t.hover, 0.55));
+    put("@PANEL@", mixColors(t.surface, t.hover, 0.55));
     put("@ON_ACCENT@", ink(t.accent));
     put("@ON_DANGER@", ink(t.danger));
     put("@ON_WARN@", ink(t.warn));
 
-    // One faint tint per page, so the eye can find a page by colour before
-    // reading the word. The hues are the pages' identity; saturation and
-    // lightness come from the theme, so the row follows it instead of staying
-    // put — and generating the rules here is what lets that happen at all.
+    // One faint tint per page: the hues are the pages' identity, saturation and
+    // lightness follow the theme.
     static constexpr int kNavHues[] = {240, 142, 268, 320, 38, 187, 219};
     QString tints;
     for (int i = 0; i < 7; ++i) {
@@ -376,20 +362,10 @@ ThemeTokens g_current;
 
 // --- Theme files -------------------------------------------------------------
 
-[[nodiscard]] QString colorKey(const QColor& c) { return c.name(QColor::HexRgb); }
-
-void writeColor(QJsonObject& o, const char* key, const QColor& c) {
-    o[QString::fromLatin1(key)] = colorKey(c);
-}
-
-// Reads one colour, leaving the fallback in place if the value is missing or not
-// a colour Qt recognises. A theme with one bad line loses that line, not the
-// whole file.
+// One colour, keeping the fallback when missing or invalid: a bad line loses only itself.
 void readColor(const QJsonObject& o, const char* key, QColor& into) {
     const QJsonValue v = o.value(QString::fromLatin1(key));
-    if (!v.isString()) {
-        return;
-    }
+    if (!v.isString()) return;
     const QColor parsed(v.toString());
     if (parsed.isValid()) {
         into = parsed;
@@ -409,11 +385,8 @@ QString resolvedStyleSheet(const ThemeTokens& theme) {
         sheet.replace(it.key(), it.value());
     }
 
-    // The combo box arrow is a file, and where that file lives depends on how
-    // Sonero was installed — an AppImage mount, a system prefix, or the source
-    // tree. resourcePath() knows all three. If it is missing, the placeholders
-    // are dropped rather than left in the sheet: a url() pointing at "@ARROW@"
-    // makes Qt log a warning for every combo box on every repaint.
+    // The combo arrow is a file whose location depends on the install. If missing, the
+    // rule is dropped, since a url("@ARROW@") makes Qt warn on every repaint.
     const QString arrow = setup::resourcePath(QStringLiteral("icons/combo-arrow.png"));
     const QString arrowOff =
         setup::resourcePath(QStringLiteral("icons/combo-arrow-disabled.png"));
@@ -430,11 +403,9 @@ void applyTheme(QApplication& app, const ThemeTokens& theme) {
     g_current = theme;
     app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
 
-    // The palette matters for what the style sheet does not reach: native menus,
-    // the tray's own context menu, and whatever a Qt widget draws from the
-    // palette rather than from a stylable property.
+    // The palette covers what the style sheet cannot reach (native and tray menus).
     const ThemeTokens& t = g_current;
-    const QColor disabled = mix(t.textDim, t.bg, 0.42);
+    const QColor disabled = mixColors(t.textDim, t.bg, 0.42);
     QPalette p;
     p.setColor(QPalette::Window, t.bg);
     p.setColor(QPalette::WindowText, t.text);
@@ -443,15 +414,13 @@ void applyTheme(QApplication& app, const ThemeTokens& theme) {
     p.setColor(QPalette::Text, t.text);
     p.setColor(QPalette::Button, t.input);
     p.setColor(QPalette::ButtonText, t.text);
-    p.setColor(QPalette::BrightText, mix(t.text, QColor(0xff, 0xff, 0xff), 0.72));
+    p.setColor(QPalette::BrightText, mixColors(t.text, QColor(0xff, 0xff, 0xff), 0.72));
     p.setColor(QPalette::Highlight, t.accent);
-    p.setColor(QPalette::HighlightedText, mix(t.text, QColor(0xff, 0xff, 0xff), 0.72));
+    p.setColor(QPalette::HighlightedText, mixColors(t.text, QColor(0xff, 0xff, 0xff), 0.72));
     p.setColor(QPalette::ToolTipBase, t.surface);
     p.setColor(QPalette::ToolTipText, t.text);
     p.setColor(QPalette::PlaceholderText, t.textDim);
-    // Rich-text links take their colour from the palette, which is why the
-    // anchors in this app carry no inline style of their own — an inline
-    // colour would be the one thing a theme could not reach.
+    // Links take their colour from the palette, so anchors carry no inline style.
     p.setColor(QPalette::Link, t.accentHi);
     p.setColor(QPalette::LinkVisited, t.accent);
     p.setColor(QPalette::Disabled, QPalette::Text, disabled);
@@ -479,10 +448,14 @@ void refreshTheme(QApplication& app) {
     }
 }
 
+QColor mixColors(const QColor& a, const QColor& b, double t) {
+    const double u = 1.0 - t;
+    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
+                            a.blueF() * u + b.blueF() * t);
+}
+
 void setState(QWidget* widget, const char* state) {
-    if (widget == nullptr) {
-        return;
-    }
+    if (widget == nullptr) return;
     widget->setProperty("sonerostate",
                         state != nullptr ? QVariant(QString::fromLatin1(state))
                                          : QVariant());
@@ -495,6 +468,16 @@ void setState(QWidget* widget, const char* state) {
 QString themesDirectory() {
     return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
            QStringLiteral("/themes");
+}
+
+QString newThemePath(const QString& baseName) {
+    const QString dir = themesDirectory();
+    QDir().mkpath(dir);
+    QString path = dir + QLatin1Char('/') + baseName + QStringLiteral(".json");
+    for (int n = 2; QFile::exists(path); ++n) {
+        path = dir + QLatin1Char('/') + QStringLiteral("%1 (%2).json").arg(baseName).arg(n);
+    }
+    return path;
 }
 
 bool readTheme(const QString& path, ThemeTokens& out, QString* error) {
@@ -519,24 +502,11 @@ bool readTheme(const QString& path, ThemeTokens& out, QString* error) {
     // Built on top of the built-in theme rather than on zeroes, so a file that
     // names three colours gets the other ten from the baseline instead of black.
     ThemeTokens t = builtInTheme();
-    if (o.value(QStringLiteral("name")).isString()) {
-        t.name = o.value(QStringLiteral("name")).toString();
-    } else {
-        t.name = QFileInfo(path).completeBaseName();
+    const QJsonValue name = o.value(QStringLiteral("name"));
+    t.name = name.isString() ? name.toString() : QFileInfo(path).completeBaseName();
+    for (const ColorSlot& slot : kColorSlots) {
+        readColor(o, slot.key, t.*slot.member);
     }
-    readColor(o, "bg", t.bg);
-    readColor(o, "sidebar", t.sidebar);
-    readColor(o, "surface", t.surface);
-    readColor(o, "input", t.input);
-    readColor(o, "hover", t.hover);
-    readColor(o, "border", t.border);
-    readColor(o, "text", t.text);
-    readColor(o, "textDim", t.textDim);
-    readColor(o, "accent", t.accent);
-    readColor(o, "accentHi", t.accentHi);
-    readColor(o, "danger", t.danger);
-    readColor(o, "warn", t.warn);
-    readColor(o, "ok", t.ok);
     if (o.value(QStringLiteral("font")).isString()) {
         t.fontFamily = o.value(QStringLiteral("font")).toString();
     }
@@ -551,19 +521,9 @@ bool readTheme(const QString& path, ThemeTokens& out, QString* error) {
 bool writeTheme(const ThemeTokens& theme, const QString& path, QString* error) {
     QJsonObject o;
     o[QStringLiteral("name")] = theme.name;
-    writeColor(o, "bg", theme.bg);
-    writeColor(o, "sidebar", theme.sidebar);
-    writeColor(o, "surface", theme.surface);
-    writeColor(o, "input", theme.input);
-    writeColor(o, "hover", theme.hover);
-    writeColor(o, "border", theme.border);
-    writeColor(o, "text", theme.text);
-    writeColor(o, "textDim", theme.textDim);
-    writeColor(o, "accent", theme.accent);
-    writeColor(o, "accentHi", theme.accentHi);
-    writeColor(o, "danger", theme.danger);
-    writeColor(o, "warn", theme.warn);
-    writeColor(o, "ok", theme.ok);
+    for (const ColorSlot& slot : kColorSlots) {
+        o[QString::fromLatin1(slot.key)] = (theme.*slot.member).name(QColor::HexRgb);
+    }
     o[QStringLiteral("font")] = theme.fontFamily;
     o[QStringLiteral("qss")] = theme.extraQss;
 
@@ -583,26 +543,19 @@ QVector<ThemeTokens> availableThemes() {
     QVector<ThemeTokens> themes;
     themes.push_back(builtInTheme());  // always first, always present
 
-    // The user's own themes, then the examples that ship with the install — so a
-    // fresh install already offers a choice, and a user theme of the same name
-    // shadows the example rather than the other way round.
+    // The user's themes, then the shipped examples; a user theme shadows an example of
+    // the same name.
     QStringList seen;
     for (const QString& where : {themesDirectory(),
                                  setup::resourcePath(QStringLiteral("themes"))}) {
-        if (where.isEmpty()) {
-            continue;
-        }
+        if (where.isEmpty()) continue;
         QDir dir(where);
         const QStringList files =
             dir.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
         for (const QString& name : files) {
-            if (seen.contains(name)) {
-                continue;
-            }
+            if (seen.contains(name)) continue;
             ThemeTokens t;
-            // A broken file is skipped, not reported: this is a list for a combo
-            // box, and failing it would hide every working theme behind one bad
-            // one.
+            // A broken file is skipped, not reported, so it cannot hide the working ones.
             if (readTheme(dir.absoluteFilePath(name), t)) {
                 seen.push_back(name);
                 themes.push_back(t);
@@ -614,22 +567,10 @@ QVector<ThemeTokens> availableThemes() {
 
 QString importTheme(const QString& sourcePath, QString* error) {
     ThemeTokens t;
-    if (!readTheme(sourcePath, t, error)) {
-        return {};
-    }
-    const QString dir = themesDirectory();
-    QDir().mkpath(dir);
-
+    if (!readTheme(sourcePath, t, error)) return {};
     // Keep the source's name, but never overwrite a theme already there.
-    const QString base = QFileInfo(sourcePath).completeBaseName();
-    QString target = dir + QLatin1Char('/') + base + QStringLiteral(".json");
-    for (int n = 2; QFile::exists(target); ++n) {
-        target = dir + QLatin1Char('/') + base + QStringLiteral(" (%1).json").arg(n);
-    }
-    if (!writeTheme(t, target, error)) {
-        return {};
-    }
-    return target;
+    const QString target = newThemePath(QFileInfo(sourcePath).completeBaseName());
+    return writeTheme(t, target, error) ? target : QString();
 }
 
 }  // namespace sonar::ui

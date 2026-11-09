@@ -13,13 +13,8 @@ class SettingsStore;
 
 namespace sonar::ui {
 
-// Profiles: the page for things that describe how Sonero looks and behaves
-// rather than what it does to audio. Today that is the theme.
-//
-// Picking a theme applies it immediately and remembers it. The built-in theme is
-// always the first entry and cannot be removed, so there is always a way back
-// from a theme that turned out to be unreadable — it is compiled into the
-// binary, not loaded from disk.
+// Profiles: how Sonero looks — today, the theme. Applied immediately and remembered;
+// the built-in theme (compiled in) is always first, so there is always a way back.
 class ProfilesPage : public QWidget {
     Q_OBJECT
 
@@ -27,9 +22,7 @@ public:
     explicit ProfilesPage(config::SettingsStore* settings = nullptr,
                           QWidget* parent = nullptr);
 
-    // Reads the remembered theme and applies it. Called once at startup, before
-    // the window is shown, so a custom theme is never preceded by a flash of the
-    // built-in one.
+    // Apply the remembered theme, at startup, before the window shows.
     static void applySavedTheme(config::SettingsStore* settings);
 
 private:

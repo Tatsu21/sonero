@@ -16,9 +16,7 @@ struct AppStream {
     std::optional<ChannelId> channel = ChannelId::System;   // channel it has been routed to, if any
 };
 
-// Routes application audio streams onto the virtual channel sinks. Implemented
-// by the PipeWire backend; kept separate from IAudioBackend so the UI depends
-// only on the routing capability it needs.
+// Routes application streams onto the virtual channel sinks.
 class IAppRouter {
 public:
     virtual ~IAppRouter() = default;

@@ -80,9 +80,7 @@ std::string OutputFormatManager::renderConfig(const OutputFormat& fmt) const {
 
 std::optional<OutputFormat> OutputFormatManager::current() const {
     std::ifstream in(configPath());
-    if (!in) {
-        return std::nullopt;
-    }
+    if (!in) return std::nullopt;
     const std::string text((std::istreambuf_iterator<char>(in)),
                            std::istreambuf_iterator<char>());
 
@@ -96,9 +94,7 @@ std::optional<OutputFormat> OutputFormatManager::current() const {
             fmt.rateHz = std::atoi(text.c_str() + eq + 1);
         }
     }
-    if (fmt.rateHz <= 0) {
-        return std::nullopt;
-    }
+    if (fmt.rateHz <= 0) return std::nullopt;
     return fmt;
 }
 
@@ -120,9 +116,7 @@ bool OutputFormatManager::apply(const OutputFormat& fmt) {
         }
         out << renderConfig(fmt);
     }
-    // Deliberately no WirePlumber restart: a global restart drops Bluetooth links.
-    // The drop-in is picked up when WirePlumber next loads its config (next login
-    // or a manual `systemctl --user restart wireplumber`).
+    // No WirePlumber restart (it drops Bluetooth): the drop-in applies at its next load.
     log::info("Device format: pinned {} bit / {} Hz via {}", fmt.bitDepth, fmt.rateHz, path);
     return true;
 }

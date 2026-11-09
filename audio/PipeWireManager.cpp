@@ -31,7 +31,19 @@ constexpr int kRoundtripTimeoutSeconds = 3;
 // Node name of the stream mix; its monitor is what OBS captures.
 constexpr const char* kStreamMixNode = "sonero_stream";
 
+// Holds the PipeWire thread loop for the scope it lives in.
+class LoopLock {
+public:
+    explicit LoopLock(pw_thread_loop* loop) : loop_(loop) { pw_thread_loop_lock(loop_); }
+    ~LoopLock() { pw_thread_loop_unlock(loop_); }
+    LoopLock(const LoopLock&) = delete;
+    LoopLock& operator=(const LoopLock&) = delete;
 
+private:
+    pw_thread_loop* loop_;
+};
+
+void destroyProxy(void* proxy) { pw_proxy_destroy(static_cast<pw_proxy*>(proxy)); }
 
 std::uint64_t serialOf(const spa_dict* props) {
     const char* s = spa_dict_lookup(props, "object.serial");
@@ -45,6 +57,12 @@ std::string displayNameOf(const spa_dict* props, std::uint32_t id) {
     return n != nullptr ? std::string(n) : ("Stream " + std::to_string(id));
 }
 
+// node.description, or the node name when a device has none.
+std::string descriptionOf(const spa_dict* props, const std::string& nodeName) {
+    const char* desc = spa_dict_lookup(props, "node.description");
+    return (desc != nullptr && desc[0] != '\0') ? desc : nodeName;
+}
+
 bool startsWith(std::string_view s, std::string_view prefix) {
     return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
@@ -54,9 +72,8 @@ bool endsWith(std::string_view s, std::string_view suffix) {
            s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// Infer the hardware class of an output from its node.name. PipeWire names sinks
-// like alsa_output.usb-..., alsa_output.pci-..._hdmi..., bluez_output.XX_..., so
-// the name alone is enough to badge the device in the UI.
+// The hardware class of an output, from its node.name (alsa_output.usb-…,
+// …hdmi…, bluez_output.…).
 DeviceType classifyDeviceType(const std::string& nodeName) {
     const auto has = [&](std::string_view needle) {
         return nodeName.find(needle) != std::string::npos;
@@ -71,9 +88,7 @@ DeviceType classifyDeviceType(const std::string& nodeName) {
     return DeviceType::Other;
 }
 
-// Expose the stream mix as a real capture device, so it appears in a recorder's
-// input list next to the microphone rather than hiding as a sink monitor — which
-// is where OBS's "Audio Input Capture" looks.
+// The stream mix as a real capture device, where OBS's "Audio Input Capture" looks.
 std::string streamSourceArgs(const std::string& mixNode, const std::string& sourceNode) {
     return fmt::format(
         R"({{ capture.props = {{ node.name = "{1}.capture" target.object = "{0}" )"
@@ -83,9 +98,8 @@ std::string streamSourceArgs(const std::string& mixNode, const std::string& sour
         mixNode, sourceNode);
 }
 
-// One send per channel: tap the channel's monitor and feed the stream mix, with a
-// level of its own. A loopback rather than a second filter-chain output, because
-// the send must be attenuated independently of what the user hears.
+// One send per channel into the stream mix, with its own level, independent of
+// what the user hears.
 std::string streamSendArgs(const std::string& channelNode, const std::string& mixNode) {
     return fmt::format(
         R"({{ capture.props = {{ node.name = "{0}.stream" target.object = "{0}" )"
@@ -95,18 +109,10 @@ std::string streamSendArgs(const std::string& channelNode, const std::string& mi
         channelNode, mixNode);
 }
 
-// The echo canceller in front of the microphone: PipeWire's own module, running
-// WebRTC's canceller. Monitor mode, because the reference is whatever the output
-// already plays — taken from its monitor — rather than audio that has to be sent
-// through a sink of the module's own.
-//
-// Mono at 48 kHz, which is what the chain runs at anyway. WebRTC's own noise
-// suppression, gain control and high-pass are off: the chain has all three, and
-// an automatic gain in front of a compressor is two hands on one fader.
-//
-// Passive on both captures, like the chain's own: an unused microphone must stay
-// free to suspend. Not dont-fallback, though — that is decided here, and a
-// reference that falls back to another output is still better than none.
+// The echo canceller in front of the microphone: PipeWire's module running WebRTC,
+// in monitor mode (the reference is the output's monitor). Mono 48 kHz; WebRTC's own
+// NS / AGC / high-pass are off because the chain has all three. Passive captures so
+// an unused mic can suspend; the reference may fall back to another output.
 constexpr const char* kEchoSourceNode = "sonero_echo_cancel";
 
 std::string echoCancelArgs(const std::string& mic, const std::string& reference) {
@@ -127,9 +133,7 @@ std::string echoCancelArgs(const std::string& mic, const std::string& reference)
 
 // Extract the sink name from a default metadata value like {"name":"foo"}.
 std::string parseSinkName(const char* json) {
-    if (json == nullptr) {
-        return {};
-    }
+    if (json == nullptr) return {};
     const std::string s(json);
     std::size_t p = s.find("\"name\"");
     if (p == std::string::npos) return {};
@@ -138,8 +142,7 @@ std::string parseSinkName(const char* json) {
     p = s.find('"', p);
     if (p == std::string::npos) return {};
     const std::size_t q = s.find('"', p + 1);
-    if (q == std::string::npos) return {};
-    return s.substr(p + 1, q - p - 1);
+    return q == std::string::npos ? std::string() : s.substr(p + 1, q - p - 1);
 }
 
 }  // namespace
@@ -159,22 +162,27 @@ PipeWireManager::~PipeWireManager() {
 }
 
 bool PipeWireManager::initialize() {
-    if (state_ != BackendState::Uninitialized) {
-        return isAvailable();
-    }
+    if (state_ != BackendState::Uninitialized) return isAvailable();
+
+    // Every failure below ends the same way. teardown() stops the loop thread,
+    // so the loop must already be unlocked by then.
+    const auto fail = [this](bool locked) {
+        if (locked) {
+            pw_thread_loop_unlock(loop_);
+        }
+        teardown();
+        state_ = BackendState::Unavailable;
+        return false;
+    };
 
     loop_ = pw_thread_loop_new("sonero", nullptr);
     if (loop_ == nullptr) {
         log::error("PipeWire: could not create the thread loop");
-        state_ = BackendState::Unavailable;
-        return false;
+        return fail(false);
     }
-
     if (pw_thread_loop_start(loop_) < 0) {
         log::error("PipeWire: could not start the thread loop");
-        teardown();
-        state_ = BackendState::Unavailable;
-        return false;
+        return fail(false);
     }
 
     pw_thread_loop_lock(loop_);
@@ -182,19 +190,12 @@ bool PipeWireManager::initialize() {
     context_ = pw_context_new(pw_thread_loop_get_loop(loop_), nullptr, 0);
     if (context_ == nullptr) {
         log::error("PipeWire: could not create the context");
-        pw_thread_loop_unlock(loop_);
-        teardown();
-        state_ = BackendState::Unavailable;
-        return false;
+        return fail(true);
     }
-
     core_ = pw_context_connect(context_, nullptr, 0);
     if (core_ == nullptr) {
         log::warn("PipeWire: no server available (is the daemon running?)");
-        pw_thread_loop_unlock(loop_);
-        teardown();
-        state_ = BackendState::Unavailable;
-        return false;
+        return fail(true);
     }
 
     static const pw_core_events kCoreEvents = {
@@ -214,9 +215,7 @@ bool PipeWireManager::initialize() {
     if (!ok) {
         log::warn("PipeWire: handshake failed ({})",
                   errorMessage_.empty() ? "timeout" : errorMessage_);
-        teardown();
-        state_ = BackendState::Unavailable;
-        return false;
+        return fail(false);
     }
 
     state_ = BackendState::Available;
@@ -239,9 +238,8 @@ void PipeWireManager::setupGraph() {
     }
     pw_registry_add_listener(registry_, &registryListener_, &kRegistryEvents, this);
 
-    // Enumerate existing objects first: this binds the "default" metadata and
-    // captures the current (real) default sink, so createVirtualSinks() below
-    // can keep the system default off our own sinks.
+    // Enumerate first: binds the "default" metadata and learns the real default sink
+    // before our sinks exist.
     doRoundtrip();
     doRoundtrip();
     createVirtualSinks();
@@ -255,9 +253,8 @@ void PipeWireManager::createVirtualSinks() {
         // The Microphone channel is a virtual SOURCE (capture the real mic → the
         // voice chain → Audio/Source); every other channel is an Audio/Sink.
         if (id == ChannelId::Microphone) {
-            // Started unattached, then attached through the same path every
-            // later change takes — which is also what puts the echo canceller in
-            // front of it when that is on.
+            // Started unattached, then attached the way every later change is (which also
+            // inserts the echo canceller when on).
             if (mic_.start(core_, node, desc, std::string())) {
                 applyMicRouteLocked();
             } else {
@@ -266,11 +263,7 @@ void PipeWireManager::createVirtualSinks() {
             continue;
         }
 
-        // Every output channel is a pair of native nodes with dsp::ChannelChain
-        // between them — equalizer, harmonic bass, limiter and fader, all ours.
-        // This used to be module-filter-chain plus a LADSPA plugin dlopened into
-        // it plus the sink's own channelVolumes; see audio/ChannelProcessor.h for
-        // why one chain in our own code replaced all three.
+        // Every output channel is a ChannelProcessor: a node pair running dsp::ChannelChain.
         if (!processor_[channelIndex(id)].start(core_, node, desc)) {
             log::warn("PipeWire: channel '{}' could not be created", node);
         }
@@ -279,9 +272,8 @@ void PipeWireManager::createVirtualSinks() {
     log::info("PipeWire: {} output channels up, each with its own DSP chain",
               kAllChannels.size() - 1);
 
-    // The stream mix and its per-channel sends. "adapter" is a factory the daemon
-    // already provides, not a module we can load with arguments — creating the node
-    // through it is what `pw-cli create-node adapter` does.
+    // The stream mix and its per-channel sends, through the daemon's "adapter" factory
+    // (what `pw-cli create-node adapter` does).
     pw_properties* mixProps = pw_properties_new(
         "factory.name", "support.null-audio-sink",
         PW_KEY_NODE_NAME, kStreamMixNode,
@@ -322,16 +314,12 @@ void PipeWireManager::createVirtualSinks() {
         log::warn("PipeWire: could not create the stream mix");
     }
 
-    // modules_ is the stream mix and its per-channel sends now — the channel
-    // sinks are native nodes and are not loaded as modules at all. The old
-    // message called this number the channel sink count, which it no longer is.
+    // modules_ is now the stream mix's loopbacks only; channel sinks are native nodes.
     log::info("PipeWire: stream mix up ({} loopback modules)", modules_.size());
 }
 
 void PipeWireManager::shutdown() {
-    if (state_ == BackendState::Uninitialized && loop_ == nullptr) {
-        return;
-    }
+    if (state_ == BackendState::Uninitialized && loop_ == nullptr) return;
     teardown();
     info_ = {};
     errorMessage_.clear();
@@ -360,11 +348,8 @@ void PipeWireManager::teardown() noexcept {
         pw_thread_loop_stop(loop_);  // join the thread; no callbacks run after this
     }
 
-    // The microphone's streams go first, and here rather than in MicProcessor's
-    // own destructor: members are destroyed after this body has run, by which
-    // point the core and the loop they belong to are already gone, and
-    // pw_stream_destroy on a freed core is a crash — which is exactly how this
-    // was found, in PipeWireManagerTest.
+    // Before members are destroyed: by then the core is gone, and pw_stream_destroy on
+    // a freed core crashes.
     mic_.stop();
 
     // ...and the output channels' node pairs, for the same reason.
@@ -422,10 +407,10 @@ std::vector<AppStream> PipeWireManager::applications() const {
     std::lock_guard<std::mutex> lock(stateMutex_);
     std::vector<AppStream> out;
     out.reserve(apps_.size());
-    for (const auto& [id, info] : apps_) {
+    for (const auto& [id, name] : apps_) {
         AppStream app;
         app.id = id;
-        app.name = info.name;
+        app.name = name;
         app.channel = ChannelId::System;  // default if not routed
         if (const auto it = assignments_.find(id); it != assignments_.end()) {
             app.channel = it->second;
@@ -456,9 +441,10 @@ bool PipeWireManager::assign(std::uint32_t appId, ChannelId channel) {
         return false;
     }
 
-    pw_thread_loop_lock(loop_);
-    pw_metadata_set_property(metadata_, appId, "target.object", nullptr, serial.c_str());
-    pw_thread_loop_unlock(loop_);
+    {
+        LoopLock lock(loop_);
+        pw_metadata_set_property(metadata_, appId, "target.object", nullptr, serial.c_str());
+    }
 
     bumpRevision();
     log::info("Router: routed app {} to channel {}", appId, channelName(channel));
@@ -468,52 +454,33 @@ bool PipeWireManager::assign(std::uint32_t appId, ChannelId channel) {
 // --- Registry handling -------------------------------------------------------
 
 void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dict* props) {
-    if (type == nullptr || props == nullptr) {
-        return;
-    }
+    if (type == nullptr || props == nullptr) return;
 
     if (std::strcmp(type, PW_TYPE_INTERFACE_Node) == 0) {
-        const char* mediaClass = spa_dict_lookup(props, "media.class");
-        if (mediaClass == nullptr) {
-            return;
-        }
+        const char* rawClass = spa_dict_lookup(props, "media.class");
+        if (rawClass == nullptr) return;
+        const std::string_view mediaClass = rawClass;
         const char* rawName = spa_dict_lookup(props, "node.name");
         const std::string nodeName = rawName != nullptr ? rawName : "";
 
-        if ((std::strcmp(mediaClass, "Audio/Sink") == 0 ||
-             std::strcmp(mediaClass, "Audio/Source") == 0) &&
+        if ((mediaClass == "Audio/Sink" || mediaClass == "Audio/Source") &&
             startsWith(nodeName, "sonero_")) {  // one of our virtual channel nodes
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 sinkSerials_[nodeName] = serialOf(props);
             }
             if (const auto channel = channelForNodeName(nodeName)) {
-                // The microphone, when MicProcessor owns it, is not a channel sink
-                // and must not be treated as one. Binding it would apply the
-                // channel's volume, mute and — worse — the filter-chain equalizer
-                // control ports ("<node>_eq0:Gain") to a plain pw_stream that has
-                // no such params. The audioadapter answers by enumerating its
-                // properties again, which produces another info event, which
-                // applies them again: a loop that spins our PipeWire thread loop
-                // forever, so we stop answering the daemon and every other client
-                // on the machine hangs with us.
-                //
-                // Nothing to bind: every channel's gain, mute, equalizer and
-                // metering lives in the node's own chain — MicChain for the
-                // microphone, dsp::ChannelChain for the outputs — rather than in
-                // node properties we would have to set from out here.
+                // Our channel nodes have no node params to bind: everything lives in their own
+                // chain. Binding them once spun the thread loop forever and hung every client.
                 return;
             }
-        } else if (std::strcmp(mediaClass, "Audio/Sink") == 0 && !nodeName.empty()) {
-            // A real hardware output — record name, friendly label, owning device,
-            // and inferred type so the Devices page can list it live and
-            // supportedFormats() can query it.
+        } else if (mediaClass == "Audio/Sink" && !nodeName.empty()) {
+            // A real hardware output, for the Devices page and supportedFormats().
             AudioDevice dev;
             dev.nodeId = id;
             dev.name = nodeName;
             dev.serial = serialOf(props);
-            const char* desc = spa_dict_lookup(props, "node.description");
-            dev.description = (desc != nullptr && desc[0] != '\0') ? desc : nodeName;
+            dev.description = descriptionOf(props, nodeName);
             if (const char* d = spa_dict_lookup(props, "device.id"); d != nullptr) {
                 dev.deviceId = static_cast<std::uint32_t>(std::strtoul(d, nullptr, 10));
             }
@@ -529,14 +496,12 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             micInputRevision_.fetch_add(1, std::memory_order_relaxed);
             applyAllRoutesLocked();  // a (re)connected device may reclaim its channels
             applyMicRouteLocked();   // ...and the echo canceller its speakers
-        } else if ((std::strcmp(mediaClass, "Audio/Source") == 0 ||
-                    std::strcmp(mediaClass, "Audio/Source/Virtual") == 0) &&
+        } else if ((mediaClass == "Audio/Source" || mediaClass == "Audio/Source/Virtual") &&
                    !nodeName.empty() && !startsWith(nodeName, "sonero_")) {
             // A real input, or someone else's filter in front of one.
             MicInputDevice input;
             input.name = nodeName;
-            const char* desc = spa_dict_lookup(props, "node.description");
-            input.description = (desc != nullptr && desc[0] != '\0') ? desc : nodeName;
+            input.description = descriptionOf(props, nodeName);
             input.type = classifyDeviceType(nodeName);
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
@@ -544,17 +509,15 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             }
             micInputRevision_.fetch_add(1, std::memory_order_relaxed);
             applyMicRouteLocked();  // the chosen device may just have come back
-        } else if (std::strcmp(mediaClass, "Stream/Input/Audio") == 0 &&
+        } else if (mediaClass == "Stream/Input/Audio" &&
                    startsWith(nodeName, "sonero_") && endsWith(nodeName, ".stream")) {
-            // The capture side of a channel's stream send. Remember its id so the
-            // send level can be set later; the level itself is applied by binding
-            // briefly, exactly as device volumes are.
+            // The capture side of a channel's stream send; its level is set by binding it.
             const std::string base = nodeName.substr(0, nodeName.size() - 7);
             if (const auto ch = channelForNodeName(base)) {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 streamSendNode_[static_cast<int>(*ch)] = id;
             }
-        } else if (std::strcmp(mediaClass, "Stream/Output/Audio") == 0) {
+        } else if (mediaClass == "Stream/Output/Audio") {
             if (startsWith(nodeName, "sonero_")) {
                 // Our channel output streams (sonero_<channel>.out): track them so
                 // each channel can be retargeted to a chosen device.
@@ -570,10 +533,9 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
                 }
                 return;  // never treat our own streams as apps
             }
-            AppInfo info{displayNameOf(props, id), serialOf(props)};
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
-                apps_[id] = std::move(info);
+                apps_[id] = displayNameOf(props, id);
             }
             bumpRevision();
         }
@@ -652,22 +614,14 @@ void PipeWireManager::onMetaProperty(std::uint32_t subject, const char* key,
     }
 
     const bool configured = std::strcmp(key, "default.configured.audio.sink") == 0;
-    if (!configured && std::strcmp(key, "default.audio.sink") != 0) {
-        return;
-    }
+    if (!configured && std::strcmp(key, "default.audio.sink") != 0) return;
 
     const std::string name = parseSinkName(value);
-    if (name.empty()) {
-        return;
-    }
+    if (name.empty()) return;
 
     if (startsWith(name, "sonero_")) {
-        // A virtual sink was made default; put the choice back on a real one.
-        // The configured key, not default.audio.sink: that one is the session
-        // manager's answer, recomputed from the configured one, so writing it
-        // changes nothing for long — while a configured sonero_* stays saved and
-        // comes back at every login, where at worst it resolves to no output at
-        // all and the desktop shows itself muted.
+        // A virtual sink was made default: restore the configured default to a real one
+        // (a saved sonero_* would return at every login).
         if (metadata_ != nullptr) {
             if (!realDefaultSink_.empty()) {
                 const std::string json = "{ \"name\": \"" + realDefaultSink_ + "\" }";
@@ -699,9 +653,7 @@ void PipeWireManager::onMetaProperty(std::uint32_t subject, const char* key,
 
 std::optional<ChannelId> PipeWireManager::channelForNodeName(std::string_view nodeName) {
     for (const ChannelId id : kAllChannels) {
-        if (nodeNameFor(id) == nodeName) {
-            return id;
-        }
+        if (nodeNameFor(id) == nodeName) return id;
     }
     return std::nullopt;
 }
@@ -716,9 +668,7 @@ void PipeWireManager::applyEqualizer(ChannelId id, const dsp::EqSettings& settin
         }
         return;
     }
-    // No clamping, no headroom arithmetic and no property round trip here:
-    // dsp::ChannelChain does all three, which is also what makes them testable
-    // without a running graph.
+    // Clamping and headroom are dsp::ChannelChain's job (and tested there).
     processor_[channelIndex(id)].setEqualizer(settings);
 }
 
@@ -755,14 +705,10 @@ void collectRates(const spa_pod* val, std::set<int>& out) {
         if (v > 0) out.insert(v);
         return;
     }
-    if (!spa_pod_is_choice(val)) {
-        return;
-    }
+    if (!spa_pod_is_choice(val)) return;
     const std::uint32_t n = SPA_POD_CHOICE_N_VALUES(val);
     const auto* vals = static_cast<const std::int32_t*>(SPA_POD_CHOICE_VALUES(val));
-    if (n == 0 || vals == nullptr) {
-        return;
-    }
+    if (n == 0 || vals == nullptr) return;
     if (SPA_POD_CHOICE_TYPE(val) == SPA_CHOICE_Range && n >= 3) {
         const int lo = vals[1];  // [default, min, max]
         const int hi = vals[2];
@@ -787,9 +733,7 @@ void collectDepths(const spa_pod* val, std::set<int>& out) {
         add(v);
         return;
     }
-    if (!spa_pod_is_choice(val)) {
-        return;
-    }
+    if (!spa_pod_is_choice(val)) return;
     const std::uint32_t n = SPA_POD_CHOICE_N_VALUES(val);
     const auto* vals = static_cast<const std::uint32_t*>(SPA_POD_CHOICE_VALUES(val));
     for (std::uint32_t i = 0; vals != nullptr && i < n; ++i) {
@@ -804,9 +748,7 @@ struct FormatCollector {
 
 void onEnumFormat(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*index*/,
                   std::uint32_t /*next*/, const spa_pod* param) {
-    if (param == nullptr || id != SPA_PARAM_EnumFormat) {
-        return;
-    }
+    if (param == nullptr || id != SPA_PARAM_EnumFormat) return;
     std::uint32_t mediaType = 0;
     std::uint32_t mediaSubtype = 0;
     if (spa_format_parse(param, &mediaType, &mediaSubtype) < 0 ||
@@ -826,49 +768,69 @@ void onEnumFormat(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*ind
 }
 }  // namespace
 
+// --- Bound-proxy helpers -------------------------------------------------------
+
+pw_proxy* PipeWireManager::bindLocked(std::uint32_t id, const char* type,
+                                      std::uint32_t version) {
+    return static_cast<pw_proxy*>(pw_registry_bind(registry_, id, type, version, 0));
+}
+
+void PipeWireManager::enumParamsLocked(pw_proxy* proxy, bool isDevice,
+                                       std::initializer_list<std::uint32_t> params,
+                                       ParamCallback onParam, void* data) {
+    // The events struct only has to outlive the listener, which is removed
+    // before this returns.
+    spa_hook hook{};
+    if (isDevice) {
+        pw_device_events events{};
+        events.version = PW_VERSION_DEVICE_EVENTS;
+        events.param = onParam;
+        auto* device = reinterpret_cast<pw_device*>(proxy);
+        pw_device_add_listener(device, &hook, &events, data);
+        for (const std::uint32_t param : params) {
+            pw_device_enum_params(device, 0, param, 0, UINT32_MAX, nullptr);
+        }
+        doRoundtrip();  // let the param events arrive, then the sync completes
+        doRoundtrip();
+    } else {
+        pw_node_events events{};
+        events.version = PW_VERSION_NODE_EVENTS;
+        events.param = onParam;
+        auto* node = reinterpret_cast<pw_node*>(proxy);
+        pw_node_add_listener(node, &hook, &events, data);
+        for (const std::uint32_t param : params) {
+            pw_node_enum_params(node, 0, param, 0, UINT32_MAX, nullptr);
+        }
+        doRoundtrip();
+        doRoundtrip();
+    }
+    spa_hook_remove(&hook);
+}
+
 DeviceFormats PipeWireManager::supportedFormats(const std::string& nameContains) {
     DeviceFormats out;
-    if (loop_ == nullptr || registry_ == nullptr) {
-        return out;
-    }
-
-    pw_thread_loop_lock(loop_);
-    std::uint32_t nodeId = 0;
-    {
-        std::lock_guard<std::mutex> lock(stateMutex_);
-        for (const auto& [id, dev] : devices_) {
-            if (dev.name.find(nameContains) != std::string::npos) {
-                nodeId = id;
-                break;
-            }
-        }
-    }
-    if (nodeId == 0) {
-        pw_thread_loop_unlock(loop_);
-        return out;
-    }
-
-    auto* node = static_cast<pw_node*>(pw_registry_bind(
-        registry_, nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0));
-    if (node == nullptr) {
-        pw_thread_loop_unlock(loop_);
-        return out;
-    }
+    if (loop_ == nullptr || registry_ == nullptr) return out;
 
     FormatCollector collector;
-    spa_hook hook{};
-    static const pw_node_events kEnumEvents = {
-        .version = PW_VERSION_NODE_EVENTS,
-        .param = &onEnumFormat,
-    };
-    pw_node_add_listener(node, &hook, &kEnumEvents, &collector);
-    pw_node_enum_params(node, 0, SPA_PARAM_EnumFormat, 0, UINT32_MAX, nullptr);
-    doRoundtrip();  // let the param events arrive, then the sync completes
-    doRoundtrip();
-
-    spa_hook_remove(&hook);
-    pw_proxy_destroy(reinterpret_cast<pw_proxy*>(node));
-    pw_thread_loop_unlock(loop_);
+    {
+        LoopLock loop(loop_);
+        std::uint32_t nodeId = 0;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            for (const auto& [id, dev] : devices_) {
+                if (dev.name.find(nameContains) != std::string::npos) {
+                    nodeId = id;
+                    break;
+                }
+            }
+        }
+        pw_proxy* node = nodeId != 0
+                             ? bindLocked(nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE)
+                             : nullptr;
+        if (node == nullptr) return out;
+        enumParamsLocked(node, false, {SPA_PARAM_EnumFormat}, &onEnumFormat, &collector);
+        destroyProxy(node);
+    }
 
     out.rates.assign(collector.rates.begin(), collector.rates.end());
     out.depths.assign(collector.depths.begin(), collector.depths.end());
@@ -886,8 +848,7 @@ std::vector<AudioDevice> PipeWireManager::outputDevices() {
         }
     }
     std::sort(out.begin(), out.end(), [](const AudioDevice& a, const AudioDevice& b) {
-        if (a.type != b.type) return a.type < b.type;
-        return a.description < b.description;
+        return a.type != b.type ? a.type < b.type : a.description < b.description;
     });
     return out;
 }
@@ -914,9 +875,7 @@ struct ProfileCollector {
 
 void onDeviceParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*index*/,
                    std::uint32_t /*next*/, const spa_pod* param) {
-    if (param == nullptr) {
-        return;
-    }
+    if (param == nullptr) return;
     auto* c = static_cast<ProfileCollector*>(data);
     std::int32_t idx = -1;
     const char* name = nullptr;
@@ -932,9 +891,7 @@ void onDeviceParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*in
         c->current = static_cast<std::uint32_t>(idx);
         return;
     }
-    if (id != SPA_PARAM_EnumProfile) {
-        return;
-    }
+    if (id != SPA_PARAM_EnumProfile) return;
     const std::string n = name != nullptr ? name : "";
     const std::string d = desc != nullptr ? desc : "";
     if (n.find("a2dp") == std::string::npos && d.find("A2DP") == std::string::npos) {
@@ -962,30 +919,16 @@ void onDeviceParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*in
 
 DeviceCodecs PipeWireManager::deviceCodecs(std::uint32_t deviceId) {
     DeviceCodecs out;
-    if (loop_ == nullptr || registry_ == nullptr || deviceId == 0) {
-        return out;
-    }
-    pw_thread_loop_lock(loop_);
-    auto* dev = static_cast<pw_device*>(pw_registry_bind(
-        registry_, deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE, 0));
-    if (dev == nullptr) {
-        pw_thread_loop_unlock(loop_);
-        return out;
-    }
+    if (loop_ == nullptr || registry_ == nullptr || deviceId == 0) return out;
     ProfileCollector collector;
-    spa_hook hook{};
-    static const pw_device_events kEvents = {
-        .version = PW_VERSION_DEVICE_EVENTS,
-        .param = &onDeviceParam,
-    };
-    pw_device_add_listener(dev, &hook, &kEvents, &collector);
-    pw_device_enum_params(dev, 0, SPA_PARAM_EnumProfile, 0, UINT32_MAX, nullptr);
-    pw_device_enum_params(dev, 0, SPA_PARAM_Profile, 0, UINT32_MAX, nullptr);
-    doRoundtrip();
-    doRoundtrip();
-    spa_hook_remove(&hook);
-    pw_proxy_destroy(reinterpret_cast<pw_proxy*>(dev));
-    pw_thread_loop_unlock(loop_);
+    {
+        LoopLock loop(loop_);
+        pw_proxy* dev = bindLocked(deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE);
+        if (dev == nullptr) return out;
+        enumParamsLocked(dev, true, {SPA_PARAM_EnumProfile, SPA_PARAM_Profile},
+                         &onDeviceParam, &collector);
+        destroyProxy(dev);
+    }
 
     out.codecs = std::move(collector.codecs);
     out.currentIndex = collector.current;
@@ -994,27 +937,20 @@ DeviceCodecs PipeWireManager::deviceCodecs(std::uint32_t deviceId) {
 }
 
 bool PipeWireManager::setDeviceProfile(std::uint32_t deviceId, std::uint32_t profileIndex) {
-    if (loop_ == nullptr || registry_ == nullptr || deviceId == 0) {
-        return false;
-    }
-    pw_thread_loop_lock(loop_);
-    auto* dev = static_cast<pw_device*>(pw_registry_bind(
-        registry_, deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE, 0));
-    bool ok = false;
-    if (dev != nullptr) {
-        std::uint8_t buffer[512];
-        spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-        auto* pod = static_cast<spa_pod*>(spa_pod_builder_add_object(
-            &b, SPA_TYPE_OBJECT_ParamProfile, SPA_PARAM_Profile, SPA_PARAM_PROFILE_index,
-            SPA_POD_Int(static_cast<std::int32_t>(profileIndex))));
-        pw_device_set_param(dev, SPA_PARAM_Profile, 0, pod);
-        doRoundtrip();
-        pw_proxy_destroy(reinterpret_cast<pw_proxy*>(dev));
-        ok = true;
-        log::info("BT codec: device {} -> profile index {}", deviceId, profileIndex);
-    }
-    pw_thread_loop_unlock(loop_);
-    return ok;
+    if (loop_ == nullptr || registry_ == nullptr || deviceId == 0) return false;
+    LoopLock loop(loop_);
+    pw_proxy* dev = bindLocked(deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE);
+    if (dev == nullptr) return false;
+    std::uint8_t buffer[512];
+    spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    auto* pod = static_cast<spa_pod*>(spa_pod_builder_add_object(
+        &b, SPA_TYPE_OBJECT_ParamProfile, SPA_PARAM_Profile, SPA_PARAM_PROFILE_index,
+        SPA_POD_Int(static_cast<std::int32_t>(profileIndex))));
+    pw_device_set_param(reinterpret_cast<pw_device*>(dev), SPA_PARAM_Profile, 0, pod);
+    doRoundtrip();
+    destroyProxy(dev);
+    log::info("BT codec: device {} -> profile index {}", deviceId, profileIndex);
+    return true;
 }
 
 namespace {
@@ -1024,9 +960,7 @@ struct VolumeCollector {
 
 void onNodeVolumeParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*index*/,
                        std::uint32_t /*next*/, const spa_pod* param) {
-    if (param == nullptr || id != SPA_PARAM_Props) {
-        return;
-    }
+    if (param == nullptr || id != SPA_PARAM_Props) return;
     auto* c = static_cast<VolumeCollector*>(data);
     const auto* obj = reinterpret_cast<const spa_pod_object*>(param);
     const spa_pod_prop* prop = spa_pod_object_find_prop(obj, nullptr, SPA_PROP_channelVolumes);
@@ -1048,11 +982,8 @@ void onNodeVolumeParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t 
 }  // namespace
 
 namespace {
-// The active output route of a device, for one of its sinks. A hardware sink's
-// volume lives here, not on the node: the node's own channelVolumes can be written,
-// but the device never applies them and the session manager never saves them —
-// which is how a slider here once looked right while the speakers sat at whatever
-// the route had been restored to at boot.
+// The active output route behind a hardware sink. Its volume lives on the route:
+// a node's own channelVolumes are neither applied by the device nor saved.
 struct RouteCollector {
     std::int32_t wantDevice = -1;
     bool found = false;
@@ -1063,9 +994,7 @@ struct RouteCollector {
 
 void onDeviceRouteParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t /*index*/,
                         std::uint32_t /*next*/, const spa_pod* param) {
-    if (param == nullptr || id != SPA_PARAM_Route) {
-        return;
-    }
+    if (param == nullptr || id != SPA_PARAM_Route) return;
     auto* c = static_cast<RouteCollector*>(data);
     std::int32_t index = 0;
     std::int32_t device = 0;
@@ -1078,19 +1007,13 @@ void onDeviceRouteParam(void* data, int /*seq*/, std::uint32_t id, std::uint32_t
                              SPA_PARAM_ROUTE_props, SPA_POD_OPT_Pod(&props)) < 0) {
         return;
     }
-    if (direction != SPA_DIRECTION_OUTPUT || device != c->wantDevice || props == nullptr) {
-        return;
-    }
+    if (direction != SPA_DIRECTION_OUTPUT || device != c->wantDevice || props == nullptr) return;
     const auto* obj = reinterpret_cast<const spa_pod_object*>(props);
     const spa_pod_prop* prop = spa_pod_object_find_prop(obj, nullptr, SPA_PROP_channelVolumes);
-    if (prop == nullptr) {
-        return;
-    }
+    if (prop == nullptr) return;
     std::uint32_t n = 0;
     const auto* vals = static_cast<const float*>(spa_pod_get_array(&prop->value, &n));
-    if (vals == nullptr || n == 0) {
-        return;
-    }
+    if (vals == nullptr || n == 0) return;
     c->found = true;
     c->index = index;
     c->device = device;
@@ -1112,86 +1035,49 @@ bool PipeWireManager::readRouteLocked(std::uint32_t nodeId, RouteState& out) {
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         const auto it = devices_.find(nodeId);
-        if (it == devices_.end()) {
-            return false;
-        }
+        if (it == devices_.end()) return false;
         deviceId = it->second.deviceId;
         routeDevice = it->second.routeDevice;
     }
-    if (deviceId == 0 || routeDevice < 0) {
-        return false;
-    }
-    auto* dev = static_cast<pw_device*>(pw_registry_bind(
-        registry_, deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE, 0));
-    if (dev == nullptr) {
-        return false;
-    }
+    if (deviceId == 0 || routeDevice < 0) return false;
+    pw_proxy* dev = bindLocked(deviceId, PW_TYPE_INTERFACE_Device, PW_VERSION_DEVICE);
+    if (dev == nullptr) return false;
     RouteCollector collector;
     collector.wantDevice = routeDevice;
-    spa_hook hook{};
-    static const pw_device_events kEvents = {
-        .version = PW_VERSION_DEVICE_EVENTS,
-        .param = &onDeviceRouteParam,
-    };
-    pw_device_add_listener(dev, &hook, &kEvents, &collector);
-    pw_device_enum_params(dev, 0, SPA_PARAM_Route, 0, UINT32_MAX, nullptr);
-    doRoundtrip();
-    doRoundtrip();
-    spa_hook_remove(&hook);
-    out.device = dev;
+    enumParamsLocked(dev, true, {SPA_PARAM_Route}, &onDeviceRouteParam, &collector);
+    if (!collector.found) {
+        destroyProxy(dev);
+        return false;
+    }
+    out.device = reinterpret_cast<pw_device*>(dev);
     out.index = collector.index;
     out.routeDevice = collector.device;
     out.volumes = std::move(collector.volumes);
-    if (!collector.found) {
-        pw_proxy_destroy(reinterpret_cast<pw_proxy*>(dev));
-        out.device = nullptr;
-        return false;
-    }
     return true;
 }
 
 float PipeWireManager::deviceVolume(std::uint32_t nodeId) {
-    if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) {
-        return 1.0f;
-    }
-    pw_thread_loop_lock(loop_);
+    if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) return 1.0f;
+    LoopLock loop(loop_);
     if (RouteState route; readRouteLocked(nodeId, route)) {
-        pw_proxy_destroy(reinterpret_cast<pw_proxy*>(route.device));
-        pw_thread_loop_unlock(loop_);
+        destroyProxy(route.device);
         return toCubic(route.volumes.front());
     }
-    auto* node = static_cast<pw_node*>(
-        pw_registry_bind(registry_, nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0));
-    if (node == nullptr) {
-        pw_thread_loop_unlock(loop_);
-        return 1.0f;
-    }
+    pw_proxy* node = bindLocked(nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE);
+    if (node == nullptr) return 1.0f;
     VolumeCollector collector;
-    spa_hook hook{};
-    static const pw_node_events kVolEvents = {
-        .version = PW_VERSION_NODE_EVENTS,
-        .param = &onNodeVolumeParam,
-    };
-    pw_node_add_listener(node, &hook, &kVolEvents, &collector);
-    pw_node_enum_params(node, 0, SPA_PARAM_Props, 0, UINT32_MAX, nullptr);
-    doRoundtrip();
-    doRoundtrip();
-    spa_hook_remove(&hook);
-    pw_proxy_destroy(reinterpret_cast<pw_proxy*>(node));
-    pw_thread_loop_unlock(loop_);
+    enumParamsLocked(node, false, {SPA_PARAM_Props}, &onNodeVolumeParam, &collector);
+    destroyProxy(node);
     return collector.volume >= 0.0f ? toCubic(collector.volume) : 1.0f;
 }
 
 void PipeWireManager::setDeviceVolume(std::uint32_t nodeId, float volume) {
-    if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) {
-        return;
-    }
+    if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) return;
     const float linear = fromCubic(volume);
-    pw_thread_loop_lock(loop_);
+    LoopLock loop(loop_);
     RouteState route;
     if (!readRouteLocked(nodeId, route)) {
-        pw_thread_loop_unlock(loop_);
-        setNodeVolume(nodeId, linear);  // no route (a virtual or network sink)
+        setNodeVolumeLocked(nodeId, linear);  // no route (a virtual or network sink)
         return;
     }
     // Exactly what the desktop's own slider sends: the route, all its channels,
@@ -1215,53 +1101,51 @@ void PipeWireManager::setDeviceVolume(std::uint32_t nodeId, float volume) {
     auto* pod = static_cast<spa_pod*>(spa_pod_builder_pop(&b, &outer));
     pw_device_set_param(route.device, SPA_PARAM_Route, 0, pod);
     doRoundtrip();
-    pw_proxy_destroy(reinterpret_cast<pw_proxy*>(route.device));
-    pw_thread_loop_unlock(loop_);
+    destroyProxy(route.device);
 }
 
-void PipeWireManager::setNodeVolume(std::uint32_t nodeId, float volume) {
-    if (loop_ == nullptr || registry_ == nullptr || nodeId == 0) {
-        return;
-    }
+void PipeWireManager::setNodeVolumeLocked(std::uint32_t nodeId, float volume) {
+    pw_proxy* node = bindLocked(nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE);
+    if (node == nullptr) return;
     volume = std::clamp(volume, 0.0f, 1.0f);
-    pw_thread_loop_lock(loop_);
-    auto* node = static_cast<pw_node*>(
-        pw_registry_bind(registry_, nodeId, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0));
-    if (node != nullptr) {
-        std::uint8_t buffer[512];
-        spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-        float volumes[2] = {volume, volume};
-        auto* pod = static_cast<spa_pod*>(spa_pod_builder_add_object(
-            &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_channelVolumes,
-            SPA_POD_Array(sizeof(float), SPA_TYPE_Float, 2, volumes)));
-        pw_node_set_param(node, SPA_PARAM_Props, 0, pod);
-        pw_proxy_destroy(reinterpret_cast<pw_proxy*>(node));
-    }
-    pw_thread_loop_unlock(loop_);
+    float volumes[2] = {volume, volume};
+    std::uint8_t buffer[512];
+    spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    auto* pod = static_cast<spa_pod*>(spa_pod_builder_add_object(
+        &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_channelVolumes,
+        SPA_POD_Array(sizeof(float), SPA_TYPE_Float, 2, volumes)));
+    pw_node_set_param(reinterpret_cast<pw_node*>(node), SPA_PARAM_Props, 0, pod);
+    destroyProxy(node);
+}
+
+// --- Channel strip --------------------------------------------------------------
+
+template <typename Change>
+void PipeWireManager::updateChannelSettings(ChannelId id, Change&& change) {
+    ChannelProcessor& p = processor_[channelIndex(id)];
+    dsp::ChannelChainSettings s = p.settings();
+    change(s);
+    p.setSettings(s);
 }
 
 void PipeWireManager::setChannelVolume(ChannelId id, float volume) {
-    ChannelProcessor& p = processor_[channelIndex(id)];
-    dsp::ChannelChainSettings s = p.settings();
-    s.volume = std::clamp(volume, 0.0f, 1.0f);
-    p.setSettings(s);
+    updateChannelSettings(id, [&](auto& s) { s.volume = std::clamp(volume, 0.0f, 1.0f); });
 }
 
 void PipeWireManager::setChannelBalance(ChannelId id, float balance) {
-    ChannelProcessor& p = processor_[channelIndex(id)];
-    dsp::ChannelChainSettings s = p.settings();
-    s.balance = std::clamp(balance, -1.0f, 1.0f);
-    p.setSettings(s);
+    updateChannelSettings(id, [&](auto& s) { s.balance = std::clamp(balance, -1.0f, 1.0f); });
 }
 
 void PipeWireManager::setChannelGain(ChannelId id, float gain) {
     // The UI hands this over as a linear factor (0..2, i.e. up to +6 dB); the
     // chain wants decibels, which is what the slider was showing all along.
-    ChannelProcessor& p = processor_[channelIndex(id)];
-    dsp::ChannelChainSettings s = p.settings();
-    const float clamped = std::clamp(gain, 0.01f, 2.0f);
-    s.trimDb = 20.0f * std::log10(clamped);
-    p.setSettings(s);
+    updateChannelSettings(id, [&](auto& s) {
+        s.trimDb = 20.0f * std::log10(std::clamp(gain, 0.01f, 2.0f));
+    });
+}
+
+void PipeWireManager::setChannelMute(ChannelId id, bool muted) {
+    updateChannelSettings(id, [&](auto& s) { s.muted = muted; });
 }
 
 void PipeWireManager::setStreamLevel(ChannelId id, float level) {
@@ -1275,8 +1159,9 @@ void PipeWireManager::setStreamLevel(ChannelId id, float level) {
             nodeId = it->second;
         }
     }
-    if (nodeId != 0) {
-        setNodeVolume(nodeId, level);  // a stream of ours: it has no route
+    if (nodeId != 0 && loop_ != nullptr && registry_ != nullptr) {
+        LoopLock loop(loop_);
+        setNodeVolumeLocked(nodeId, level);  // a stream of ours: it has no route
     }
 }
 
@@ -1286,18 +1171,8 @@ float PipeWireManager::streamLevel(ChannelId id) const {
     return it != streamLevel_.end() ? it->second : 1.0f;
 }
 
-void PipeWireManager::setChannelMute(ChannelId id, bool muted) {
-    ChannelProcessor& p = processor_[channelIndex(id)];
-    dsp::ChannelChainSettings s = p.settings();
-    s.muted = muted;
-    p.setSettings(s);
-}
-
 ChannelLevel PipeWireManager::channelLevel(ChannelId id) {
-    // Straight out of the chain that produced it, rather than from a separate
-    // capture stream tapping the node afterwards. That is six fewer nodes in the
-    // graph, and the numbers are post-fader because that is where the chain
-    // measures them — which is what someone looking at a mixer expects.
+    // Straight from the chain, post-fader, as a mixer is expected to read.
     const ChannelProcessorLevels levels = processor_[channelIndex(id)].takeLevels();
     ChannelLevel out;
     out.peakLeft = levels.peakLeft;
@@ -1311,9 +1186,8 @@ void PipeWireManager::setChannelOutput(ChannelId id, const std::string& deviceNa
         channelDeviceName_[id] = deviceName;
     }
     if (loop_ != nullptr) {
-        pw_thread_loop_lock(loop_);
+        LoopLock loop(loop_);
         applyChannelRouteLocked(id);
-        pw_thread_loop_unlock(loop_);
     }
     log::info("Router: channel {} output -> {}", channelName(id),
               deviceName.empty() ? "default" : deviceName);
@@ -1326,17 +1200,13 @@ std::string PipeWireManager::channelOutput(ChannelId id) const {
 }
 
 void PipeWireManager::applyChannelRouteLocked(ChannelId id) {
-    if (metadata_ == nullptr) {
-        return;
-    }
+    if (metadata_ == nullptr) return;
     std::uint32_t outId = 0;
     std::string targetSerial;  // empty -> clear the target (follow the default)
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         const auto out = channelOut_.find(id);
-        if (out == channelOut_.end()) {
-            return;  // the channel's .out stream is not in the graph yet
-        }
+        if (out == channelOut_.end()) return;  // the channel's .out stream is not in the graph yet
         outId = out->second.id;
         const auto name = channelDeviceName_.find(id);
         if (name != channelDeviceName_.end() && !name->second.empty()) {
@@ -1354,9 +1224,7 @@ void PipeWireManager::applyChannelRouteLocked(ChannelId id) {
 
 void PipeWireManager::applyAllRoutesLocked() {
     for (const ChannelId ch : kAllChannels) {
-        if (ch == ChannelId::Microphone) {
-            continue;  // the mic is a source, not a routable output
-        }
+        if (ch == ChannelId::Microphone) continue;  // the mic is a source, not a routable output
         applyChannelRouteLocked(ch);
     }
 }
@@ -1366,9 +1234,7 @@ void PipeWireManager::applyAllRoutesLocked() {
 
 void PipeWireManager::onCoreInfo(void* data, const pw_core_info* info) {
     auto* self = static_cast<PipeWireManager*>(data);
-    if (info == nullptr) {
-        return;
-    }
+    if (info == nullptr) return;
     self->info_.version  = info->version   != nullptr ? info->version   : "";
     self->info_.name     = info->name      != nullptr ? info->name      : "";
     self->info_.userName = info->user_name != nullptr ? info->user_name : "";
@@ -1405,9 +1271,7 @@ void PipeWireManager::onRegistryGlobalRemove(void* data, std::uint32_t id) {
 
 
 // --- IMicrophoneController ----------------------------------------------------
-//
-// Thin by design: MicProcessor already does its own thread handoff, so there is
-// nothing here to lock and nothing to translate.
+// Thin: MicProcessor does its own thread handoff.
 
 void PipeWireManager::setMicSettings(const dsp::MicSettings& settings) {
     mic_.setSettings(settings);
@@ -1450,12 +1314,8 @@ std::string PipeWireManager::resolveMicTarget(const std::string& chosen,
     const auto isConnected = [&](const std::string& name) {
         return std::find(connected.begin(), connected.end(), name) != connected.end();
     };
-    if (!chosen.empty() && isConnected(chosen)) {
-        return chosen;
-    }
-    if (isConnected(systemDefault) && !startsWith(systemDefault, "bluez")) {
-        return systemDefault;
-    }
+    if (!chosen.empty() && isConnected(chosen)) return chosen;
+    if (isConnected(systemDefault) && !startsWith(systemDefault, "bluez")) return systemDefault;
     return {};
 }
 
@@ -1551,10 +1411,7 @@ std::string PipeWireManager::micEchoReference() const {
     return echoActive_.load() ? echoReference_ : std::string();
 }
 
-std::string PipeWireManager::micDefaultOutput() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    return realDefaultSinkShared_;
-}
+std::string PipeWireManager::micDefaultOutput() const { return readLocked(realDefaultSinkShared_); }
 
 void PipeWireManager::setMicEchoCancellation(bool on, const std::string& speakers) {
     {
@@ -1562,12 +1419,9 @@ void PipeWireManager::setMicEchoCancellation(bool on, const std::string& speaker
         micEchoCancel_ = on;
         micEchoSpeakers_ = speakers;
     }
-    if (loop_ == nullptr || core_ == nullptr) {
-        return;
-    }
-    pw_thread_loop_lock(loop_);
+    if (loop_ == nullptr || core_ == nullptr) return;
+    LoopLock loop(loop_);
     applyMicRouteLocked();
-    pw_thread_loop_unlock(loop_);
 }
 
 bool PipeWireManager::setMicCaptureDevice(const std::string& nodeName) {
@@ -1575,48 +1429,28 @@ bool PipeWireManager::setMicCaptureDevice(const std::string& nodeName) {
         std::lock_guard<std::mutex> lock(stateMutex_);
         micChosen_ = nodeName;
     }
-    if (loop_ == nullptr || core_ == nullptr) {
-        return false;
-    }
+    if (loop_ == nullptr || core_ == nullptr) return false;
     // Rebuilding a stream touches the graph, so it happens with the loop held —
     // the same rule every other node change in this file follows.
-    pw_thread_loop_lock(loop_);
+    LoopLock loop(loop_);
     applyMicRouteLocked();
-    pw_thread_loop_unlock(loop_);
     return true;
 }
 
-std::string PipeWireManager::micCaptureDevice() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    return micChosen_;
-}
-
-std::string PipeWireManager::micActiveCaptureDevice() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    return micDevice_;
-}
-
-std::string PipeWireManager::micDefaultInput() const {
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    return realDefaultSource_;
-}
+std::string PipeWireManager::micCaptureDevice() const { return readLocked(micChosen_); }
+std::string PipeWireManager::micActiveCaptureDevice() const { return readLocked(micDevice_); }
+std::string PipeWireManager::micDefaultInput() const { return readLocked(realDefaultSource_); }
 
 void PipeWireManager::setMicLive(bool live) {
-    if (loop_ == nullptr || core_ == nullptr) {
-        return;
-    }
-    pw_thread_loop_lock(loop_);
+    if (loop_ == nullptr || core_ == nullptr) return;
+    LoopLock loop(loop_);
     mic_.setLive(core_, live);
-    pw_thread_loop_unlock(loop_);
 }
 
 void PipeWireManager::setMicMonitor(bool on, float level) {
-    if (loop_ == nullptr || core_ == nullptr) {
-        return;
-    }
-    pw_thread_loop_lock(loop_);
+    if (loop_ == nullptr || core_ == nullptr) return;
+    LoopLock loop(loop_);
     mic_.setMonitor(core_, on, level);
-    pw_thread_loop_unlock(loop_);
 }
 
 float PipeWireManager::micLatencyMs() const { return mic_.latencyMs(); }
@@ -1624,9 +1458,7 @@ float PipeWireManager::micLatencyMs() const { return mic_.latencyMs(); }
 // --- Harmonic bass ------------------------------------------------------------
 
 void PipeWireManager::applyBassStage(ChannelId id, const dsp::BassStageSettings& settings) {
-    if (id == ChannelId::Microphone) {
-        return;  // a source has no bass stage
-    }
+    if (id == ChannelId::Microphone) return;  // a source has no bass stage
     processor_[channelIndex(id)].setBass(settings);
 }
 

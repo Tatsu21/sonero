@@ -25,9 +25,8 @@ public:
     AppChip(std::uint32_t appId, const QString& name,
             std::optional<sonar::audio::ChannelId> channel, QWidget* parent = nullptr);
 
-    // The app id of the chip being dragged right now (0 when no drag is active).
-    // Drop targets read this instead of the MIME data, which avoids the flaky
-    // pipe transfer for same-process drags on Wayland.
+    // The app id being dragged (0 when none); drop targets read this instead of MIME
+    // data, which is flaky for same-process drags on Wayland.
     [[nodiscard]] static std::uint32_t draggedAppId() noexcept;
 
 protected:
@@ -46,10 +45,8 @@ private:
     QPoint pressPos_;
     std::optional<sonar::audio::ChannelId> channel_;
     QLabel* dot_ = nullptr;
-    // setStyleSheet() inside changeEvent() makes Qt send another palette change,
-    // which re-enters changeEvent. Without this the first theme applied recursed
-    // until the stack ran out — 2158 frames deep, crashing inside Qt's own CSS
-    // parser, which made it look like a style sheet problem rather than a loop.
+    // setStyleSheet() in changeEvent() triggers another palette change; this guard
+    // stops the recursion that once overflowed the stack.
     bool restyling_ = false;
 
     static std::uint32_t s_draggedAppId;

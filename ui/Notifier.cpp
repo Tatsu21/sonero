@@ -23,8 +23,7 @@ const QString kPath = QStringLiteral("/org/freedesktop/Notifications");
 Notifier::Notifier(config::SettingsStore* settings, QObject* parent)
     : QObject(parent), settings_(settings) {
     if (settings_ != nullptr) {
-        enabled_ = settings_->section(QStringLiteral("general"))
-                       .value(QStringLiteral("notifications"))
+        enabled_ = settings_->value(QStringLiteral("general"), QStringLiteral("notifications"))
                        .toBool(true);
     }
     // Route click / dismissal callbacks from the notification service back to us.
@@ -38,17 +37,13 @@ Notifier::Notifier(config::SettingsStore* settings, QObject* parent)
 void Notifier::setEnabled(bool on) {
     enabled_ = on;
     if (settings_ != nullptr) {
-        QJsonObject g = settings_->section(QStringLiteral("general"));
-        g[QStringLiteral("notifications")] = on;
-        settings_->putSection(QStringLiteral("general"), g);
+        settings_->putValue(QStringLiteral("general"), QStringLiteral("notifications"), on);
     }
 }
 
 void Notifier::notify(const QString& title, const QString& body, Urgency urgency,
                       const QString& icon, bool clickable, const QString& key) {
-    if (!enabled_) {
-        return;
-    }
+    if (!enabled_) return;
     QDBusMessage msg =
         QDBusMessage::createMethodCall(kService, kPath, kService, QStringLiteral("Notify"));
 
@@ -76,9 +71,7 @@ void Notifier::notify(const QString& title, const QString& body, Urgency urgency
         << -1;                                                                   // expire_timeout
 
     QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(msg);
-    if (!clickable && key.isEmpty()) {
-        return;  // fire-and-forget; no need to track the returned id
-    }
+    if (!clickable && key.isEmpty()) return;  // fire-and-forget; no need to track the returned id
     // Remember the notification id so we can match its ActionInvoked callback
     // and replace it on the next notification with the same key.
     auto* watcher = new QDBusPendingCallWatcher(call, this);

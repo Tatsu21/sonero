@@ -304,9 +304,9 @@ existing implementation, writing a new device class beside the existing one, and
 the result is real instead of merely plausible. In Claude Code it is registered as a
 skill, so `/add-hid-headset` starts it.
 
-It deliberately stops at battery level. Sonero can also write an equalizer to the
-Arctis's onboard DSP — the device accepts the write and nothing audible changes, and
-that is unsolved — so the procedure tells an assistant not to attempt onboard EQ,
+It deliberately stops at battery level. Sonero once wrote an equalizer to the Arctis's
+onboard DSP — the device accepted the write and nothing audible changed, and that is
+unsolved — so the procedure tells an assistant not to attempt onboard EQ,
 sidetone or ANC for a new model. There is no working example to copy, and no way to tell
 a correct implementation from a broken one.
 

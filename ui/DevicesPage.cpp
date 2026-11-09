@@ -1,13 +1,12 @@
 #include "ui/DevicesPage.h"
 
 #include "hid/BatterySource.h"
+#include "ui/UiKit.h"
 #include "ui/Theme.h"
 
 #include <algorithm>
 #include <cctype>
-#include <array>
 #include <cmath>
-#include <cstdlib>
 #include <optional>
 #include <set>
 
@@ -22,9 +21,7 @@
 #include <QLayout>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QSignalBlocker>
-#include <QSlider>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -33,22 +30,12 @@
 #include "audio/IDeviceFormats.h"
 #include "config/SettingsStore.h"
 #include "ui/Notifier.h"
-#include "ui/widgets/EqCurve.h"
 
 namespace sonar::ui {
 
 namespace {
-
-// A device-type badge. The hue is the type's identity — USB has been indigo
-// since the first build — while saturation and lightness come from the theme's
-// accent, so the badges follow the theme instead of staying put. `muted` is for
-// the types that are deliberately unremarkable (analog, unknown).
-[[nodiscard]] QColor mixed(const QColor& a, const QColor& b, double t) {
-    const double u = 1.0 - t;
-    return QColor::fromRgbF(a.redF() * u + b.redF() * t, a.greenF() * u + b.greenF() * t,
-                            a.blueF() * u + b.blueF() * t);
-}
-
+// A device-type badge: the hue is the type's identity, saturation and lightness
+// follow the theme's accent. `muted` is for the unremarkable types.
 [[nodiscard]] QString badgeColor(int hue, bool muted = false) {
     const QColor accent = currentTheme().accent;
     const int sat = muted ? accent.hslSaturation() / 4 : accent.hslSaturation();
@@ -56,62 +43,19 @@ namespace {
         .name(QColor::HexRgb);
 }
 
-
-QVBoxLayout* makeCard(QVBoxLayout* root, const QString& title, const QString& subtitle) {
-    auto* frame = new QFrame;
-    frame->setObjectName(QStringLiteral("Card"));
-    auto* body = new QVBoxLayout(frame);
-    body->setContentsMargins(22, 18, 22, 20);
-    body->setSpacing(10);
-
-    auto* t = new QLabel(title);
-    t->setObjectName(QStringLiteral("SectionTitle"));
-    body->addWidget(t);
-    if (!subtitle.isEmpty()) {
-        auto* s = new QLabel(subtitle);
-        s->setObjectName(QStringLiteral("Hint"));
-        body->addWidget(s);
-    }
-    body->addSpacing(4);
-    root->addWidget(frame);
-    return body;
-}
-
 // A labelled battery row: caption + bar + percent. Returns the bar and percent.
 void batteryRow(QVBoxLayout* body, const QString& label, QProgressBar*& bar, QLabel*& pct) {
     auto* row = new QHBoxLayout;
-    auto* cap = new QLabel(label);
-    cap->setObjectName(QStringLiteral("CardKey"));
+    QLabel* cap = makeLabel(label, "CardKey");
     cap->setMinimumWidth(150);
-    bar = new QProgressBar;
-    bar->setObjectName(QStringLiteral("BatteryBar"));
-    bar->setRange(0, 100);
-    bar->setValue(0);
-    bar->setTextVisible(false);
-    pct = new QLabel(QStringLiteral("—"));
-    pct->setObjectName(QStringLiteral("CardVal"));
+    bar = makeLevelBar("BatteryBar");
+    pct = makeLabel(QStringLiteral("—"), "CardVal");
     pct->setMinimumWidth(52);
     pct->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row->addWidget(cap);
     row->addWidget(bar, 1);
     row->addWidget(pct);
     body->addLayout(row);
-}
-
-// Delete every child widget / nested layout so a container can be repopulated.
-void clearLayout(QLayout* layout) {
-    if (layout == nullptr) {
-        return;
-    }
-    while (QLayoutItem* item = layout->takeAt(0)) {
-        if (QWidget* w = item->widget()) {
-            w->deleteLater();
-        }
-        if (QLayout* child = item->layout()) {
-            clearLayout(child);
-        }
-        delete item;
-    }
 }
 
 // Short badge label + accent colour for a device class.
@@ -129,9 +73,7 @@ TypeStyle typeStyle(audio::DeviceType t) {
         case DeviceType::Hdmi:      return {"HDMI", badgeColor(280)};
         case DeviceType::Spdif:     return {"S/PDIF", badgeColor(174)};
         case DeviceType::Analog:    return {"Analog", badgeColor(215, true)};
-        // Nothing classifies a device as System today; it is handled so that
-        // -Wswitch keeps warning when a new class is added, rather than letting
-        // the new one fall through to the generic badge unnoticed.
+        // Nothing is classified System today; listed so -Wswitch catches a new class.
         case DeviceType::System:
         case DeviceType::Other:     return {"Audio", badgeColor(215, true)};
     }
@@ -146,21 +88,14 @@ struct CodecInfo {
 };
 CodecInfo codecInfo(const std::string& codec) {
     const auto has = [&](const char* s) { return codec.find(s) != std::string::npos; };
-    if (has("LDAC") || has("Adaptive")) {
-        return {"up to 96kHz/24-bit", true};
-    }
-    if (has("HD") || has("hd")) {
-        return {"48kHz/24-bit", true};  // aptX HD ceiling over classic BT
-    }
-    if (has("aptX") || has("aptx")) {
-        return {"48kHz/16-bit", false};
-    }
+    if (has("LDAC") || has("Adaptive")) return {"up to 96kHz/24-bit", true};
+    if (has("HD") || has("hd")) return {"48kHz/24-bit", true};  // aptX HD ceiling over classic BT
+    if (has("aptX") || has("aptx")) return {"48kHz/16-bit", false};
     return {"16-bit", false};  // SBC / SBC-XQ
 }
 
-// Quality ranking of an A2DP codec, higher = better. Used to auto-select the best
-// codec a Bluetooth device offers. "HD"/"Adaptive" must be tested before plain
-// "aptX", since their labels contain "aptX" too.
+// A2DP codec quality, higher = better, for auto-selecting the best. "HD" and
+// "Adaptive" before plain "aptX", whose name they contain.
 int codecRank(const std::string& codec) {
     const auto has = [&](const char* s) { return codec.find(s) != std::string::npos; };
     if (has("LDAC")) return 100;
@@ -170,43 +105,31 @@ int codecRank(const std::string& codec) {
     if (has("aptX") || has("aptx")) return 70;    // plain aptX
     if (has("AAC")) return 65;
     if (has("XQ") || has("xq")) return 50;        // SBC-XQ
-    if (has("SBC") || has("sbc")) return 40;
-    return 10;
+    return has("SBC") || has("sbc") ? 40 : 10;
 }
 
-// Battery percentage of a Bluetooth output via BlueZ (org.bluez.Battery1). Needs
-// BlueZ "Experimental = true"; returns nullopt when the device exposes no battery.
-// Spelled once: the Devices card and the tray menu must not drift apart.
+// A Bluetooth output's battery from BlueZ (org.bluez.Battery1, needs "Experimental =
+// true"); nullopt when the device exposes none.
 constexpr auto kHeadsetName = "Arctis Nova Pro Wireless";
 
 std::optional<int> btBatteryPercent(const std::string& nodeName) {
     const std::string prefix = "bluez_output.";
     const auto p = nodeName.find(prefix);
-    if (p == std::string::npos) {
-        return std::nullopt;
-    }
+    if (p == std::string::npos) return std::nullopt;
     std::string mac = nodeName.substr(p + prefix.size());
     if (const auto dot = mac.find('.'); dot != std::string::npos) {
         mac.resize(dot);  // "80_C3_BA_94_FA_B8.1" -> "80_C3_BA_94_FA_B8"
     }
-    // PipeWire publishes the same Bluetooth sink under two names — one with the
-    // MAC's colons intact and one with them already underscored — and a DBus
-    // object path may contain neither colons nor anything else outside
-    // [A-Za-z0-9_]. Sending the colon form made the bus reject every call with
-    // "Invalid object path", five times per device per refresh, and the battery
-    // never arrived. Normalising here handles both names.
+    // PipeWire names a BT sink with the MAC's colons both kept and underscored, and a
+    // DBus object path allows only [A-Za-z0-9_] — normalise to cover both.
     for (char& c : mac) {
         if (std::isalnum(static_cast<unsigned char>(c)) == 0) {
             c = '_';
         }
     }
-    if (mac.empty()) {
-        return std::nullopt;
-    }
+    if (mac.empty()) return std::nullopt;
     QDBusConnection bus = QDBusConnection::systemBus();
-    if (!bus.isConnected()) {
-        return std::nullopt;
-    }
+    if (!bus.isConnected()) return std::nullopt;
     for (int hci = 0; hci < 5; ++hci) {  // find the adapter the device lives under
         const QString path = QStringLiteral("/org/bluez/hci%1/dev_%2")
                                  .arg(hci)
@@ -219,9 +142,7 @@ std::optional<int> btBatteryPercent(const std::string& nodeName) {
         if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
             const int pct =
                 reply.arguments().first().value<QDBusVariant>().variant().toInt();
-            if (pct >= 0 && pct <= 100) {
-                return pct;
-            }
+            if (pct >= 0 && pct <= 100) return pct;
         }
     }
     return std::nullopt;
@@ -236,35 +157,16 @@ DevicesPage::DevicesPage(audio::IAudioDevices* devices, audio::IDeviceFormats* f
       formats_(formats),
       settings_(settings),
       notifier_(notifier) {
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    outer->addWidget(scroll);
-
-    auto* page = new QWidget;
-    scroll->setWidget(page);
-    auto* root = new QVBoxLayout(page);
-    root->setContentsMargins(40, 34, 40, 34);
-    root->setSpacing(18);
-
-    auto* title = new QLabel(QStringLiteral("Devices"));
-    title->setObjectName(QStringLiteral("PageTitle"));
-    auto* subtitle = new QLabel(
-        QStringLiteral("Audio outputs on this system — USB, Bluetooth, HDMI and more"));
-    subtitle->setObjectName(QStringLiteral("PageSubtitle"));
-    auto* head = new QVBoxLayout;
-    head->setSpacing(4);
-    head->addWidget(title);
-    head->addWidget(subtitle);
-    root->addLayout(head);
+    QVBoxLayout* root = makeScrollPage(this, 18);
+    addPageHeader(root, QStringLiteral("Devices"),
+                  QStringLiteral("Audio outputs on this system — USB, Bluetooth, HDMI and more"));
 
     // Live list of every connected output, driven by the PipeWire device registry.
     QVBoxLayout* outCard = makeCard(
         root, QStringLiteral("Connected outputs"),
         QStringLiteral("Everything the system can play to. Plug in or unplug a device and it "
-                       "appears or disappears here."));
+                       "appears or disappears here."),
+        10);
     deviceListBody_ = new QVBoxLayout;
     deviceListBody_->setSpacing(8);
     outCard->addLayout(deviceListBody_);
@@ -302,18 +204,16 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
 
     QVBoxLayout* body = makeCard(
         ss, QStringLiteral("SteelSeries %1").arg(QString::fromUtf8(kHeadsetName)),
-        QStringLiteral("USB base station · onboard battery, transmission format and equalizer"));
+        QStringLiteral("USB base station · headset battery"),
+        10);
 
     statusLabel_ = new QLabel(QStringLiteral("● Connected"));
     setState(statusLabel_, "ok");
     body->addWidget(statusLabel_);
 
     if (!probe.accessible) {
-        // The commands come from the same place the Settings page's one-click fix
-        // runs, so the path in them is the rule's real location — under the
-        // AppImage mount, in the system prefix, or in the source tree. It used to
-        // be spelled out relative to the repository, which is a command that
-        // works for whoever wrote it and for nobody who installed Sonero.
+        // The same commands the Settings page's one-click fix runs, so the rule's path is
+        // its real location for this install.
         QString text =
             QStringLiteral("No permission to talk to the base station. "
                            "Settings → System integration can install the udev rule "
@@ -332,8 +232,7 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
                 text += QStringLiteral("\n  sudo ") + line;
             }
         }
-        auto* hint = new QLabel(text);
-        hint->setObjectName(QStringLiteral("Hint"));
+        QLabel* hint = makeLabel(text, "Hint");
         hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
         hint->setWordWrap(true);
         body->addWidget(hint);
@@ -343,109 +242,6 @@ void DevicesPage::buildSteelSeriesControls(QVBoxLayout* parent) {
     // The base station reports the headset's battery only; the spare battery in
     // the dock is not part of its status report, so it is not shown here.
     batteryRow(body, QStringLiteral("Headset battery"), headsetBar_, headsetPct_);
-
-    if (std::getenv("SONAR_HID_DEBUG") != nullptr) {  // dev-only raw report line
-        rawLabel_ = new QLabel;
-        rawLabel_->setStyleSheet(
-            QStringLiteral("font-family: monospace; font-size: 10px; color:%1;")
-                .arg(mixed(currentTheme().textDim, currentTheme().bg, 0.42).name(QColor::HexRgb)));
-        body->addSpacing(6);
-        body->addWidget(rawLabel_);
-    }
-
-    // --- Headset onboard EQ (Sonar-style, written to the hardware) ---
-    dsp::resetBands(headsetEq_, dsp::BandCount::Bands10);
-    headsetEq_.enabled = true;
-    if (settings_ != nullptr) {  // restore the persisted curve before the widgets read it
-        headsetEq_ = config::eqFromJson(settings_->section(QStringLiteral("headsetEq")), headsetEq_);
-    }
-
-    // Disabled, not removed: the write path is real and the headset acknowledges
-    // every report, but the curve is never applied to the audio and nobody has
-    // worked out why (see hid/SKILL.md). Leaving the controls live would let the
-    // user move sliders that change nothing.
-    QVBoxLayout* eqBody = makeCard(
-        ss, QStringLiteral("Headset EQ"),
-        QStringLiteral("Unavailable — the headset accepts these writes but never applies "
-                       "them. Use the equalizer on the Channels page instead."));
-
-    struct Preset {
-        const char* name;
-        std::array<int, 10> gains;
-    };
-    static const Preset kPresets[] = {
-        {"Flat", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
-        {"Bass Boost", {6, 5, 3, 1, 0, 0, 0, 0, 0, 0}},
-        {"Treble", {0, 0, 0, 0, 0, 1, 3, 5, 6, 6}},
-        // 32 64 125 250 500 1k 2k 4k 8k 16k
-        {"Sonar", {0, 0, 1, 1, 0, 2, 0, 4, 3, 3}},
-    };
-    auto* presetRow = new QHBoxLayout;
-    presetRow->setSpacing(8);
-    for (const Preset& p : kPresets) {
-        auto* button = new QPushButton(QString::fromUtf8(p.name));
-        button->setEnabled(false);
-        const std::array<int, 10> gains = p.gains;
-        connect(button, &QPushButton::clicked, this, [this, gains] { applyHeadsetPreset(gains); });
-        presetRow->addWidget(button);
-    }
-    presetRow->addStretch(1);
-    eqBody->addLayout(presetRow);
-
-    eqCurve_ = new EqCurve;
-    eqCurve_->setEnabled(false);  // stops the drag and greys the curve
-    eqCurve_->setMinimumHeight(150);
-    eqCurve_->setSettings(headsetEq_);
-    eqBody->addWidget(eqCurve_);
-    connect(eqCurve_, &EqCurve::bandChanged, this, &DevicesPage::onEqBandChanged);
-
-    // Precise per-band sliders (32 Hz .. 16 kHz), synced with the curve.
-    static const char* const kFreqLabels[10] = {"32", "64",  "125", "250", "500",
-                                                "1k", "2k", "4k",  "8k",  "16k"};
-    auto* sliderRow = new QHBoxLayout;
-    sliderRow->setSpacing(4);
-    for (int i = 0; i < 10; ++i) {
-        auto* col = new QVBoxLayout;
-        col->setSpacing(4);
-
-        // Initial value comes from the (possibly restored) model. Set before the
-        // valueChanged connect below so it doesn't trigger a spurious HID write.
-        const int g = i < static_cast<int>(headsetEq_.bands.size())
-                          ? static_cast<int>(std::lround(headsetEq_.bands[static_cast<std::size_t>(i)].gainDb))
-                          : 0;
-
-        auto* value = new QLabel(QString::number(g));
-        value->setObjectName(QStringLiteral("VolumeValue"));
-        value->setAlignment(Qt::AlignHCenter);
-        value->setEnabled(false);  // the whole band column reads as inert
-
-        auto* slider = new QSlider(Qt::Vertical);
-        slider->setEnabled(false);
-        slider->setRange(-10, 10);
-        slider->setValue(g);
-        slider->setMinimumHeight(110);
-
-        auto* freq = new QLabel(QString::fromUtf8(kFreqLabels[i]));
-        freq->setObjectName(QStringLiteral("BalanceCaption"));
-        freq->setAlignment(Qt::AlignHCenter);
-        freq->setEnabled(false);
-
-        col->addWidget(value);
-        col->addWidget(slider, 1, Qt::AlignHCenter);
-        col->addWidget(freq);
-        sliderRow->addLayout(col);
-
-        eqSliders_[static_cast<std::size_t>(i)] = slider;
-        eqValues_[static_cast<std::size_t>(i)] = value;
-        connect(slider, &QSlider::valueChanged, this,
-                [this, i](int v) { setBand(i, static_cast<float>(v)); });
-    }
-    eqBody->addSpacing(16);
-    eqBody->addLayout(sliderRow);
-
-    eqTimer_ = new QTimer(this);  // debounce: write once after the user settles
-    eqTimer_->setSingleShot(true);
-    connect(eqTimer_, &QTimer::timeout, this, [this] { sendHeadsetEq(); });
 
     parent->addWidget(steelSeriesCard_);
 }
@@ -495,9 +291,8 @@ void DevicesPage::syncDevices() {
                                                  : autoPreferredDevices_.erase(it);
                 }
             }
-            // Notify on devices (dis)connecting — edge-triggered, silent on first
-            // fill, and only once the list has settled: an HDMI/DP output drops
-            // out and comes back every time the monitor sleeps or wakes.
+            // Notify on (dis)connects only once the list settles (HDMI outputs drop out on
+            // every monitor sleep), and not on the first fill.
             {
                 std::unordered_map<std::string, std::string> current;
                 for (const audio::AudioDevice& d : list) {
@@ -512,8 +307,7 @@ void DevicesPage::syncDevices() {
                 }
             }
             if (list.empty()) {
-                auto* none = new QLabel(QStringLiteral("No audio outputs detected."));
-                none->setObjectName(QStringLiteral("Hint"));
+                QLabel* none = makeLabel(QStringLiteral("No audio outputs detected."), "Hint");
                 deviceListBody_->addWidget(none);
             } else {
                 for (const audio::AudioDevice& dev : list) {
@@ -557,9 +351,7 @@ void DevicesPage::publishBatteries(QList<BatteryLevel> levels) {
     if (headsetPercent_ >= 0) {
         levels.prepend({QString::fromUtf8(kHeadsetName), headsetPercent_, headsetCharging_});
     }
-    if (levels == lastBatteries_) {
-        return;  // nothing moved; leave any menu built from this alone
-    }
+    if (levels == lastBatteries_) return;  // nothing moved; leave any menu built from this alone
     lastBatteries_ = levels;
     emit batteriesChanged(levels);
 }
@@ -568,7 +360,7 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
     auto* row = new QFrame;
     row->setObjectName(QStringLiteral("DeviceRow"));
     row->setStyleSheet(QStringLiteral("#DeviceRow { background:%1; border-radius:10px; }")
-            .arg(mixed(currentTheme().surface, currentTheme().bg, 0.6).name(QColor::HexRgb)));
+            .arg(mixColors(currentTheme().surface, currentTheme().bg, 0.6).name(QColor::HexRgb)));
     auto* h = new QHBoxLayout(row);
     h->setContentsMargins(14, 10, 14, 10);
     h->setSpacing(12);
@@ -589,8 +381,7 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
 
     auto* name = new QLabel(QString::fromStdString(dev.description));
     name->setStyleSheet(QStringLiteral("font-weight:700; font-size:13px;"));
-    auto* sub = new QLabel(QString::fromStdString(dev.name));
-    sub->setObjectName(QStringLiteral("Hint"));
+    QLabel* sub = makeLabel(QString::fromStdString(dev.name), "Hint");
     sub->setStyleSheet(QStringLiteral("font-size:11px;"));
     auto* texts = new QVBoxLayout;
     texts->setSpacing(1);
@@ -610,7 +401,7 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
         vol->setValue(std::clamp(cur, 0, 100));
         auto* pct = new QLabel(QStringLiteral("%1%").arg(vol->value()));
         pct->setStyleSheet(QStringLiteral("color:%1; font-size:11px;")
-                               .arg(mixed(currentTheme().text, currentTheme().textDim, 0.6)
+                               .arg(mixColors(currentTheme().text, currentTheme().textDim, 0.6)
                                         .name(QColor::HexRgb)));
         pct->setFixedWidth(34);
         const std::uint32_t nid = dev.nodeId;
@@ -627,16 +418,12 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
     // Bluetooth: let the user pick the A2DP codec live (aptX / aptX HD / SBC …).
     if (dev.type == audio::DeviceType::Bluetooth && dev.deviceId != 0 && devices_ != nullptr) {
         audio::DeviceCodecs cc = devices_->deviceCodecs(dev.deviceId);
-        // Auto-prefer the highest-quality codec once, the first time we see this
-        // device connected. Manual changes afterwards are respected (the name stays
-        // marked until the device disconnects).
+        // Switch to the best codec once per connection; manual changes are respected after.
         if (cc.valid && autoPreferredDevices_.insert(dev.name).second) {
             int bestRank = -1;
             std::uint32_t bestIdx = cc.currentIndex;
             for (const audio::DeviceCodec& c : cc.codecs) {
-                if (!c.available) {
-                    continue;
-                }
+                if (!c.available) continue;
                 if (const int r = codecRank(c.codec); r > bestRank) {
                     bestRank = r;
                     bestIdx = c.profileIndex;
@@ -648,8 +435,7 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
             }
         }
         if (cc.valid) {
-            auto* cap = new QLabel(QStringLiteral("Codec"));
-            cap->setObjectName(QStringLiteral("Hint"));
+            QLabel* cap = makeLabel(QStringLiteral("Codec"), "Hint");
             auto* combo = new QComboBox;
             combo->setMinimumWidth(150);
             for (const audio::DeviceCodec& c : cc.codecs) {
@@ -704,9 +490,7 @@ void DevicesPage::buildDeviceRow(QVBoxLayout* body, const audio::AudioDevice& de
 }
 
 std::optional<int> DevicesPage::updateBtBattery(QLabel* label, const std::string& nodeName) {
-    // BlueZ first, because it is the one source that speaks for a Bluetooth
-    // node; then every generic source, so any device whose kernel driver
-    // reports a charge level gets a figure without Sonero knowing what it is.
+    // BlueZ first (it speaks for Bluetooth nodes), then every generic source.
     std::optional<int> pct = btBatteryPercent(nodeName);
     if (!pct.has_value()) {
         if (const auto reading = hid::readBattery(batterySources_, nodeName)) {
@@ -728,20 +512,25 @@ std::optional<int> DevicesPage::updateBtBattery(QLabel* label, const std::string
         QStringLiteral("color:%1; font-weight:700; font-size:12px;").arg(color));
     label->setVisible(true);
 
-    // Low-battery notification, once per drain (rearmed above 25%).
-    if (p <= 20) {
-        if (btLowWarned_.insert(nodeName).second && notifier_ != nullptr) {
-            const auto it = knownDevices_.find(nodeName);
-            const QString what = it != knownDevices_.end() ? QString::fromStdString(it->second)
-                                                           : QStringLiteral("Wireless device");
-            notifier_->notify(QStringLiteral("Battery low"),
-                              QStringLiteral("%1 at %2%").arg(what).arg(p), Notifier::Critical,
-                              QStringLiteral("battery-caution"));
-        }
-    } else if (p > 25) {
-        btLowWarned_.erase(nodeName);
-    }
+    const auto it = knownDevices_.find(nodeName);
+    warnIfLow(nodeName, p,
+              it != knownDevices_.end() ? QString::fromStdString(it->second)
+                                        : QStringLiteral("Wireless device"));
     return pct;
+}
+
+void DevicesPage::warnIfLow(const std::string& key, int percent, const QString& what) {
+    // Once per drain: warn at 20% or less, re-arm only above 25%, so a level
+    // hovering around the threshold does not notify on every refresh.
+    if (percent >= 0 && percent <= 20) {
+        if (lowWarned_.insert(key).second && notifier_ != nullptr) {
+            notifier_->notify(QStringLiteral("Battery low"),
+                              QStringLiteral("%1 at %2%").arg(what).arg(percent),
+                              Notifier::Critical, QStringLiteral("battery-caution"));
+        }
+    } else if (percent > 25) {
+        lowWarned_.erase(key);
+    }
 }
 
 void DevicesPage::buildFormatCard(QVBoxLayout* root) {
@@ -749,54 +538,43 @@ void DevicesPage::buildFormatCard(QVBoxLayout* root) {
         root, QStringLiteral("Transmission format"),
         QStringLiteral("Sample rate and bit depth an ALSA output's DAC is fed at. "
                        "Bluetooth outputs use their codec instead (set it on the device "
-                       "above)."));
+                       "above)."),
+        10);
 
     formatDeviceCombo_ = new QComboBox;
     connect(formatDeviceCombo_, &QComboBox::activated, this,
             [this](int) { loadFormatForSelectedDevice(); });
-    auto* devCap = new QLabel(QStringLiteral("Device"));
-    devCap->setObjectName(QStringLiteral("CardKey"));
     auto* devRow = new QHBoxLayout;
     devRow->setSpacing(8);
-    devRow->addWidget(devCap);
+    devRow->addWidget(makeLabel(QStringLiteral("Device"), "CardKey"));
     devRow->addWidget(formatDeviceCombo_, 1);
     body->addLayout(devRow);
 
     rateCombo_ = new QComboBox;
     depthCombo_ = new QComboBox;
 
-    auto* apply = new QPushButton(QStringLiteral("Save"));
-    apply->setCursor(Qt::PointingHandCursor);
+    auto* apply = makeButton(QStringLiteral("Save"));
     connect(apply, &QPushButton::clicked, this, &DevicesPage::applyFormat);
-
-    auto* rateCap = new QLabel(QStringLiteral("Sample rate"));
-    rateCap->setObjectName(QStringLiteral("CardKey"));
-    auto* depthCap = new QLabel(QStringLiteral("Bit depth"));
-    depthCap->setObjectName(QStringLiteral("CardKey"));
 
     auto* row = new QHBoxLayout;
     row->setSpacing(8);
-    row->addWidget(rateCap);
+    row->addWidget(makeLabel(QStringLiteral("Sample rate"), "CardKey"));
     row->addWidget(rateCombo_);
     row->addSpacing(16);
-    row->addWidget(depthCap);
+    row->addWidget(makeLabel(QStringLiteral("Bit depth"), "CardKey"));
     row->addWidget(depthCombo_);
     row->addStretch(1);
     row->addWidget(apply);
     body->addLayout(row);
 
-    formatStatus_ = new QLabel;
-    formatStatus_->setObjectName(QStringLiteral("Hint"));
-    formatStatus_->setWordWrap(true);
+    formatStatus_ = makeLabel(QString(), "Hint", true);
     body->addWidget(formatStatus_);
 
     syncFormatDevices();  // fill from whatever is already connected
 }
 
 void DevicesPage::syncFormatDevices() {
-    if (formatDeviceCombo_ == nullptr || devices_ == nullptr) {
-        return;
-    }
+    if (formatDeviceCombo_ == nullptr || devices_ == nullptr) return;
     const QString prev = formatDeviceCombo_->currentData().toString();
     {
         const QSignalBlocker block(formatDeviceCombo_);
@@ -822,19 +600,13 @@ void DevicesPage::syncFormatDevices() {
 }
 
 void DevicesPage::loadFormatForSelectedDevice() {
-    if (formatDeviceCombo_ == nullptr) {
-        return;
-    }
+    if (formatDeviceCombo_ == nullptr) return;
     const QString nodeName = formatDeviceCombo_->currentData().toString();
-    if (nodeName.isEmpty()) {
-        return;
-    }
+    if (nodeName.isEmpty()) return;
     const std::string name = nodeName.toStdString();
 
-    // Offer ONLY what the device actually supports. Forcing an unsupported rate
-    // (e.g. 96 kHz on a 48 kHz-only DAC) makes the ALSA node fail to open and the
-    // device vanishes — ALSA does not silently clamp it. Fall back to the standard
-    // ladder only when the device could not be queried.
+    // Offer only what the device supports: an unsupported rate makes the ALSA node fail
+    // to open. The standard ladder only when the device could not be queried.
     audio::DeviceFormats caps;
     if (formats_ != nullptr) {
         caps = formats_->supportedFormats(name);
@@ -874,13 +646,9 @@ void DevicesPage::loadFormatForSelectedDevice() {
 }
 
 void DevicesPage::applyFormat() {
-    if (formatDeviceCombo_ == nullptr) {
-        return;
-    }
+    if (formatDeviceCombo_ == nullptr) return;
     const QString nodeName = formatDeviceCombo_->currentData().toString();
-    if (nodeName.isEmpty()) {
-        return;
-    }
+    if (nodeName.isEmpty()) return;
     audio::OutputFormat fmt;
     fmt.rateHz = rateCombo_->currentData().toInt();
     fmt.bitDepth = depthCombo_->currentData().toInt();
@@ -895,11 +663,8 @@ void DevicesPage::applyFormat() {
                                    .arg(QString::fromStdString(mgr.configPath())));
         setState(formatStatus_, "bad");
     } else if (fmt.rateHz > 48000 && nodeName.contains(QStringLiteral("iec958"))) {
-        // The sound card can send it, which is all the list above can check; the
-        // receiver at the other end of the cable is another matter. Most optical
-        // speakers, soundbars and receivers take 44.1 / 48 kHz PCM and play
-        // nothing at all above that — no error anywhere, just silence from the
-        // next login on. Saved anyway, but not quietly.
+        // The card can send it, but most optical receivers take only 44.1 / 48 kHz and play
+        // silence above that. Saved anyway, with a warning.
         formatStatus_->setText(
             QStringLiteral("Saved %1 for %2 — applies at next login. Careful: this is an "
                            "optical/S/PDIF output, and most speakers and receivers on one "
@@ -914,45 +679,6 @@ void DevicesPage::applyFormat() {
                 .arg(what, formatDeviceCombo_->currentText()));
         setState(formatStatus_, "ok");
     }
-}
-
-void DevicesPage::onEqBandChanged(int index, float gainDb) { setBand(index, gainDb); }
-
-void DevicesPage::setBand(int index, float gainDb) {
-    if (index < 0 || index >= 10) {
-        return;
-    }
-    const auto i = static_cast<std::size_t>(index);
-    const int g = static_cast<int>(std::lround(gainDb));  // hardware is ~1 dB steps
-    headsetEq_.bands[i].gainDb = static_cast<float>(g);
-    {
-        const QSignalBlocker block(eqSliders_[i]);
-        eqSliders_[i]->setValue(g);
-    }
-    eqValues_[i]->setText(QString::number(g));
-    eqCurve_->setSettings(headsetEq_);
-    eqTimer_->start(250);  // debounced write to the headset
-    saveHeadsetEq();       // debounced persistence to disk
-}
-
-void DevicesPage::saveHeadsetEq() {
-    if (settings_ != nullptr) {
-        settings_->putSection(QStringLiteral("headsetEq"), config::eqToJson(headsetEq_));
-    }
-}
-
-void DevicesPage::applyHeadsetPreset(const std::array<int, 10>& gainsDb) {
-    for (int i = 0; i < 10 && i < static_cast<int>(gainsDb.size()); ++i) {
-        setBand(i, static_cast<float>(gainsDb[i]));  // (re)starts the debounce
-    }
-}
-
-void DevicesPage::sendHeadsetEq() {
-    std::array<int, 10> gains{};
-    for (std::size_t i = 0; i < gains.size() && i < headsetEq_.bands.size(); ++i) {
-        gains[i] = static_cast<int>(std::lround(headsetEq_.bands[i].gainDb));
-    }
-    device_.setEqualizer(gains);
 }
 
 void DevicesPage::refresh() {
@@ -985,35 +711,12 @@ void DevicesPage::refresh() {
     headsetCharging_ = s.state == hid::HeadsetState::Charging;
     headsetPercent_ = s.state == hid::HeadsetState::Offline ? -1 : s.headsetPercent;
 
-    const auto apply = [](QProgressBar* bar, QLabel* pct, int value) {
-        bar->setValue(value < 0 ? 0 : value);
-        pct->setText(value < 0 ? QStringLiteral("—") : QStringLiteral("%1%").arg(value));
-    };
-    apply(headsetBar_, headsetPct_, s.headsetPercent);
+    headsetBar_->setValue(std::max(0, s.headsetPercent));
+    headsetPct_->setText(s.headsetPercent < 0 ? QStringLiteral("—")
+                                              : QStringLiteral("%1%").arg(s.headsetPercent));
 
-    // Low-battery notifications, edge-triggered with hysteresis (warn ≤20%, rearm >25%).
-    const auto lowBattery = [this](int pct, bool& warned, const QString& what) {
-        if (pct >= 0 && pct <= 20 && !warned) {
-            warned = true;
-            if (notifier_ != nullptr) {
-                notifier_->notify(QStringLiteral("Battery low"),
-                                  QStringLiteral("%1 at %2%").arg(what).arg(pct),
-                                  Notifier::Critical, QStringLiteral("battery-caution"));
-            }
-        } else if (pct > 25) {
-            warned = false;
-        }
-    };
-    lowBattery(s.headsetPercent, headsetLowWarned_, QStringLiteral("Headset"));
-
-    if (rawLabel_ != nullptr) {
-        QString raw = QStringLiteral("raw: ");
-        for (int i = 0; i < 16; ++i) {
-            raw += QStringLiteral("%1 ").arg(s.raw[static_cast<std::size_t>(i)], 2, 16,
-                                             QLatin1Char('0'));
-        }
-        rawLabel_->setText(raw.trimmed());
-    }
+    // Not a PipeWire node name, so it cannot collide with a Bluetooth device's.
+    warnIfLow("hid:headset", s.headsetPercent, QStringLiteral("Headset"));
 }
 
 }  // namespace sonar::ui

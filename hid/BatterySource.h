@@ -22,17 +22,10 @@ struct BatteryReading {
     }
 };
 
-// A way of learning the battery level of an audio output.
-//
-// This exists so that battery support is not a list of blessed products. Sonero
-// asks every source it has about every output it can see and takes the first
-// answer. Two of the sources are fully generic — the kernel's own power_supply
-// class, and BlueZ — and between them they cover any device whose driver or
-// protocol already reports a charge level, which is most wireless hardware. A
-// vendor source is for hardware that reports battery only over its own HID
-// protocol; it is one backend among several rather than the centre of the
-// feature, and adding another vendor costs one more implementation of this
-// interface and nothing else.
+// A way of learning an audio output's battery level. Sonero asks every source about
+// every output and takes the first answer. The kernel's power_supply class and BlueZ
+// cover most wireless hardware; a vendor source covers hardware that reports only
+// over its own HID protocol.
 class IBatterySource {
 public:
     virtual ~IBatterySource() = default;
@@ -40,10 +33,8 @@ public:
     // For the Devices page, and for logs when a device reports nothing.
     [[nodiscard]] virtual std::string_view name() const = 0;
 
-    // The battery of the audio output with this PipeWire node.name. Returns
-    // nullopt when this source cannot speak for that device at all, which is
-    // different from "it can, and the level is unknown" — that comes back as a
-    // reading with percent == -1.
+    // The battery of the output with this node.name. nullopt when this source cannot
+    // speak for the device; a reading with percent == -1 when it can but does not know.
     [[nodiscard]] virtual std::optional<BatteryReading> read(const std::string& nodeName) = 0;
 };
 

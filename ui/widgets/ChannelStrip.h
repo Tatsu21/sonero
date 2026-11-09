@@ -26,10 +26,8 @@ namespace sonar::ui {
 
 class VuMeter;
 
-// One vertical channel column: name, VU meter, volume fader, balance, mute and
-// solo. The strip is deliberately "dumb": it emits intent via signals and lets
-// the owning page apply them to the mixer, then reflects state back through
-// setState()/setLevel().
+// One channel column: name, meter, fader, balance, mute and solo. It only emits
+// intent and reflects state via setState() / setLevel().
 class ChannelStrip : public QWidget {
     Q_OBJECT
 
@@ -64,10 +62,8 @@ signals:
     void appDropped(sonar::audio::ChannelId id, std::uint32_t appId);
 
 protected:
-    // The strip's accent is derived from the theme, and several of its parts are
-    // painted from it through their own style sheets — which the application
-    // sheet cannot reach. Qt delivers a palette change here, so this is where
-    // they are re-derived when a theme is switched at runtime.
+    // The accent-painted parts carry their own style sheets, out of the application
+    // sheet's reach, so a palette change re-derives them here.
     void changeEvent(QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragLeaveEvent(QDragLeaveEvent* event) override;
@@ -96,7 +92,6 @@ private:
     QVBoxLayout* appsBody_ = nullptr;
     QWidget* streamRow_ = nullptr;
     QSlider* stream_ = nullptr;
-    QLabel* streamValue_ = nullptr;
 };
 
 }  // namespace sonar::ui

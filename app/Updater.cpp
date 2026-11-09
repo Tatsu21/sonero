@@ -40,16 +40,24 @@ QString& scheduledRelaunch() {
     return program;
 }
 
-// Redirects are followed, so what matters is where the bytes actually came from.
-// GitHub hands release assets off to its object storage, and both of those hosts
-// are acceptable; nothing else is.
+// Redirects are followed, so check where the bytes came from: GitHub or its asset
+// storage, nothing else.
 bool isTrustedHost(const QUrl& url) {
-    if (url.scheme() != QLatin1String("https")) {
-        return false;
-    }
+    if (url.scheme() != QLatin1String("https")) return false;
     const QString host = url.host().toLower();
     return host == QLatin1String("github.com") || host == QLatin1String("api.github.com") ||
            host.endsWith(QLatin1String(".githubusercontent.com"));
+}
+
+// Every request to GitHub identifies itself and refuses https -> http redirects.
+QNetworkRequest githubRequest(const QUrl& url, const QString& runningVersion) {
+    QNetworkRequest request{url};
+    request.setHeader(QNetworkRequest::UserAgentHeader,
+                      QStringLiteral("Sonero/%1 (+https://github.com/Tatsu21/sonero)")
+                          .arg(runningVersion));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    return request;
 }
 
 QString humanNetworkError(QNetworkReply* reply) {
@@ -73,9 +81,7 @@ QString humanNetworkError(QNetworkReply* reply) {
     if (status == 403 || status == 429) {
         return QStringLiteral("GitHub is rate-limiting this address. Try again later.");
     }
-    if (status > 0) {
-        return QStringLiteral("github.com answered %1.").arg(status);
-    }
+    if (status > 0) return QStringLiteral("github.com answered %1.").arg(status);
     return reply->errorString();
 }
 
@@ -96,31 +102,19 @@ InstallFacts currentInstall() {
 Channel classify(const InstallFacts& facts) {
     // snapd sets $SNAP_NAME for everything it starts, and its files live under
     // /snap — which no other rule below would recognise as packaged.
-    if (!facts.snapName.isEmpty()) {
-        return Channel::Snap;
-    }
+    if (!facts.snapName.isEmpty()) return Channel::Snap;
     // $APPIMAGE is set by the runtime itself and points at the bundle, so it
     // settles the question before any path guessing starts.
-    if (!facts.appImagePath.isEmpty()) {
-        return Channel::AppImage;
-    }
-    // Everything under a system prefix got there through someone's package
-    // manager — or through `make install`, which for our purposes is the same
-    // thing: not ours to overwrite.
+    if (!facts.appImagePath.isEmpty()) return Channel::AppImage;
+    // Under a system prefix it belongs to a package manager (or `make install`): not
+    // ours to overwrite.
     const bool systemPrefix = facts.executablePath.startsWith(QLatin1String("/usr/")) ||
                               facts.executablePath.startsWith(QLatin1String("/opt/"));
-    if (!systemPrefix) {
-        return Channel::Source;
-    }
+    if (!systemPrefix) return Channel::Source;
     // Checked in this order because a pacman database on a machine that also has
     // dpkg is an Arch system with a dpkg tool installed, not the other way round.
-    if (facts.hasPacmanDb) {
-        return Channel::Pacman;
-    }
-    if (facts.hasDpkgDb) {
-        return Channel::Deb;
-    }
-    return Channel::Package;
+    if (facts.hasPacmanDb) return Channel::Pacman;
+    return facts.hasDpkgDb ? Channel::Deb : Channel::Package;
 }
 
 Channel currentChannel() { return classify(currentInstall()); }
@@ -150,9 +144,7 @@ QHash<QString, QString> parseOsRelease(const QByteArray& text) {
     for (const QByteArray& raw : text.split('\n')) {
         const QString line = QString::fromUtf8(raw).trimmed();
         const qsizetype eq = line.indexOf(QLatin1Char('='));
-        if (line.startsWith(QLatin1Char('#')) || eq <= 0) {
-            continue;
-        }
+        if (line.startsWith(QLatin1Char('#')) || eq <= 0) continue;
         QString value = line.mid(eq + 1);
         if (value.size() >= 2 && (value.front() == QLatin1Char('"') ||
                                   value.front() == QLatin1Char('\'')) &&
@@ -165,9 +157,8 @@ QHash<QString, QString> parseOsRelease(const QByteArray& text) {
 }
 
 QString debTarget(const QHash<QString, QString>& osRelease) {
-    // By the base release's codename, not by ID: Mint, Pop!_OS, Zorin and LMDE
-    // name themselves but say which Ubuntu or Debian they are built on, and that
-    // is what decides which Qt the package links.
+    // By the base release's codename (Mint, Pop!_OS, LMDE name their base), which is
+    // what decides the Qt the package links.
     static const QHash<QString, QString> targets = {
         {QStringLiteral("jammy"), QStringLiteral("ubuntu2204")},
         {QStringLiteral("noble"), QStringLiteral("ubuntu2404")},
@@ -176,23 +167,17 @@ QString debTarget(const QHash<QString, QString>& osRelease) {
     };
     for (const char* key : {"UBUNTU_CODENAME", "DEBIAN_CODENAME", "VERSION_CODENAME"}) {
         const QString target = targets.value(osRelease.value(QString::fromLatin1(key)));
-        if (!target.isEmpty()) {
-            return target;
-        }
+        if (!target.isEmpty()) return target;
     }
     return {};
 }
 
 QString currentDebTarget() {
-    if (QSysInfo::currentCpuArchitecture() != QLatin1String("x86_64")) {
-        return {};
-    }
+    if (QSysInfo::currentCpuArchitecture() != QLatin1String("x86_64")) return {};
     QFile file(QStringLiteral("/etc/os-release"));
     if (!file.open(QIODevice::ReadOnly)) {
         file.setFileName(QStringLiteral("/usr/lib/os-release"));
-        if (!file.open(QIODevice::ReadOnly)) {
-            return {};
-        }
+        if (!file.open(QIODevice::ReadOnly)) return {};
     }
     return debTarget(parseOsRelease(file.readAll()));
 }
@@ -222,13 +207,8 @@ QString channelName(Channel channel) {
 // --- Versions ----------------------------------------------------------------
 
 bool Version::operator<(const Version& other) const {
-    if (major != other.major) {
-        return major < other.major;
-    }
-    if (minor != other.minor) {
-        return minor < other.minor;
-    }
-    return patch < other.patch;
+    if (major != other.major) return major < other.major;
+    return minor != other.minor ? minor < other.minor : patch < other.patch;
 }
 
 QString Version::toString() const {
@@ -240,9 +220,7 @@ std::optional<Version> parseVersion(const QString& text) {
     // and a build that cannot name a release must not be compared to one.
     static const QRegularExpression re(QStringLiteral("^v?(\\d+)\\.(\\d+)\\.(\\d+)$"));
     const QRegularExpressionMatch m = re.match(text.trimmed());
-    if (!m.hasMatch()) {
-        return std::nullopt;
-    }
+    if (!m.hasMatch()) return std::nullopt;
     Version v;
     v.major = m.captured(1).toInt();
     v.minor = m.captured(2).toInt();
@@ -253,25 +231,18 @@ std::optional<Version> parseVersion(const QString& text) {
 bool isNewer(const QString& candidate, const QString& running) {
     const std::optional<Version> a = parseVersion(candidate);
     const std::optional<Version> b = parseVersion(running);
-    if (!a.has_value() || !b.has_value()) {
-        return false;
-    }
-    return *b < *a;
+    return a.has_value() && b.has_value() && *b < *a;
 }
 
 // --- The published release ---------------------------------------------------
 
 std::optional<Release> parseRelease(const QByteArray& json) {
     const QJsonDocument doc = QJsonDocument::fromJson(json);
-    if (!doc.isObject()) {
-        return std::nullopt;
-    }
+    if (!doc.isObject()) return std::nullopt;
     const QJsonObject obj = doc.object();
     const std::optional<Version> version =
         parseVersion(obj.value(QStringLiteral("tag_name")).toString());
-    if (!version.has_value()) {
-        return std::nullopt;
-    }
+    if (!version.has_value()) return std::nullopt;
 
     Release release;
     release.version = version->toString();
@@ -301,9 +272,7 @@ std::optional<Asset> pickAsset(const Release& release, Channel channel,
                                const QString& debTarget) {
     QString wanted;
     if (channel == Channel::AppImage) {
-        // The portable bundle, by its exact published name. The -arch and -fedora
-        // ones are CI's regression canaries: they link a newer glibc and would
-        // fail to start on the very systems the portable build exists for.
+        // The portable bundle; the -arch / -fedora ones are CI canaries on a newer glibc.
         wanted = QStringLiteral("Sonero-%1-x86_64.AppImage").arg(release.version);
     } else if (channel == Channel::Deb && !debTarget.isEmpty()) {
         // packaging/collect-artifacts.sh folds the target into the version part.
@@ -312,9 +281,7 @@ std::optional<Asset> pickAsset(const Release& release, Channel channel,
         return std::nullopt;
     }
     for (const Asset& asset : release.assets) {
-        if (asset.name == wanted) {
-            return asset;
-        }
+        if (asset.name == wanted) return asset;
     }
     return std::nullopt;
 }
@@ -331,83 +298,59 @@ Updater::Updater(config::SettingsStore* settings, QObject* parent)
     if (channel_ == Channel::Deb) {
         debTarget_ = currentDebTarget();
     }
+    autoCheck_ = setting(QStringLiteral("autoCheck")).toBool(true);
+}
+
+QJsonValue Updater::setting(const QString& key) const {
+    return settings_ != nullptr ? settings_->value(QString::fromLatin1(kSettingsSection), key)
+                                : QJsonValue();
+}
+
+void Updater::putSetting(const QString& key, const QJsonValue& value) {
     if (settings_ != nullptr) {
-        autoCheck_ = settings_->section(QString::fromLatin1(kSettingsSection))
-                         .value(QStringLiteral("autoCheck"))
-                         .toBool(true);
+        settings_->putValue(QString::fromLatin1(kSettingsSection), key, value);
     }
+}
+
+QDateTime Updater::lastCheck() const {
+    return QDateTime::fromString(setting(QStringLiteral("lastCheck")).toString(), Qt::ISODate);
 }
 
 void Updater::setAutoCheckEnabled(bool on) {
     autoCheck_ = on;
-    if (settings_ == nullptr) {
-        return;
-    }
-    QJsonObject section = settings_->section(QString::fromLatin1(kSettingsSection));
-    section[QStringLiteral("autoCheck")] = on;
-    settings_->putSection(QString::fromLatin1(kSettingsSection), section);
+    putSetting(QStringLiteral("autoCheck"), on);
 }
 
 QString Updater::lastCheckedText() const {
-    if (settings_ == nullptr) {
-        return {};
-    }
-    const QString stamp = settings_->section(QString::fromLatin1(kSettingsSection))
-                              .value(QStringLiteral("lastCheck"))
-                              .toString();
-    const QDateTime when = QDateTime::fromString(stamp, Qt::ISODate);
-    if (!when.isValid()) {
-        return {};
-    }
-    return when.toLocalTime().toString(QStringLiteral("d MMM yyyy, HH:mm"));
+    const QDateTime when = lastCheck();
+    return when.isValid() ? when.toLocalTime().toString(QStringLiteral("d MMM yyyy, HH:mm"))
+                          : QString();
 }
 
 void Updater::rememberCheckTime() {
-    if (settings_ == nullptr) {
-        return;
-    }
-    QJsonObject section = settings_->section(QString::fromLatin1(kSettingsSection));
-    section[QStringLiteral("lastCheck")] =
-        QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    settings_->putSection(QString::fromLatin1(kSettingsSection), section);
+    putSetting(QStringLiteral("lastCheck"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
 }
 
 void Updater::checkOnStartupIfDue() {
-    if (!autoCheck_ || settings_ == nullptr) {
-        return;
-    }
-    const QString stamp = settings_->section(QString::fromLatin1(kSettingsSection))
-                              .value(QStringLiteral("lastCheck"))
-                              .toString();
-    const QDateTime last = QDateTime::fromString(stamp, Qt::ISODate);
-    // An invalid stamp (first run, or a hand-edited file) counts as due. A stamp
-    // in the future — a clock that was wrong and got fixed — does too, rather
-    // than locking the check out until the date catches up.
+    if (!autoCheck_ || settings_ == nullptr) return;
+    const QDateTime last = lastCheck();
+    // An invalid stamp, or one in the future (a corrected clock), counts as due.
     if (last.isValid()) {
         const qint64 age = last.secsTo(QDateTime::currentDateTimeUtc());
-        if (age >= 0 && age < kCheckIntervalSecs) {
-            return;
-        }
+        if (age >= 0 && age < kCheckIntervalSecs) return;
     }
     checkForUpdates(/*userInitiated=*/false);
 }
 
 void Updater::checkForUpdates(bool userInitiated) {
-    if (busy_) {
-        return;
-    }
+    if (busy_) return;
     busy_ = true;
     emit checkStarted();
 
-    QNetworkRequest request{QUrl(QString::fromLatin1(kLatestReleaseUrl))};
+    QNetworkRequest request = githubRequest(QUrl(QString::fromLatin1(kLatestReleaseUrl)), running_);
     request.setRawHeader("Accept", "application/vnd.github+json");
     request.setRawHeader("X-GitHub-Api-Version", "2022-11-28");
-    request.setHeader(QNetworkRequest::UserAgentHeader,
-                      QStringLiteral("Sonero/%1 (+https://github.com/Tatsu21/sonero)")
-                          .arg(running_));
     request.setTransferTimeout(15000);
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                         QNetworkRequest::NoLessSafeRedirectPolicy);
 
     QNetworkReply* reply = net_->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, userInitiated] {
@@ -469,9 +412,7 @@ bool Updater::canInstallUpdate() const {
 }
 
 void Updater::installUpdate() {
-    if (busy_) {
-        return;
-    }
+    if (busy_) return;
     if (!available_.has_value()) {
         emit updateFailed(QStringLiteral("There is nothing to install."));
         return;
@@ -527,14 +468,7 @@ void Updater::installUpdate() {
     const QString target = dir.absoluteFilePath(asset->name);
 
     busy_ = true;
-    QNetworkRequest request{url};
-    request.setHeader(QNetworkRequest::UserAgentHeader,
-                      QStringLiteral("Sonero/%1 (+https://github.com/Tatsu21/sonero)")
-                          .arg(running_));
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                         QNetworkRequest::NoLessSafeRedirectPolicy);
-
-    QNetworkReply* reply = net_->get(request);
+    QNetworkReply* reply = net_->get(githubRequest(url, running_));
     connect(reply, &QNetworkReply::downloadProgress, this, &Updater::downloadProgress);
     connect(reply, &QNetworkReply::finished, this, [this, reply, asset = *asset, target] {
         handleDownloadReply(reply, asset, target);
@@ -569,9 +503,8 @@ void Updater::handleDownloadReply(QNetworkReply* reply, const Asset& asset,
                                          "published for it."));
         return;
     }
-    // Cheap, and it catches the case that actually happens when there is no
-    // digest: an error page, a captive portal's login form, or a truncated
-    // transfer saved under the name of something the user is about to run.
+    // Catches what happens without a digest: an error page, a captive portal, a
+    // truncated transfer.
     if (channel_ == Channel::AppImage) {
         // An AppImage is an ELF binary with the AppImage type magic at offset 8.
         const bool looksLikeAppImage = payload.size() > 12 &&
@@ -601,9 +534,7 @@ void Updater::handleDownloadReply(QNetworkReply* reply, const Asset& asset,
     }
     part.close();
 
-    // Executable before it is named: nothing should ever see the final name
-    // while it is still a file that cannot be started. A .deb only needs to be
-    // readable — apt runs as root, but reads it from here.
+    // Executable before it gets its final name; a .deb only needs to be readable.
     QFileDevice::Permissions perms = QFileDevice::ReadOwner | QFileDevice::WriteOwner |
                                      QFileDevice::ReadGroup | QFileDevice::ReadOther;
     if (channel_ == Channel::AppImage) {
@@ -628,9 +559,7 @@ void Updater::handleDownloadReply(QNetworkReply* reply, const Asset& asset,
 
 void Updater::applyDownloaded(const QString& path) {
     if (channel_ == Channel::AppImage) {
-        // On its first start the new bundle re-points the menu entry at itself
-        // and removes the one it replaced — the same path a manually downloaded
-        // update takes.
+        // On its first start the new bundle re-points the menu entry and removes the old one.
         restartInto(path);
         return;
     }
@@ -639,9 +568,8 @@ void Updater::applyDownloaded(const QString& path) {
 
 void Updater::installDeb(const QString& path) {
     busy_ = true;
-    // pkexec, not sudo: there is no terminal to type into. polkit shows its own
-    // dialog naming the command, and apt-get — not this process — writes the
-    // files, runs the maintainer scripts and records the new version.
+    // pkexec, not sudo (no terminal): polkit names the command, and apt-get does the
+    // install and records the version.
     auto* apt = new QProcess(this);
     apt->setProcessChannelMode(QProcess::MergedChannels);
     connect(apt, &QProcess::errorOccurred, this, [this, apt, path](QProcess::ProcessError e) {

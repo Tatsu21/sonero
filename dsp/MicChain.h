@@ -4,31 +4,18 @@
 #include <string_view>
 #include <vector>
 
+#include "dsp/Biquad.h"
 #include "dsp/Equalizer.h"
+#include "dsp/Limiter.h"
 
 namespace sonar::dsp {
 
-// The microphone processing chain — the part that turns "a microphone" into "a
-// voice". Pure DSP: no Qt, no PipeWire, no allocation while running, so it can be
-// unit-tested against known signals and dropped into a realtime callback.
-//
-// The order is not a preference, it is the order every broadcast chain uses, and
-// each step depends on the one before it:
-//
+// The microphone processing chain: pure DSP, no allocation while running.
 //   input gain -> high-pass -> noise suppression -> gate -> de-esser
 //               -> equalizer -> compressor -> output gain -> limiter
-//
-// High-pass first, because rumble and plosives otherwise drive every detector
-// after it — a compressor that ducks the whole voice on a door slam is a
-// compressor reacting to 30 Hz nobody can hear. Noise suppression before the
-// gate, so the gate measures speech against a floor that has already been
-// cleaned. Compressor after the equalizer, so it reacts to the voice as it will
-// actually be heard. Limiter last, because its only job is that nothing leaves
-// above the ceiling, and anything placed after it would break that promise.
-//
-// Noise suppression is deliberately *not* in this file: it is a learned model
-// (RNNoise, DeepFilterNet) rather than arithmetic on a sample, and it lives
-// behind its own interface. This chain leaves a slot for it.
+// High-pass first so rumble does not drive the detectors; noise suppression before
+// the gate so it judges a cleaned floor; compressor after the EQ; limiter last.
+// Noise suppression itself lives in dsp/NoiseSuppressor.
 
 // --- Per-stage settings -------------------------------------------------------
 
@@ -37,9 +24,7 @@ struct HighPassSettings {
     float frequencyHz = 80.0f;  // 12 dB/octave; below the lowest male fundamental
 };
 
-// A downward expander rather than a hard on/off switch: a hard gate chops word
-// endings and breathes audibly between sentences. Below the threshold the signal
-// is attenuated in proportion, so the room does not vanish and reappear.
+// A downward expander, not a hard gate, so word endings and the room are not chopped.
 struct GateSettings {
     bool enabled = true;
     float thresholdDb = -45.0f;
@@ -50,9 +35,8 @@ struct GateSettings {
     float hysteresisDb = 3.0f;  // close lower than it opens, or it chatters
 };
 
-// Sibilance control: a compressor that only listens to the "ess" band, so it
-// ducks the whole signal for a few milliseconds when an S arrives instead of
-// permanently dulling the voice the way an EQ cut would.
+// A compressor listening only to the "ess" band, ducking the voice briefly instead
+// of dulling it with an EQ cut.
 struct DeEsserSettings {
     bool enabled = true;
     float frequencyHz = 6500.0f;
@@ -71,9 +55,7 @@ struct CompressorSettings {
     float makeupDb = 0.0f;    // used when autoMakeup is off
 };
 
-// Brick wall. Not a sound-shaping tool: it exists so that no combination of
-// settings can send a sample past the ceiling, whatever the user does with the
-// gain and the equalizer above it.
+// Brick wall: no setting can send a sample past the ceiling.
 struct LimiterSettings {
     bool enabled = true;
     float ceilingDb = -1.0f;
@@ -85,10 +67,8 @@ struct MicSettings {
     float inputGainDb = 0.0f;   // trim, before everything
     float outputGainDb = 0.0f;  // before the limiter, which still has the last word
 
-    // The learned noise suppression that runs ahead of this chain. It lives here
-    // rather than beside it so the page, the settings file and the audio thread
-    // all read one struct — the stage is not implemented here (see
-    // dsp/NoiseSuppressor), only switched on and off.
+    // Switches the learned noise suppression (dsp/NoiseSuppressor) that runs ahead of
+    // this chain; kept here so page, settings and audio thread share one struct.
     bool noiseSuppression = true;
 
     HighPassSettings highPass;
@@ -112,10 +92,8 @@ enum class MicPreset {
 [[nodiscard]] std::string_view micPresetName(MicPreset preset);
 
 // --- What the UI draws --------------------------------------------------------
-//
-// Every number a meter needs, sampled at the end of each processed block. The
-// reductions are negative decibels: how much that stage is holding the signal
-// down right now.
+// Sampled per block. Reductions are negative dB: how far each stage holds the
+// signal down right now.
 struct MicMeters {
     float inputPeakDb = -120.0f;
     float outputPeakDb = -120.0f;
@@ -139,10 +117,8 @@ public:
     void setSettings(const MicSettings& settings);
     [[nodiscard]] const MicSettings& settings() const { return settings_; }
 
-    // The voice equalizer, sitting between the de-esser and the compressor. It
-    // is kept separate from MicSettings because it is the same EqSettings the
-    // rest of the app already stores, draws and imports presets into — the
-    // microphone should not grow a second, incompatible idea of an equalizer.
+    // The voice equalizer, between de-esser and compressor. The app's ordinary
+    // EqSettings, so it stores, draws and imports presets like every other.
     void setEqualizer(const EqSettings& eq);
     [[nodiscard]] const EqSettings& equalizer() const { return eq_; }
 
@@ -153,9 +129,7 @@ public:
     // Readings from the most recently processed block.
     [[nodiscard]] MicMeters meters() const { return meters_; }
 
-    // Drop every filter and envelope state without touching the settings. Called
-    // when the input device changes, so the previous room's envelope does not
-    // bleed into the new one.
+    // Drop filter and envelope state, keeping settings (on an input device change).
     void reset();
 
     [[nodiscard]] float sampleRate() const { return sampleRate_; }
@@ -165,16 +139,6 @@ public:
     [[nodiscard]] int latencySamples() const;
 
 private:
-    // Direct-form transposed II: fewer state variables than DF1 and better
-    // behaved with float coefficients at the low frequencies this chain uses.
-    struct Biquad {
-        float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
-        float z1 = 0.0f, z2 = 0.0f;
-
-        [[nodiscard]] float process(float x);
-        void reset();
-    };
-
     void rebuildCoefficients();
     void rebuildEqualizer();
 
@@ -182,15 +146,11 @@ private:
     MicSettings settings_;
     MicMeters meters_;
 
-    // Two cascaded one-pole-pair sections make the 12 dB/octave slope; a single
-    // biquad is enough, the second is what keeps the response flat in the pass
-    // band at 48 kHz rather than drooping into the voice.
+    // The high-pass, and the band-pass feeding the de-esser's detector.
     Biquad highPass_;
     Biquad deEsserBand_;  // band-pass feeding the de-esser's detector only
 
-    // One peaking filter per band, at the same ISO frequencies every other
-    // equalizer in Sonero uses. Only the bands that are actually boosting or
-    // cutting are run, so a flat equalizer costs nothing.
+    // One peaking filter per ISO band; only bands that boost or cut are run.
     EqSettings eq_;
     std::vector<Biquad> eqBands_;
 
@@ -206,11 +166,8 @@ private:
     float compEnv_ = 0.0f;
     float compGainDb_ = 0.0f;
 
-    // Lookahead delay line for the limiter, plus the running peak over it.
-    std::vector<float> lookahead_;
-    int lookaheadWrite_ = 0;
-    int lookaheadSamples_ = 0;
-    float limiterGain_ = 1.0f;
+    // The same lookahead limiter the output channels end in.
+    Limiter limiter_;
 
     // Coefficients derived from the settings and the sample rate.
     float gateAttackCoef_ = 0.0f;
@@ -220,7 +177,6 @@ private:
     float deEsserReleaseCoef_ = 0.0f;
     float compAttackCoef_ = 0.0f;
     float compReleaseCoef_ = 0.0f;
-    float limiterReleaseCoef_ = 0.0f;
 };
 
 }  // namespace sonar::dsp

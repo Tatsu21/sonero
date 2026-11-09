@@ -32,12 +32,8 @@ namespace sonar::ui {
 
 class EqCurve;
 
-// Dedicated microphone page.
-//
-// Which input the virtual microphone captures from, every stage of the chain that
-// runs on it (dsp/MicChain), and hearing the result. Owns the persisted state; the
-// tray's quick switches go through the public slots here rather than around them,
-// so the page and the settings file cannot disagree with what is running.
+// The microphone page: the virtual mic's input, every dsp/MicChain stage, and
+// monitoring. Owns the persisted state; the tray's switches use its public slots.
 class MicrophonePage : public QWidget {
     Q_OBJECT
 
@@ -136,7 +132,6 @@ private:
     QLabel* latency_ = nullptr;
     QSlider* gain_ = nullptr;
     QSlider* outputGain_ = nullptr;
-    QLabel* gainValue_ = nullptr;
     QCheckBox* mute_ = nullptr;
 
     dsp::EqSettings eq_;
@@ -145,11 +140,8 @@ private:
 
     // The chain's settings as the page has them; the audio thread gets a copy.
     dsp::MicSettings mic_;
-    // True while the page is writing its own controls. The handlers below check
-    // it instead of the controls being wrapped in QSignalBlocker: blocking a
-    // slider also silences the connection that keeps its readout in step, which
-    // is how a restored setting ended up shown as "0 dB" next to a slider
-    // sitting at the other end of its travel.
+    // True while the page writes its own controls; handlers check it instead of a
+    // QSignalBlocker, which would also freeze the slider readouts.
     bool syncing_ = false;
     QComboBox* chainPreset_ = nullptr;
     QCheckBox* noiseEnable_ = nullptr;

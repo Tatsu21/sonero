@@ -37,20 +37,14 @@ SettingsStore::SettingsStore(QObject* parent) : QObject(parent) {
 
 SettingsStore::~SettingsStore() { flush(); }
 
-// The project was called LinuxSonar before, which put the settings under a
-// different application directory. Carry them over once, so renaming the app does
-// not silently reset everybody's mixer, EQ and routing.
+// Carry settings over once from the old LinuxSonar directory.
 void SettingsStore::migrateFromLegacyLocation() {
     const QString current = filePath();
-    if (QFileInfo::exists(current)) {
-        return;  // already migrated, or a genuine fresh start
-    }
+    if (QFileInfo::exists(current)) return;  // already migrated, or a genuine fresh start
     const QString legacy =
         QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
         QStringLiteral("/LinuxSonar/LinuxSonar/settings.json");
-    if (!QFileInfo::exists(legacy)) {
-        return;
-    }
+    if (!QFileInfo::exists(legacy)) return;
     QDir().mkpath(QFileInfo(current).absolutePath());
     if (QFile::copy(legacy, current)) {
         // Copy, not move: if anything about the new location is wrong the old
@@ -75,10 +69,19 @@ void SettingsStore::putSection(const QString& key, const QJsonObject& value) {
     saveTimer_->start();
 }
 
+QJsonValue SettingsStore::value(const QString& section, const QString& key) const {
+    return this->section(section).value(key);
+}
+
+void SettingsStore::putValue(const QString& section, const QString& key,
+                             const QJsonValue& value) {
+    QJsonObject s = this->section(section);
+    s[key] = value;
+    putSection(section, s);
+}
+
 void SettingsStore::flush() {
-    if (!dirty_) {
-        return;
-    }
+    if (!dirty_) return;
     const QString path = filePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
     root_[QStringLiteral("app")] = QStringLiteral("Sonero");
@@ -109,9 +112,7 @@ QJsonObject eqToJson(const dsp::EqSettings& settings) {
 }
 
 dsp::EqSettings eqFromJson(const QJsonObject& obj, const dsp::EqSettings& fallback) {
-    if (!obj.contains(QStringLiteral("bands"))) {
-        return fallback;
-    }
+    if (!obj.contains(QStringLiteral("bands"))) return fallback;
     std::vector<dsp::EqBand> bands;
     for (const QJsonValue v : obj.value(QStringLiteral("bands")).toArray()) {
         const QJsonObject bo = v.toObject();
@@ -119,9 +120,7 @@ dsp::EqSettings eqFromJson(const QJsonObject& obj, const dsp::EqSettings& fallba
             dsp::EqBand{static_cast<float>(bo.value(QStringLiteral("f")).toDouble()),
                         static_cast<float>(bo.value(QStringLiteral("g")).toDouble())});
     }
-    if (bands.empty()) {
-        return fallback;
-    }
+    if (bands.empty()) return fallback;
     dsp::EqSettings s = fallback;
     s.enabled = obj.value(QStringLiteral("enabled")).toBool(fallback.enabled);
     s.preset = static_cast<dsp::EqPreset>(
@@ -226,6 +225,43 @@ dsp::MicSettings micFromJson(const QJsonObject& obj, const dsp::MicSettings& fal
     s.limiter.ceilingDb = number(limiter, "ceilingDb", s.limiter.ceilingDb, -12.0f, 0.0f);
     s.limiter.releaseMs = number(limiter, "releaseMs", s.limiter.releaseMs, 10.0f, 500.0f);
     return s;
+}
+
+QJsonObject bassToJson(const dsp::BassStageSettings& b) {
+    QJsonObject o;
+    o[QStringLiteral("enabled")] = b.bass.enabled;
+    o[QStringLiteral("crossoverHz")] = b.bass.crossoverHz;
+    o[QStringLiteral("amountDb")] = b.bass.amountDb;
+    o[QStringLiteral("harmonics")] = b.bass.harmonics;
+    o[QStringLiteral("evenWeight")] = b.bass.evenWeight;
+    o[QStringLiteral("attackMs")] = b.bass.attackMs;
+    o[QStringLiteral("releaseMs")] = b.bass.releaseMs;
+    o[QStringLiteral("replaceLows")] = b.bass.replaceLows;
+    o[QStringLiteral("limiterEnabled")] = b.limiterEnabled;
+    o[QStringLiteral("limiterCeilingDb")] = b.limiterCeilingDb;
+    return o;
+}
+
+dsp::BassStageSettings bassFromJson(const QJsonObject& o, const dsp::BassStageSettings& fallback) {
+    const auto number = [&o](const char* key, float current) {
+        return static_cast<float>(o.value(QLatin1String(key)).toDouble(current));
+    };
+    const auto flag = [&o](const char* key, bool current) {
+        return o.value(QLatin1String(key)).toBool(current);
+    };
+
+    dsp::BassStageSettings b = fallback;
+    b.bass.enabled = flag("enabled", b.bass.enabled);
+    b.bass.crossoverHz = number("crossoverHz", b.bass.crossoverHz);
+    b.bass.amountDb = number("amountDb", b.bass.amountDb);
+    b.bass.harmonics = o.value(QStringLiteral("harmonics")).toInt(b.bass.harmonics);
+    b.bass.evenWeight = number("evenWeight", b.bass.evenWeight);
+    b.bass.attackMs = number("attackMs", b.bass.attackMs);
+    b.bass.releaseMs = number("releaseMs", b.bass.releaseMs);
+    b.bass.replaceLows = flag("replaceLows", b.bass.replaceLows);
+    b.limiterEnabled = flag("limiterEnabled", b.limiterEnabled);
+    b.limiterCeilingDb = number("limiterCeilingDb", b.limiterCeilingDb);
+    return b;
 }
 
 }  // namespace sonar::config

@@ -7,13 +7,8 @@
 
 namespace sonar::audio {
 
-// In-memory mixer holding the fixed set of channels. All state changes are
-// clamped to valid ranges. Metering values are stored per channel and are, for
-// now, only produced by the UI's placeholder simulator; the real audio path
-// will call setLevel() from a later stage.
-//
-// Note: single-threaded (UI thread) for Stage 3. When the audio engine starts
-// pushing levels from a real-time thread, metering access will move to atomics.
+// In-memory mixer model for the fixed set of channels; every change is clamped to a
+// valid range. UI thread only.
 class Mixer final : public IMixer {
 public:
     Mixer();

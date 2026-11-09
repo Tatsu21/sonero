@@ -6,10 +6,7 @@
 
 namespace sonar::audio {
 
-// Drives the per-channel stages of the real audio path: the equalizer and the
-// harmonic bass stage that follows it. Both are stages of one chain
-// (dsp::ChannelChain) running inside the channel's own node, so they are driven
-// through one interface rather than two.
+// Drives the equalizer and harmonic bass stages of each channel's dsp::ChannelChain.
 class IEqualizerController {
 public:
     virtual ~IEqualizerController() = default;

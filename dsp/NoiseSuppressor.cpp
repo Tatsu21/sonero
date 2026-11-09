@@ -7,15 +7,9 @@
 #include <rnnoise.h>
 #endif
 
+#include "dsp/DspMath.h"
+
 namespace sonar::dsp {
-
-namespace {
-constexpr float kTinyLinear = 1e-6f;
-
-[[nodiscard]] float linToDb(float lin) {
-    return 20.0f * std::log10(std::max(std::abs(lin), kTinyLinear));
-}
-}  // namespace
 
 NoiseSuppressor::NoiseSuppressor() {
 #if SONAR_HAVE_RNNOISE
@@ -50,9 +44,7 @@ std::string_view NoiseSuppressor::backendName() {
 }
 
 void NoiseSuppressor::prepare(float sampleRate) {
-    // 48 kHz exactly. Feeding a 48 kHz model at 44.1 would not fail, it would
-    // quietly mis-hear every band — worse than not running at all, because the
-    // switch would look like it was working.
+    // 48 kHz exactly: at 44.1 the model would quietly mis-hear every band.
     usable_ = available() && state_ != nullptr && std::abs(sampleRate - 48000.0f) < 1.0f;
     reset();
 }
@@ -72,9 +64,7 @@ int NoiseSuppressor::latencySamples() const {
 }
 
 void NoiseSuppressor::process(float* samples, int count) {
-    if (samples == nullptr || count <= 0) {
-        return;
-    }
+    if (samples == nullptr || count <= 0) return;
     if (!usable_ || !enabled_) {
         // Deliberately not a reset: switching the stage off and on again inside
         // a sentence should not replay a frame of silence.
@@ -85,13 +75,8 @@ void NoiseSuppressor::process(float* samples, int count) {
     for (int i = 0; i < count; ++i) {
         const float in = samples[i];
 
-        // Emit first, then consume: the sample leaving now belongs to the frame
-        // the model has already answered for, which is what makes the delay
-        // exactly one frame and not one frame plus a block.
-        // outPos_ and fill_ advance in lockstep after the first frame, so the
-        // index is in range by construction — the guard is there so that a
-        // future change to this loop degrades to silence rather than to a read
-        // past the end of the frame.
+        // Emit first, then consume: the delay is exactly one frame. The guard only turns a
+        // future bug into silence instead of an out-of-range read.
         samples[i] = (primed_ && outPos_ < kFrameSize)
                          ? outFrame_[static_cast<std::size_t>(outPos_)] / kInt16Scale
                          : 0.0f;

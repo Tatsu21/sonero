@@ -8,6 +8,8 @@
 
 #include <spa/utils/hook.h>  // struct spa_hook (value member)
 
+#include "audio/FrameRing.h"
+#include "audio/Handoff.h"
 #include "dsp/MicChain.h"
 #include "dsp/NoiseSuppressor.h"
 
@@ -16,11 +18,8 @@ struct pw_stream;
 
 namespace sonar::audio {
 
-// What the microphone page draws, sampled from the realtime thread.
-//
-// Peaks are "loudest since you last looked": reading them clears them, so a UI
-// polling at 30 Hz sees every transient instead of whatever happened to be
-// under the needle at the moment it asked.
+// What the microphone page draws. Peaks are "loudest since last read": reading
+// clears them, so a 30 Hz poll sees every transient.
 struct MicLevels {
     float inputPeak = 0.0f;   // linear, before any processing
     float outputPeak = 0.0f;  // linear, what applications receive
@@ -34,20 +33,10 @@ struct MicLevels {
     bool active = false;  // the node pair exists and audio is flowing through it
 };
 
-// The microphone node: a capture stream pulling from the real input device, the
-// processing chain, and a second stream that applications see as an ordinary
-// Audio/Source.
-//
-// This is the same two-node shape PipeWire's own module-filter-chain builds —
-// `sonero_microphone.input` feeding `sonero_microphone` — rebuilt here so the
-// processing between them is ours. That matters for more than the DSP: the meters
-// come straight out of the chain that produced them, so the page can show gain
-// reduction per stage instead of a level and a guess.
-//
-// Everything after start() happens on PipeWire's realtime thread. Settings cross
-// over without ever blocking it: the UI parks a copy, the audio thread picks it
-// up when it can, and a thread that cannot get the lock keeps running with what
-// it already has rather than waiting and missing its deadline.
+// The microphone node: a capture stream from the real input, the processing chain,
+// and a second stream apps see as an Audio/Source (the module-filter-chain shape,
+// with our own DSP, so meters come straight from the chain). Everything after
+// start() runs on PipeWire's realtime thread; settings cross via Handoff.
 class MicProcessor {
 public:
     MicProcessor();
@@ -56,10 +45,9 @@ public:
     MicProcessor(const MicProcessor&) = delete;
     MicProcessor& operator=(const MicProcessor&) = delete;
 
-    // Create the pair on an existing core. Call with the PipeWire thread loop
-    // locked. `captureTarget` is the real input device to pull from; empty leaves
-    // the capture side unconnected, which is deliberate for Bluetooth — binding a
-    // BT microphone forces the headset into HFP and destroys A2DP playback.
+    // Create the pair on an existing core, thread loop locked. An empty `captureTarget`
+    // leaves the capture unconnected — deliberate for Bluetooth, which binding would
+    // force into HFP.
     bool start(pw_core* core, const std::string& nodeName, const std::string& description,
                const std::string& captureTarget);
 
@@ -68,15 +56,13 @@ public:
 
     [[nodiscard]] bool running() const { return capture_ != nullptr; }
 
-    // Re-point the capture side at a different input device. Rebuilds only the
-    // capture stream, so applications listening to the source do not see it
-    // disappear and re-appear.
+    // Re-point the capture side at another input; only that stream is rebuilt, so apps
+    // listening to the source never see it vanish.
     bool setCaptureTarget(pw_core* core, const std::string& captureTarget);
     [[nodiscard]] std::string captureTarget() const;
 
-    // Passive by default: an unused microphone must be free to suspend. Both of
-    // these need it running with no application recording, so either one holds it
-    // awake. Call with the thread loop locked.
+    // Passive by default so an unused mic can suspend; either of these keeps it
+    // running. Thread loop locked.
     void setLive(pw_core* core, bool live);
     // The chain's output on the default sink. Created and destroyed with the
     // switch, so nobody who never uses it has a stream in their graph.
@@ -96,9 +82,8 @@ public:
     // Reading clears the peak holds.
     [[nodiscard]] MicLevels takeLevels();
 
-    // Delay the chain adds, in milliseconds — the limiter's lookahead plus the
-    // noise model's frame. Shown in the UI, because someone monitoring themselves
-    // needs to know why they are hearing themselves late.
+    // Delay the chain adds in ms (limiter lookahead + noise frame), shown to anyone
+    // monitoring themselves.
     [[nodiscard]] float latencyMs() const;
 
 private:
@@ -119,31 +104,21 @@ private:
     dsp::MicChain chain_;
     dsp::NoiseSuppressor noise_;
 
-    // The handoff. `pending*` is written by the UI under the mutex and read by
-    // the audio thread with try_lock.
-    mutable std::mutex settingsMutex_;
-    dsp::MicSettings pendingSettings_;
-    dsp::EqSettings pendingEq_;
-    std::atomic<bool> settingsDirty_{false};
-    std::atomic<bool> eqDirty_{false};
+    // What the UI asked for, picked up by the capture callback.
+    Handoff<dsp::MicSettings> settings_;
+    Handoff<dsp::EqSettings> eq_;
     std::atomic<bool> noiseEnabled_{true};
 
-    // Between the two streams. One writer, one reader, no locks: the capture
-    // callback fills it, the source callback drains it.
-    // The block the chain works in. A member rather than a local, because a
-    // 32 KB array on the stack of the realtime callback is zeroed on every
-    // wake-up for no reason — this one is allocated once, at construction.
+    // The block the chain works in, allocated once, to keep 32 KB off the realtime stack.
     std::vector<float> scratch_;
 
-    std::vector<float> ring_;
-    std::atomic<std::uint32_t> ringWrite_{0};
-    std::atomic<std::uint32_t> ringRead_{0};
+    // Between the two streams: the capture callback fills it, the source
+    // callback drains it.
+    FrameRing<1> ring_;
 
     // The same arrangement for the monitor, which is a separate ring because it
     // has a different reader: the output device's clock, not the source's.
-    std::vector<float> monitorRing_;
-    std::atomic<std::uint32_t> monitorWrite_{0};
-    std::atomic<std::uint32_t> monitorRead_{0};
+    FrameRing<1> monitorRing_;
     std::atomic<bool> monitorOn_{false};
     std::atomic<float> monitorGain_{1.0f};
 

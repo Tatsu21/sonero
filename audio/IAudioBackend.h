@@ -20,9 +20,8 @@ struct AudioServerInfo {
     std::string hostName;
 };
 
-// Abstraction over the system audio server. Depending on this interface (rather
-// than on PipeWireManager directly) keeps the UI and the future AudioEngine
-// decoupled from the backend and makes both trivially testable with fakes.
+// Abstraction over the system audio server, so the UI does not depend on
+// PipeWireManager and can be tested with fakes.
 class IAudioBackend {
 public:
     virtual ~IAudioBackend() = default;
