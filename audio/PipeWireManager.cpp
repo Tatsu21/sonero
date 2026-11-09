@@ -391,6 +391,9 @@ void PipeWireManager::teardown() noexcept {
         loop_ = nullptr;
     }
 
+    channelSink_.clear();
+    channelLinks_.clear();
+
     std::lock_guard<std::mutex> lock(stateMutex_);
     apps_.clear();
     assignments_.clear();
@@ -472,6 +475,10 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             if (const auto channel = channelForNodeName(nodeName)) {
                 // Our channel nodes have no node params to bind: everything lives in their own
                 // chain. Binding them once spun the thread loop forever and hung every client.
+                if (mediaClass == "Audio/Sink") {
+                    channelSink_[id] = *channel;
+                    updateChannelActivityLocked(*channel);  // idle until something plays in
+                }
                 return;
             }
         } else if (mediaClass == "Audio/Sink" && !nodeName.empty()) {
@@ -539,6 +546,15 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
             }
             bumpRevision();
         }
+    } else if (std::strcmp(type, PW_TYPE_INTERFACE_Link) == 0) {
+        // A stream linked into one of our channel sinks wakes that channel.
+        const char* input = spa_dict_lookup(props, PW_KEY_LINK_INPUT_NODE);
+        const auto sink = input != nullptr ? channelSink_.find(std::strtoul(input, nullptr, 10))
+                                           : channelSink_.end();
+        if (sink != channelSink_.end()) {
+            channelLinks_[id] = sink->second;
+            updateChannelActivityLocked(sink->second);
+        }
     } else if (std::strcmp(type, PW_TYPE_INTERFACE_Metadata) == 0) {
         const char* metaName = spa_dict_lookup(props, "metadata.name");
         if (metaName != nullptr && std::strcmp(metaName, "default") == 0 &&
@@ -556,7 +572,19 @@ void PipeWireManager::onGlobal(std::uint32_t id, const char* type, const spa_dic
     }
 }
 
+void PipeWireManager::updateChannelActivityLocked(ChannelId channel) {
+    const bool linked = std::any_of(channelLinks_.begin(), channelLinks_.end(),
+                                    [channel](const auto& link) { return link.second == channel; });
+    processor_[channelIndex(channel)].setActive(linked);
+}
+
 void PipeWireManager::onGlobalRemove(std::uint32_t id) {
+    if (const auto link = channelLinks_.find(id); link != channelLinks_.end()) {
+        const ChannelId channel = link->second;
+        channelLinks_.erase(link);
+        updateChannelActivityLocked(channel);
+    }
+    channelSink_.erase(id);
     bool changed = false;
     bool deviceRemoved = false;
     bool inputRemoved = false;

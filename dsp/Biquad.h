@@ -30,6 +30,9 @@ struct Biquad {
         z2 = 0.0f;
     }
 
+    // No state left: fed silence, it would output exactly silence.
+    [[nodiscard]] bool atRest() const { return z1 == 0.0f && z2 == 0.0f; }
+
     void setPassthrough() {
         b0 = 1.0f;
         b1 = b2 = a1 = a2 = 0.0f;

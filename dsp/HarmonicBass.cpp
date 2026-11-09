@@ -99,6 +99,18 @@ void HarmonicBass::process(const float* in, float* out, int count) {
         return;
     }
 
+    // At rest and fed silence, every filter and the envelope would stay at zero
+    // and the output would be exactly the (silent) input: skip the work.
+    const auto atRest = [](const Biquad* f, int n) {
+        return std::all_of(f, f + n, [](const Biquad& b) { return b.atRest(); });
+    };
+    if (env_ == 0.0f && atRest(lowSplit_, 2) && atRest(highSplit_, 2) && atRest(harmHigh_, 2) &&
+        atRest(harmLow_, 2) && isSilent(in, count)) {
+        if (in != out) std::fill_n(out, count, 0.0f);
+        meters_ = HarmonicBassMeters{};  // what silence measures: floor, inactive
+        return;
+    }
+
     const float amount = dbToLin(s_.amountDb);
     const int orders = s_.harmonics;
     const bool replace = s_.replaceLows;

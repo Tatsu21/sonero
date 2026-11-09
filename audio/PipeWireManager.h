@@ -198,6 +198,8 @@ private:
     // Must be called with the thread loop held (registry callbacks already are).
     void applyChannelRouteLocked(ChannelId id);
     void applyAllRoutesLocked();  // re-resolve every channel (device (dis)connect)
+    // Run a channel's node pair only while some stream is linked into its sink.
+    void updateChannelActivityLocked(ChannelId channel);
     [[nodiscard]] std::string micTarget() const;
     void applyMicRouteLocked();   // re-attach the microphone if its target moved
     // Load, reload or drop the echo canceller in front of the microphone, and
@@ -275,6 +277,9 @@ private:
         std::uint64_t serial = 0;
     };
     std::unordered_map<ChannelId, OutNode> channelOut_;
+    // Loop thread only: our channel sinks by node id, and the links feeding them.
+    std::unordered_map<std::uint32_t, ChannelId> channelSink_;
+    std::unordered_map<std::uint32_t, ChannelId> channelLinks_;
     std::unordered_map<ChannelId, std::string> channelDeviceName_;
 
     std::atomic<std::uint64_t> revision_{0};

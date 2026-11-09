@@ -53,6 +53,10 @@ public:
     void stop();
 
     [[nodiscard]] bool running() const { return sink_ != nullptr; }
+
+    // Pause or resume the pair. A paused pair is not scheduled at all, even while
+    // its output device runs for other streams. Thread loop locked.
+    void setActive(bool on);
     [[nodiscard]] std::string nodeName() const { return nodeName_; }
 
     // All three cross to the audio thread through a Handoff.
@@ -91,6 +95,10 @@ private:
     // Between the two nodes: the sink side writes, the output side reads.
     FrameRing<2> ring_;
     bool primed_ = false;  // output side only: playing, or still filling up
+    bool active_ = true;  // loop thread: last state given to setActive()
+    // Set on resume: each side drops what was left in the ring before the pause.
+    std::atomic<bool> flushSink_{false};
+    std::atomic<bool> flushOut_{false};
 
     std::atomic<float> peakLeft_{0.0f};
     std::atomic<float> peakRight_{0.0f};

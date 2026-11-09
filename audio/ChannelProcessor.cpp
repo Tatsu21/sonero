@@ -152,10 +152,22 @@ bool ChannelProcessor::start(pw_core* core, const std::string& nodeName,
     return true;
 }
 
+void ChannelProcessor::setActive(bool on) {
+    if (sink_ == nullptr || out_ == nullptr || on == active_) return;
+    active_ = on;
+    if (on) {
+        flushSink_.store(true, std::memory_order_release);
+        flushOut_.store(true, std::memory_order_release);
+    }
+    pw_stream_set_active(sink_, on);
+    pw_stream_set_active(out_, on);
+}
+
 void ChannelProcessor::stop() {
     closeStream(out_, outListener_);
     closeStream(sink_, sinkListener_);
     core_ = nullptr;
+    active_ = true;  // a new pair starts running
     ring_.reset();
     primed_ = false;
     sawAudio_.store(false, std::memory_order_relaxed);
@@ -175,6 +187,9 @@ void ChannelProcessor::processSink() {
     pw_buffer* buffer = pw_stream_dequeue_buffer(sink_);
     if (buffer == nullptr) return;
     const dsp::ScopedFlushDenormals ftz;
+
+    // Both callbacks run on the same data thread, so the writer may reset the ring.
+    if (flushSink_.exchange(false, std::memory_order_acq_rel)) ring_.reset();
 
     // Pick up whatever the UI parked.
     settings_.take([this](const auto& s) { chain_.setSettings(s); });
@@ -234,6 +249,10 @@ void ChannelProcessor::processOut() {
     if (out != nullptr && d.chunk != nullptr) {
         constexpr std::uint32_t kStride = sizeof(float) * 2;
         const std::uint32_t frames = framesToProduce(buffer, d.maxsize, kStride, kMaxFrames);
+        if (flushOut_.exchange(false, std::memory_order_acq_rel)) {
+            ring_.consume(ring_.available());
+            primed_ = false;
+        }
         const std::uint32_t available = ring_.available();
 
         // Wait for a cycle plus the margin, and again after an underrun: one clean gap

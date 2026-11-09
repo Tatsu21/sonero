@@ -61,6 +61,15 @@ void Limiter::process(const float* in, float* out, int count) {
         return;
     }
 
+    // At rest (gain back at unity, nothing left in the delay line) and fed
+    // silence, every step below would produce exactly zero: skip them.
+    if (gain_ == 1.0f && isSilent(in, count) &&
+        std::all_of(delay_.begin(), delay_.end(), [](float v) { return v == 0.0f; })) {
+        if (in != out) std::fill_n(out, count, 0.0f);
+        reductionDb_ = 0.0f;
+        return;
+    }
+
     float worstGain = 0.0f;
     for (int i = 0; i < count; ++i) {
         const float x = in[static_cast<std::size_t>(i)];

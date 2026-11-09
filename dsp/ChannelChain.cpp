@@ -139,9 +139,14 @@ void ChannelChain::process(float* interleaved, int frames) {
             }
             if (eq_.enabled) {
                 // Filter by filter over the block: one coefficient set in registers
-                // at a time, instead of the whole cascade for every sample.
+                // at a time, instead of the whole cascade for every sample. A filter
+                // at rest fed silence outputs silence, so while the block is silent
+                // those are skipped — an idle channel then costs a scan, not a cascade.
+                bool silent = isSilent(x, block);
                 for (Biquad& bq : eqBands_[c]) {
+                    if (silent && bq.atRest()) continue;
                     for (int i = 0; i < block; ++i) x[i] = bq.process(x[i]);
+                    silent = false;
                 }
             }
             bass_[c].process(x, block);

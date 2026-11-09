@@ -18,6 +18,14 @@ inline constexpr float kTinyLinear = 1e-6f;
     return 20.0f * std::log10(std::max(std::abs(lin), kTinyLinear));
 }
 
+// True when every sample is exactly zero (-0 included; a NaN is not silence).
+[[nodiscard]] inline bool isSilent(const float* x, int count) {
+    for (int i = 0; i < count; ++i) {
+        if (x[i] != 0.0f) return false;
+    }
+    return true;
+}
+
 // One-pole smoothing coefficient for a time constant in milliseconds. Zero (or
 // negative) means "immediately", which is what a 0 ms attack has to mean.
 [[nodiscard]] inline float envCoef(float ms, float sampleRate) {
